@@ -173,7 +173,6 @@ export class MessagingClient extends EventEmitter {
    */
   async connect(): Promise<void> {
     const protoPath = 'astro/messaging/v1/service.proto';
-    const protoRoot = join(__dirname, '../proto');
 
     const packageDefinition = protoLoader.loadSync(protoPath, {
       keepCase: false,
@@ -181,7 +180,7 @@ export class MessagingClient extends EventEmitter {
       enums: String,
       defaults: true,
       oneofs: true,
-      includeDirs: [protoRoot],
+      includeDirs: [join(__dirname, '../proto')],
     });
 
     const protoDescriptor = grpc.loadPackageDefinition(packageDefinition) as any;

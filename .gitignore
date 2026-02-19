@@ -23,6 +23,7 @@ go.work
 # Node (TypeScript SDK)
 sdk/node/node_modules/
 sdk/node/dist/
+sdk/node/proto/
 sdk/node/bun.lock
 
 # IDE

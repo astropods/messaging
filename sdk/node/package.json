@@ -1,15 +1,15 @@
 {
   "name": "@astromode-ai/astro-messaging",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "TypeScript SDK for Astro Messaging",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist",
-    "proto"
+    "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "postinstall": "ln -sf ../../proto proto",
+    "build": "tsc && cp -r ../../proto dist/proto",
     "watch": "tsc --watch",
     "test": "bun test",
     "test:watch": "bun test --watch"
