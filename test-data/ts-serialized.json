@@ -1,0 +1,127 @@
+{
+  "platformContext": {
+    "messageId": "ts-msg-001",
+    "channelId": "C987654",
+    "threadId": "9876543210.000001",
+    "channelName": "#typescript-channel",
+    "workspaceId": "T888",
+    "platformData": {
+      "team_id": "T888",
+      "bot_id": "B456",
+      "source": "typescript"
+    }
+  },
+  "user": {
+    "id": "U987654",
+    "username": "tsuser",
+    "email": "ts@example.com",
+    "avatarUrl": "https://example.com/ts-avatar.png",
+    "userData": {
+      "language": "typescript",
+      "framework": "bun"
+    }
+  },
+  "threadMessage": {
+    "messageId": "ts-thread-msg-001",
+    "user": {
+      "id": "U888",
+      "username": "tstest"
+    },
+    "content": "Message from TypeScript",
+    "timestamp": "2026-02-05T21:00:00.000Z",
+    "wasEdited": false,
+    "isDeleted": false,
+    "platformData": {
+      "source": "typescript"
+    }
+  },
+  "message": {
+    "id": "ts-full-msg-001",
+    "platform": "slack",
+    "conversationId": "conv-ts-001",
+    "content": "Complete message from TypeScript",
+    "timestamp": "2026-02-05T21:00:00.000Z",
+    "platformContext": {
+      "messageId": "ts-msg-001",
+      "channelId": "C987654",
+      "threadId": "9876543210.000001",
+      "channelName": "#typescript-channel",
+      "workspaceId": "T888",
+      "platformData": {
+        "team_id": "T888",
+        "bot_id": "B456",
+        "source": "typescript"
+      }
+    },
+    "user": {
+      "id": "U987654",
+      "username": "tsuser",
+      "email": "ts@example.com",
+      "avatarUrl": "https://example.com/ts-avatar.png",
+      "userData": {
+        "language": "typescript",
+        "framework": "bun"
+      }
+    }
+  },
+  "conversationRequestWithContent": {
+    "agentResponse": {
+      "conversationId": "conv-ts-001",
+      "responseId": "resp-ts-001",
+      "content": {
+        "type": "DELTA",
+        "content": "Streaming from TypeScript",
+        "platformMessageId": "plat-ts-001"
+      }
+    }
+  },
+  "conversationRequestWithStatus": {
+    "agentResponse": {
+      "conversationId": "conv-ts-002",
+      "responseId": "resp-ts-002",
+      "status": {
+        "status": "THINKING",
+        "customMessage": "Processing..."
+      }
+    }
+  },
+  "conversationRequestWithError": {
+    "agentResponse": {
+      "conversationId": "conv-ts-003",
+      "responseId": "resp-ts-003",
+      "error": {
+        "code": "RATE_LIMIT",
+        "message": "Too many requests",
+        "details": "Retry after 30s",
+        "retryable": true
+      }
+    }
+  },
+  "agentResponseWithMessage": {
+    "conversationId": "conv-ts-010",
+    "responseId": "resp-ts-010",
+    "incomingMessage": {
+      "id": "msg-ts-incoming-001",
+      "platform": "slack",
+      "conversationId": "conv-ts-010",
+      "content": "User message from TS",
+      "platformContext": {
+        "messageId": "C789:ts",
+        "channelId": "C789",
+        "threadId": "1111111111.000001"
+      },
+      "user": {
+        "id": "U789",
+        "username": "tsuser"
+      }
+    }
+  },
+  "agentResponseWithContent": {
+    "conversationId": "conv-ts-011",
+    "responseId": "resp-ts-011",
+    "content": {
+      "type": "END",
+      "content": "Final content from TS"
+    }
+  }
+}

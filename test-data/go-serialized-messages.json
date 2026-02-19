@@ -1,0 +1,39 @@
+{
+  "platformContext": {
+    "messageId": "C123:1234567890.123456",
+    "channelId": "C123456",
+    "threadId": "1234567890.000001",
+    "channelName": "#test-channel",
+    "workspaceId": "T999",
+    "platformData": {
+      "team_id": "T999",
+      "bot_id": "B123",
+      "custom_key": "custom_value"
+    }
+  },
+  "user": {
+    "id": "U123456",
+    "username": "testuser",
+    "email": "test@example.com",
+    "avatarUrl": "https://example.com/avatar.png",
+    "userData": {
+      "department": "engineering",
+      "role": "developer"
+    }
+  },
+  "threadMessage": {
+    "messageId": "msg-001",
+    "user": {
+      "id": "U999",
+      "username": "test"
+    },
+    "content": "Test message",
+    "timestamp": "2026-02-05T21:00:00Z",
+    "wasEdited": true,
+    "isDeleted": false,
+    "originalContent": "Original",
+    "platformData": {
+      "key": "value"
+    }
+  }
+}

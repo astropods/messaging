@@ -1,0 +1,137 @@
+{
+  "agentResponseWithContent": {
+    "conversationId": "conv-go-011",
+    "responseId": "resp-go-011",
+    "content": {
+      "type": "END",
+      "content": "Final content from Go",
+      "attachments": [],
+      "platformMessageId": "",
+      "options": null
+    }
+  },
+  "agentResponseWithMessage": {
+    "conversationId": "conv-go-010",
+    "responseId": "resp-go-010",
+    "incomingMessage": {
+      "id": "msg-go-incoming-001",
+      "timestamp": null,
+      "platform": "slack",
+      "platformContext": {
+        "messageId": "C999:go",
+        "channelId": "C999",
+        "threadId": "",
+        "channelName": "",
+        "workspaceId": "",
+        "platformData": {}
+      },
+      "user": {
+        "id": "U999",
+        "username": "gouser",
+        "avatarUrl": "",
+        "email": "",
+        "userData": {}
+      },
+      "content": "User message from Go",
+      "attachments": [],
+      "conversationId": "conv-go-010"
+    }
+  },
+  "conversationRequestWithContent": {
+    "agentResponse": {
+      "conversationId": "conv-go-001",
+      "responseId": "resp-go-001",
+      "content": {
+        "type": "DELTA",
+        "content": "Streaming from Go",
+        "attachments": [],
+        "platformMessageId": "plat-go-001",
+        "options": null
+      }
+    }
+  },
+  "conversationRequestWithStatus": {
+    "agentResponse": {
+      "conversationId": "conv-go-002",
+      "responseId": "resp-go-002",
+      "status": {
+        "status": "THINKING",
+        "customMessage": "Processing in Go...",
+        "emoji": ""
+      }
+    }
+  },
+  "message": {
+    "id": "msg-full-001",
+    "timestamp": "2026-02-05T21:00:00Z",
+    "platform": "slack",
+    "platformContext": {
+      "messageId": "C123:1234567890.123456",
+      "channelId": "C123456",
+      "threadId": "1234567890.000001",
+      "channelName": "#test-channel",
+      "workspaceId": "T999",
+      "platformData": {
+        "bot_id": "B123",
+        "custom_key": "custom_value",
+        "team_id": "T999"
+      }
+    },
+    "user": {
+      "id": "U123456",
+      "username": "testuser",
+      "avatarUrl": "https://example.com/avatar.png",
+      "email": "test@example.com",
+      "userData": {
+        "department": "engineering",
+        "role": "developer"
+      }
+    },
+    "content": "Test message from Go",
+    "attachments": [],
+    "conversationId": "conv-001"
+  },
+  "platformContext": {
+    "messageId": "C123:1234567890.123456",
+    "channelId": "C123456",
+    "threadId": "1234567890.000001",
+    "channelName": "#test-channel",
+    "workspaceId": "T999",
+    "platformData": {
+      "bot_id": "B123",
+      "custom_key": "custom_value",
+      "team_id": "T999"
+    }
+  },
+  "threadMessage": {
+    "messageId": "msg-001",
+    "user": {
+      "id": "U999",
+      "username": "test",
+      "avatarUrl": "",
+      "email": "",
+      "userData": {}
+    },
+    "content": "Test message",
+    "attachments": [],
+    "timestamp": "2026-02-05T21:00:00Z",
+    "wasEdited": true,
+    "originalContent": "Original",
+    "editedAt": null,
+    "isDeleted": false,
+    "deletedAt": null,
+    "platformData": {
+      "key": "value"
+    }
+  },
+  "user": {
+    "id": "U123456",
+    "username": "testuser",
+    "avatarUrl": "https://example.com/avatar.png",
+    "email": "test@example.com",
+    "userData": {
+      "department": "engineering",
+      "role": "developer"
+    }
+  }
+}

@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package astro.messaging.v1;
+
+option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
+
+// Agent configuration declared at startup
+message AgentConfig {
+  string system_prompt = 1;
+  repeated AgentToolConfig tools = 2;
+}
+
+// Tool configuration for any agent
+message AgentToolConfig {
+  string name = 1;
+  string title = 2;
+  string description = 3;
+  string type = 4;                        // "graph" | "other"
+  AgentToolGraph graph = 5;               // Optional, present when type = "graph"
+}
+
+// Graph visualization for tool workflows
+message AgentToolGraph {
+  repeated AgentToolGraphNode nodes = 1;
+  repeated AgentToolGraphEdge edges = 2;
+}
+
+message AgentToolGraphNode {
+  string id = 1;
+  string name = 2;
+  string type = 3;
+}
+
+message AgentToolGraphEdge {
+  string id = 1;
+  string source = 2;
+  string target = 3;
+}

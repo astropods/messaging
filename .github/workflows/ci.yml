@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  test-typescript:
+    runs-on: ubuntu-latest
+    name: Test TypeScript SDK
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+        working-directory: sdk/node
+
+      - name: Build
+        run: bun run build
+        working-directory: sdk/node
+
+      - name: Run tests
+        run: bun test
+        working-directory: sdk/node
+
+  test-cross-language:
+    runs-on: ubuntu-latest
+    name: Test cross-language (TS + Go)
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: go.sum
+
+      - name: Install dependencies
+        run: bun install
+        working-directory: sdk/node
+
+      - name: Generate Go serialized test data
+        run: go run tools/test-serialization/main.go serialize
+
+      - name: Run TypeScript tests
+        run: bun test
+        working-directory: sdk/node
+
+      - name: Verify Go can deserialize TypeScript output
+        run: go run tools/test-serialization/main.go deserialize
+
+      - name: Run Go tests
+        run: go test -v ./...
+
+  test-go:
+    runs-on: ubuntu-latest
+    name: Test Go
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: |
+          if [ "${{ github.event_name }}" == "push" ] && [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            go test -v -race -coverprofile=coverage.out ./...
+          else
+            go test -v ./...
+          fi
+
+      - name: Build
+        run: go build -v ./...

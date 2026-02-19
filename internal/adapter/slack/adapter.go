@@ -1,0 +1,486 @@
+package slack
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	pb "github.com/astromode-ai/astro-messaging/pkg/gen/astro/messaging/v1"
+	"github.com/astromode-ai/astro-messaging/internal/adapter"
+	"github.com/astromode-ai/astro-messaging/internal/store"
+	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackevents"
+	"github.com/slack-go/slack/socketmode"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// SlackAdapter implements the adapter.Adapter interface for Slack
+type SlackAdapter struct {
+	client       *slack.Client
+	socketClient *socketmode.Client
+	config       adapter.Config
+	msgHandler   adapter.MessageHandler
+	rateLimiter  *RateLimiter
+	stopChan     chan struct{}
+	aiClient     *SlackAIClient // Client for Slack AI APIs
+
+	// contentBuffers accumulates DELTA chunks per conversation so the adapter
+	// can send a single complete message to Slack on END.
+	contentBuffers map[string]string
+}
+
+// New creates a new Slack adapter
+func New() *SlackAdapter {
+	return &SlackAdapter{
+		stopChan:       make(chan struct{}),
+		contentBuffers: make(map[string]string),
+	}
+}
+
+// Initialize sets up the Slack adapter with configuration
+func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) error {
+	a.config = config
+
+	// Initialize Slack client
+	a.client = slack.New(
+		config.BotToken,
+		slack.OptionAppLevelToken(config.AppToken),
+	)
+
+	// Initialize socket mode client if enabled
+	if config.SocketMode {
+		a.socketClient = socketmode.New(
+			a.client,
+			socketmode.OptionDebug(false),
+		)
+	}
+
+	// Initialize rate limiter
+	a.rateLimiter = NewRateLimiter(
+		config.RateLimit.RequestsPerSecond,
+		config.RateLimit.BurstSize,
+	)
+
+	// Initialize AI client for Slack AI features
+	a.aiClient = NewSlackAIClient(config.BotToken)
+
+	log.Printf("[Slack] Adapter initialized (Socket Mode: %v)", config.SocketMode)
+	return nil
+}
+
+// Start begins listening for Slack events
+func (a *SlackAdapter) Start(ctx context.Context) error {
+	if a.config.SocketMode {
+		return a.startSocketMode(ctx)
+	}
+	return fmt.Errorf("webhook mode not implemented, use Socket Mode")
+}
+
+// startSocketMode starts the socket mode event listener
+func (a *SlackAdapter) startSocketMode(ctx context.Context) error {
+	log.Println("[Slack] Starting Socket Mode connection...")
+
+	// Start socket mode client in background (this initializes the Events channel)
+	go func() {
+		if err := a.socketClient.RunContext(ctx); err != nil {
+			log.Printf("[Slack] Socket mode client error: %v", err)
+		}
+	}()
+
+	// Listen for events from the now-initialized channel
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("[Slack] Context cancelled, stopping event listener")
+			return ctx.Err()
+		case <-a.stopChan:
+			log.Println("[Slack] Stopping event listener")
+			return nil
+		case evt := <-a.socketClient.Events:
+			a.handleSocketEvent(ctx, evt)
+		}
+	}
+}
+
+// handleSocketEvent processes incoming socket mode events
+func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
+	switch evt.Type {
+	case socketmode.EventTypeConnecting:
+		log.Println("[Slack] Connecting to Slack...")
+
+	case socketmode.EventTypeConnectionError:
+		log.Printf("[Slack] Connection error: %v", evt.Data)
+
+	case socketmode.EventTypeConnected:
+		log.Println("[Slack] Connected to Slack via Socket Mode")
+
+	case socketmode.EventTypeEventsAPI:
+		// Acknowledge the event
+		a.socketClient.Ack(*evt.Request)
+
+		// Handle the inner event
+		eventsAPIEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
+		if !ok {
+			log.Printf("[Slack] Could not type cast event to EventsAPIEvent")
+			return
+		}
+
+		a.handleInnerEvent(ctx, eventsAPIEvent.InnerEvent)
+
+	case socketmode.EventTypeInteractive:
+		// Acknowledge interactive events (buttons, modals, etc.)
+		a.socketClient.Ack(*evt.Request)
+
+		// Handle block actions (feedback buttons, etc.)
+		callback, ok := evt.Data.(slack.InteractionCallback)
+		if ok && callback.Type == slack.InteractionTypeBlockActions {
+			a.handleBlockActions(ctx, &callback)
+		} else {
+			log.Println("[Slack] Interactive event received (not yet handled)")
+		}
+
+	case socketmode.EventTypeSlashCommand:
+		// Acknowledge slash commands
+		a.socketClient.Ack(*evt.Request)
+		log.Println("[Slack] Slash command received (not yet handled)")
+
+	case socketmode.EventTypeHello:
+		// Hello event is just a connection acknowledgment, no action needed
+
+	default:
+		// Only log truly unknown event types at debug level
+		if evt.Type != "" {
+			log.Printf("[Slack] Unhandled event type: %s", evt.Type)
+		}
+	}
+}
+
+// handleInnerEvent processes the actual event data
+func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackevents.EventsAPIInnerEvent) {
+	switch ev := innerEvent.Data.(type) {
+	case *slackevents.MessageEvent:
+		a.handleMessage(ctx, ev)
+
+	case *slackevents.AppMentionEvent:
+		a.handleAppMention(ctx, ev)
+
+	default:
+		log.Printf("[Slack] Unhandled inner event type: %s", innerEvent.Type)
+	}
+}
+
+// handleMessage processes message events
+func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.MessageEvent) {
+	// Filter out bot messages
+	if ev.BotID != "" {
+		return
+	}
+
+	// Filter out message subtypes we don't want to process
+	if ev.SubType != "" && ev.SubType != "thread_broadcast" {
+		return
+	}
+
+	// In public/private channels, only process thread replies (follow-ups).
+	// Top-level channel messages are handled via app_mention events to avoid duplicates.
+	if ev.Channel != "" && ev.Channel[0] != 'D' {
+		if ev.ThreadTimeStamp == "" {
+			log.Printf("[Slack] Ignoring top-level message in channel %s (will handle via app_mention)", ev.Channel)
+			return
+		}
+		log.Printf("[Slack] Processing thread reply in channel %s, thread=%s", ev.Channel, ev.ThreadTimeStamp)
+	}
+
+	log.Printf("[Slack] Message received: channel=%s, user=%s, text=%s", ev.Channel, ev.User, ev.Text)
+
+	// Build conversation ID
+	conversationID := ev.Channel
+	if ev.ThreadTimeStamp != "" {
+		conversationID = fmt.Sprintf("%s-%s", ev.Channel, ev.ThreadTimeStamp)
+	}
+
+	// Convert to pb.Message
+	msg := &pb.Message{
+		Id:             uuid.NewString(),
+		Timestamp:      timestamppb.New(parseSlackTimestamp(ev.TimeStamp)),
+		Platform:       "slack",
+		Content:        ev.Text,
+		ConversationId: conversationID,
+		PlatformContext: &pb.PlatformContext{
+			MessageId: ev.TimeStamp,
+			ChannelId: ev.Channel,
+			ThreadId:  ev.ThreadTimeStamp,
+		},
+		User: &pb.User{
+			Id: ev.User,
+		},
+	}
+
+	// Call handler if registered
+	if a.msgHandler != nil {
+		if err := a.msgHandler(ctx, msg); err != nil {
+			log.Printf("[Slack] Error handling message: %v", err)
+			a.sendErrorMessage(ctx, ev.Channel, ev.ThreadTimeStamp, err)
+		}
+	}
+}
+
+// handleBlockActions processes block action events (button clicks, etc.)
+func (a *SlackAdapter) handleBlockActions(ctx context.Context, callback *slack.InteractionCallback) {
+	log.Printf("[Slack] Block action received: type=%s, actions=%d", callback.Type, len(callback.ActionCallback.BlockActions))
+
+	for _, action := range callback.ActionCallback.BlockActions {
+		log.Printf("[Slack] Action: id=%s, value=%s", action.ActionID, action.Value)
+
+		// Handle feedback button clicks (Slack AI context_actions/feedback_buttons)
+		if action.ActionID == "feedback_buttons" {
+			feedbackType := action.Value // "positive_feedback" or "negative_feedback"
+			log.Printf("[Slack] Feedback received: %s from user %s on message %s",
+				feedbackType, callback.User.ID, callback.Message.Timestamp)
+
+			// Use Slack emoji names (not emoji characters)
+			emojiName := "thumbsup"
+			if feedbackType == "negative_feedback" {
+				emojiName = "thumbsdown"
+			}
+
+			// Remove feedback buttons from the message first
+			if len(callback.Message.Blocks.BlockSet) > 0 {
+				updatedBlocks := []slack.Block{}
+				for _, block := range callback.Message.Blocks.BlockSet {
+					// Filter out the context_actions block (Slack AI feedback block type)
+					if block.BlockType() == "context_actions" {
+						continue
+					}
+					updatedBlocks = append(updatedBlocks, block)
+				}
+
+				_, _, _, err := a.client.UpdateMessage(
+					callback.Channel.ID,
+					callback.Message.Timestamp,
+					slack.MsgOptionBlocks(updatedBlocks...),
+					slack.MsgOptionText(callback.Message.Text, false),
+				)
+
+				if err != nil {
+					log.Printf("[Slack] Failed to remove feedback buttons: %v", err)
+				} else {
+					log.Printf("[Slack] Feedback buttons removed from message")
+				}
+			}
+
+			// Acknowledge the feedback visually by adding a reaction
+			err := a.client.AddReaction(emojiName, slack.ItemRef{
+				Channel:   callback.Channel.ID,
+				Timestamp: callback.Message.Timestamp,
+			})
+
+			if err != nil {
+				log.Printf("[Slack] Failed to add reaction: %v", err)
+			} else {
+				log.Printf("[Slack] Feedback acknowledged with :%s: reaction", emojiName)
+			}
+		}
+	}
+}
+
+// handleAppMention processes app mention events
+func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.AppMentionEvent) {
+	log.Printf("[Slack] App mentioned: channel=%s, user=%s, text=%s", ev.Channel, ev.User, ev.Text)
+
+	// Use ThreadTimeStamp if already in a thread, otherwise use the message's
+	// own TimeStamp so the response creates a new thread under the mention.
+	threadID := ev.ThreadTimeStamp
+	if threadID == "" {
+		threadID = ev.TimeStamp
+	}
+
+	conversationID := fmt.Sprintf("%s-%s", ev.Channel, threadID)
+	text := stripMentions(ev.Text)
+
+	log.Printf("[Slack] Setting loading state: channel=%s, threadTS=%s", ev.Channel, threadID)
+	if err := a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "Assistant is thinking...", "thinking_face"); err != nil {
+		log.Printf("[Slack] ERROR: Failed to set loading state: %v", err)
+	}
+
+	// Convert to pb.Message
+	msg := &pb.Message{
+		Id:             uuid.NewString(),
+		Timestamp:      timestamppb.New(parseSlackTimestamp(ev.TimeStamp)),
+		Platform:       "slack",
+		Content:        text,
+		ConversationId: conversationID,
+		PlatformContext: &pb.PlatformContext{
+			MessageId: ev.TimeStamp,
+			ChannelId: ev.Channel,
+			ThreadId:  threadID,
+		},
+		User: &pb.User{
+			Id: ev.User,
+		},
+	}
+
+	// Call handler if registered
+	if a.msgHandler != nil {
+		if err := a.msgHandler(ctx, msg); err != nil {
+			log.Printf("[Slack] Error handling mention: %v", err)
+			a.sendErrorMessage(ctx, ev.Channel, threadID, err)
+			// Clear loading state on error
+			a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "", "")
+		}
+	}
+}
+
+// sendErrorMessage sends an error message to Slack
+func (a *SlackAdapter) sendErrorMessage(ctx context.Context, channelID, threadTS string, err error) {
+	content := fmt.Sprintf(":x: Error: %s", err.Error())
+	_, _, postErr := a.client.PostMessageContext(ctx, channelID,
+		slack.MsgOptionText(content, false),
+		slack.MsgOptionTS(threadTS),
+	)
+	if postErr != nil {
+		log.Printf("[Slack] Error sending error message: %v", postErr)
+	}
+}
+
+// SetMessageHandler sets the handler for incoming messages from the platform
+func (a *SlackAdapter) SetMessageHandler(handler adapter.MessageHandler) {
+	a.msgHandler = handler
+}
+
+// GetPlatformName returns the platform identifier
+func (a *SlackAdapter) GetPlatformName() string {
+	return "slack"
+}
+
+// IsHealthy checks if the adapter is connected and healthy
+func (a *SlackAdapter) IsHealthy(ctx context.Context) bool {
+	if a.client == nil {
+		return false
+	}
+
+	// Test authentication
+	_, err := a.client.AuthTestContext(ctx)
+	return err == nil
+}
+
+// Stop gracefully shuts down the adapter
+func (a *SlackAdapter) Stop(ctx context.Context) error {
+	log.Println("[Slack] Stopping adapter...")
+
+	// Signal stop to event listener
+	close(a.stopChan)
+
+	log.Println("[Slack] Adapter stopped")
+	return nil
+}
+
+// Capabilities returns the adapter's capabilities
+func (a *SlackAdapter) Capabilities() adapter.AdapterCapabilities {
+	return adapter.SlackCapabilities(false)
+}
+
+// HydrateThread fetches thread history from Slack API
+func (a *SlackAdapter) HydrateThread(ctx context.Context, conversationID string, threadStore *store.ThreadHistoryStore) error {
+	parts := strings.Split(conversationID, "-")
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid conversation ID format: %s", conversationID)
+	}
+
+	channelID := parts[1]
+	var threadTS string
+	if len(parts) == 3 {
+		threadTS = parts[2]
+	}
+
+	log.Printf("[Slack] Hydrating thread: channel=%s, thread=%s", channelID, threadTS)
+
+	var messages []slack.Message
+
+	if threadTS != "" {
+		msgs, _, _, err := a.client.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
+			ChannelID: channelID,
+			Timestamp: threadTS,
+			Limit:     50,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to fetch thread: %w", err)
+		}
+		messages = msgs
+	} else {
+		history, err := a.client.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
+			ChannelID: channelID,
+			Limit:     50,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to fetch history: %w", err)
+		}
+		messages = history.Messages
+	}
+
+	for _, msg := range messages {
+		if msg.Type != "message" || msg.SubType == "bot_message" {
+			continue
+		}
+
+		threadMsg := &pb.ThreadMessage{
+			MessageId: msg.Timestamp,
+			User: &pb.User{
+				Id:       msg.User,
+				Username: msg.Username,
+			},
+			Content:   msg.Text,
+			Timestamp: timestamppb.New(parseSlackTimestamp(msg.Timestamp)),
+			WasEdited: msg.Edited != nil,
+			PlatformData: map[string]string{
+				"team":    msg.Team,
+				"subtype": msg.SubType,
+			},
+		}
+
+		if msg.Edited != nil {
+			threadMsg.EditedAt = timestamppb.New(parseSlackTimestamp(msg.Edited.Timestamp))
+		}
+
+		threadStore.AddMessage(conversationID, threadMsg)
+	}
+
+	log.Printf("[Slack] Hydrated %d messages for %s", len(messages), conversationID)
+	return nil
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+func parseSlackTimestamp(ts string) time.Time {
+	parts := strings.Split(ts, ".")
+	if len(parts) == 0 {
+		return time.Now()
+	}
+	var seconds int64
+	fmt.Sscanf(parts[0], "%d", &seconds)
+	return time.Unix(seconds, 0)
+}
+
+func FormatMessageID(channelID, timestamp string) string {
+	return fmt.Sprintf("%s:%s", channelID, timestamp)
+}
+
+func ParseMessageID(messageID string) (string, string) {
+	parts := strings.Split(messageID, ":")
+	if len(parts) != 2 {
+		return "", ""
+	}
+	return parts[0], parts[1]
+}
+
+func stripMentions(text string) string {
+	re := regexp.MustCompile(`<@[A-Z0-9]+>`)
+	text = re.ReplaceAllString(text, "")
+	return strings.TrimSpace(text)
+}

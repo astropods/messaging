@@ -1,0 +1,26 @@
+# Default configuration for Astro Messaging Service
+# Environment variables will override these values
+
+# Server configuration
+listen_addr: ":8081"
+agent_url: "http://localhost:8080"
+
+# Deployment mode: "all", "slack", "discord", "teams"
+deployment_mode: "all"
+
+# Slack configuration
+slack:
+  enabled: true
+  socket_mode: true
+  auto_thread: true
+  rate_limit:
+    requests_per_second: 3
+    burst_size: 10
+
+# Storage configuration
+storage:
+  type: "redis"  # "redis" or "memory"
+  ttl: 604800    # 7 days in seconds
+
+# Logging
+log_level: "info"  # debug, info, warn, error

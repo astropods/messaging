@@ -1,0 +1,198 @@
+syntax = "proto3";
+
+package astro.messaging.v1;
+
+import "google/protobuf/timestamp.proto";
+import "astro/messaging/v1/message.proto";
+
+option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
+
+// Agent's streamed response (agent → platform)
+// Agent can send multiple AgentResponse messages in a stream
+// Also used by server to send incoming platform messages to agent
+message AgentResponse {
+  string conversation_id = 1;             // Matches incoming Message.conversation_id
+  string response_id = 2;                 // Stable ID for this response (for updates)
+
+  oneof payload {
+    Message incoming_message = 3;         // Incoming platform message (server → agent)
+    StatusUpdate status = 4;              // "Thinking...", typing indicator
+    ContentChunk content = 5;             // Actual message content (streamed)
+    SuggestedPrompts prompts = 6;         // Quick reply suggestions
+    ThreadMetadata thread_metadata = 7;   // Thread title, creation
+    ErrorResponse error = 8;              // Error during processing
+    ThreadHistoryRequest context_request = 9;  // Request cached context (optional)
+  }
+}
+
+// AI status indicators (loading states, typing)
+// Platform translation:
+// - Slack: assistant.threads.setStatus
+// - Discord: typing indicator via bot.send_typing()
+// - Teams: typing indicator via sendTypingIndicator()
+message StatusUpdate {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    THINKING = 1;                         // Generic "thinking"
+    SEARCHING = 2;                        // RAG/knowledge base search
+    GENERATING = 3;                       // LLM generation in progress
+    PROCESSING = 4;                       // Tool execution
+    ANALYZING = 5;                        // Data analysis
+    CUSTOM = 10;                          // Custom status with message
+  }
+
+  Status status = 1;
+  string custom_message = 2;              // Used with CUSTOM or overrides default (optional)
+  string emoji = 3;                       // Platform emoji (e.g., ":robot_face:") (optional)
+}
+
+// Streamed message content
+// Flow: START → DELTA(s) → END (or just START for complete message)
+message ContentChunk {
+  enum ChunkType {
+    CHUNK_TYPE_UNSPECIFIED = 0;
+    START = 1;                            // Create message, returns platform message_id
+    DELTA = 2;                            // Append/update content (streamed tokens)
+    END = 3;                              // Finalize message
+    REPLACE = 4;                          // Full content replacement (edit)
+  }
+
+  ChunkType type = 1;
+
+  // Content handling based on type:
+  // START: Full initial content (may be empty for immediate presence)
+  // DELTA: Incremental text to append (LLM tokens)
+  // END: Final text (if any last content) + attachments
+  // REPLACE: Complete new content (overwrites existing)
+  string content = 2;
+
+  // Attachments sent with END chunk or standalone
+  repeated ResponseAttachment attachments = 3;
+
+  // Platform message ID (returned after START, used for updates)
+  string platform_message_id = 4;         // Optional
+
+  // Options for message creation
+  MessageOptions options = 5;             // Optional
+}
+
+// Attachments in agent responses (richer than user attachments)
+message ResponseAttachment {
+  oneof attachment_type {
+    ImageAttachment image = 1;
+    FileAttachment file = 2;
+    CardAttachment card = 3;             // Rich cards (Slack blocks, Teams adaptive cards)
+    LinkPreview link = 4;
+  }
+}
+
+message ImageAttachment {
+  string url = 1;                         // Public URL or data URI
+  string alt_text = 2;                    // Optional
+  string title = 3;                       // Optional
+  int32 width = 4;                        // Optional
+  int32 height = 5;                       // Optional
+}
+
+message FileAttachment {
+  string url = 1;
+  string filename = 2;
+  string mime_type = 3;                   // Optional
+  int64 size_bytes = 4;                   // Optional
+}
+
+message CardAttachment {
+  string platform_card_json = 1;          // Platform-specific JSON
+  // Adapters translate: Slack Block Kit, Discord Embeds, Teams Adaptive Cards
+}
+
+message LinkPreview {
+  string url = 1;
+  string title = 2;                       // Optional
+  string description = 3;                 // Optional
+  string image_url = 4;                   // Optional
+}
+
+// Message creation options
+message MessageOptions {
+  bool ephemeral = 1;                     // Only visible to user
+  bool create_thread = 2;                 // Start new thread
+  string reply_to_message_id = 3;         // Reply to specific message (optional)
+  bool silent = 4;                        // No notification
+}
+
+// Suggested quick replies (Slack AI, Teams suggested actions)
+// Platform translation:
+// - Slack: assistant.threads.setSuggestedPrompts
+// - Teams: suggestedActions in bot response
+// - Discord: Custom buttons (component interactions)
+message SuggestedPrompts {
+  message Prompt {
+    string id = 1;                        // Unique ID (for tracking selection)
+    string title = 2;                     // Button/chip label
+    string message = 3;                   // Full message sent when selected
+    string description = 4;               // Tooltip/help text (optional)
+  }
+
+  repeated Prompt prompts = 1;            // Max 4-6 depending on platform
+}
+
+// Thread management (create, update title)
+message ThreadMetadata {
+  string thread_id = 1;                   // Platform thread ID (if updating) (optional)
+  string title = 2;                       // Thread title/subject (optional)
+  bool create_new = 3;                    // Create new thread
+}
+
+// Error response from agent
+message ErrorResponse {
+  enum ErrorCode {
+    ERROR_CODE_UNSPECIFIED = 0;
+    RATE_LIMIT = 1;                       // Agent hit rate limit
+    CONTEXT_TOO_LONG = 2;                 // Context exceeds LLM limit
+    INVALID_REQUEST = 3;                  // Malformed request
+    AGENT_ERROR = 4;                      // Internal agent error
+    TOOL_ERROR = 5;                       // Tool execution failed
+    PLATFORM_ERROR = 6;                   // Platform API error
+  }
+
+  ErrorCode code = 1;
+  string message = 2;                     // User-facing error message
+  string details = 3;                     // Technical details (logged, not shown) (optional)
+  bool retryable = 4;                     // Can user retry?
+}
+
+// Agent requests thread hydration from adapter
+message ThreadHistoryRequest {
+  string conversation_id = 1;
+  int32 max_messages = 2;                 // How many recent messages (default: 50)
+  bool include_edited = 3;                // Include edit history (default: true)
+  bool include_deleted = 4;               // Include deleted markers (default: false)
+}
+
+message ThreadHistoryResponse {
+  string conversation_id = 1;
+  repeated ThreadMessage messages = 2;
+  bool is_complete = 3;                   // False if truncated due to max_messages
+  google.protobuf.Timestamp fetched_at = 4;
+}
+
+message ThreadMessage {
+  string message_id = 1;                  // Platform message ID
+  User user = 2;
+  string content = 3;                     // Current content (after edits)
+  repeated Attachment attachments = 4;
+  google.protobuf.Timestamp timestamp = 5;
+
+  // Edit tracking
+  bool was_edited = 6;
+  string original_content = 7;            // Content before edits (optional)
+  google.protobuf.Timestamp edited_at = 8; // Optional
+
+  // Deletion tracking
+  bool is_deleted = 9;
+  google.protobuf.Timestamp deleted_at = 10; // Optional
+
+  // Platform-specific data
+  map<string, string> platform_data = 11;
+}

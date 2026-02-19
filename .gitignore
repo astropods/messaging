@@ -1,0 +1,33 @@
+# Environment variables
+.env
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+
+# Node (TypeScript SDK)
+sdk/node/node_modules/
+sdk/node/dist/
+sdk/node/bun.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

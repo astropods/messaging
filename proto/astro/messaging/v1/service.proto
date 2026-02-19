@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package astro.messaging.v1;
+
+import "astro/messaging/v1/message.proto";
+import "astro/messaging/v1/response.proto";
+import "astro/messaging/v1/feedback.proto";
+import "astro/messaging/v1/config.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
+
+// Main gRPC service for agent messaging
+service AgentMessaging {
+  // Bidirectional streaming for real-time AI conversations
+  rpc ProcessConversation(stream ConversationRequest)
+      returns (stream AgentResponse);
+
+  // Server streaming for simple request/response with streaming reply
+  rpc ProcessMessage(Message)
+      returns (stream AgentResponse);
+
+  // Get current thread history from platform (handles edits/deletes)
+  // Agent calls this to hydrate accurate thread state
+  rpc GetThreadHistory(ThreadHistoryRequest)
+      returns (ThreadHistoryResponse);
+
+  // Optional: Query cache for conversation metadata (not full history)
+  rpc GetConversationMetadata(ConversationMetadataRequest)
+      returns (ConversationMetadataResponse);
+
+  // Health check
+  rpc HealthCheck(HealthCheckRequest)
+      returns (HealthCheckResponse);
+}
+
+// Request wrapper for bidirectional streaming
+message ConversationRequest {
+  oneof request {
+    Message message = 1;
+    PlatformFeedback feedback = 2;
+    AgentConfig agent_config = 3;
+    AgentResponse agent_response = 4;
+  }
+}
+
+// Conversation metadata (routing info, not full history)
+message ConversationMetadataRequest {
+  oneof identifier {
+    string conversation_id = 1;
+    PlatformIdentifier platform_id = 2;
+  }
+}
+
+message PlatformIdentifier {
+  string platform = 1;                    // "slack", "discord", "teams"
+  string channel_id = 2;
+  string thread_id = 3;                   // Optional
+}
+
+message ConversationMetadataResponse {
+  string conversation_id = 1;
+  string platform = 2;
+  string channel_id = 3;
+  string thread_id = 4;                   // Optional
+  google.protobuf.Timestamp last_message_time = 5;
+  int32 message_count = 6;                // Approximate from cache
+  bool found = 7;                         // Whether conversation exists in cache
+}
+
+// Health check
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  enum Status {
+    UNKNOWN = 0;
+    HEALTHY = 1;
+    DEGRADED = 2;
+    UNHEALTHY = 3;
+  }
+
+  Status status = 1;
+  string version = 2;
+}

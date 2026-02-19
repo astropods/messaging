@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package astro.messaging.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
+
+// Feedback from user interactions (platform → agent)
+// Used in bidirectional streaming for real-time agent updates
+message PlatformFeedback {
+  string conversation_id = 1;
+  string response_id = 2;                 // Which agent message this relates to (optional)
+  google.protobuf.Timestamp timestamp = 3;
+
+  oneof feedback {
+    StreamControl stream_control = 4;     // Stop/pause generation
+    PromptSelection prompt_selection = 5; // User clicked suggested prompt
+    MessageReaction reaction = 6;         // Thumbs up/down, emoji reaction
+    ButtonClick button_click = 7;         // Interactive button clicked
+    MessageEdit message_edit = 8;         // User edited a message
+    MessageDelete message_delete = 9;     // User deleted a message
+  }
+}
+
+// Control agent streaming/generation
+message StreamControl {
+  enum Action {
+    ACTION_UNSPECIFIED = 0;
+    STOP = 1;                             // Stop generating
+    PAUSE = 2;                            // Pause (resume later)
+    RESUME = 3;                           // Resume paused generation
+    REGENERATE = 4;                       // Regenerate last response
+  }
+
+  Action action = 1;
+  string reason = 2;                      // Why stopped (user click, error, etc.) (optional)
+}
+
+// User selected a suggested prompt
+message PromptSelection {
+  string prompt_id = 1;                   // Matches SuggestedPrompts.Prompt.id
+  string prompt_message = 2;              // Full message being sent
+}
+
+// User reacted to agent message
+message MessageReaction {
+  enum ReactionType {
+    REACTION_TYPE_UNSPECIFIED = 0;
+    THUMBS_UP = 1;
+    THUMBS_DOWN = 2;
+    CUSTOM_EMOJI = 3;
+  }
+
+  ReactionType type = 1;
+  string emoji = 2;                       // For CUSTOM_EMOJI (optional)
+  bool added = 3;                         // true = added, false = removed
+}
+
+// User clicked interactive button (from CardAttachment)
+message ButtonClick {
+  string button_id = 1;                   // Button identifier from card
+  string value = 2;                       // Button value/payload (optional)
+  string action = 3;                      // Action identifier
+}
+
+// User edited a previous message
+message MessageEdit {
+  string message_id = 1;                  // Platform message ID that was edited
+  string new_content = 2;                 // New content after edit
+  string original_content = 3;            // Original content (if available) (optional)
+  google.protobuf.Timestamp edited_at = 4;
+}
+
+// User deleted a previous message
+message MessageDelete {
+  string message_id = 1;                  // Platform message ID that was deleted
+  google.protobuf.Timestamp deleted_at = 2;
+}
