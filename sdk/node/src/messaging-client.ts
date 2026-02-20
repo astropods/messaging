@@ -180,7 +180,7 @@ export class MessagingClient extends EventEmitter {
       enums: String,
       defaults: true,
       oneofs: true,
-      includeDirs: [join(__dirname, '../proto')],
+      includeDirs: [join(__dirname, 'proto')],
     });
 
     const protoDescriptor = grpc.loadPackageDefinition(packageDefinition) as any;
