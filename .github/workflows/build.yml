@@ -24,7 +24,6 @@ jobs:
             runner: ubuntu-24.04-arm
     permissions:
       contents: read
-      packages: write
 
     steps:
       - name: Checkout
@@ -36,12 +35,11 @@ jobs:
           echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
           echo "VERSION=$(cat VERSION)" >> $GITHUB_ENV
 
-      - name: Login to GitHub Container Registry
+      - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -53,7 +51,7 @@ jobs:
           context: .
           file: Dockerfile
           platforms: ${{ matrix.platform }}
-          outputs: type=image,name=ghcr.io/astromode-ai/${{ env.SERVICE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=astromodeai/${{ env.SERVICE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ env.SERVICE }}-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,mode=max,scope=${{ env.SERVICE }}-${{ env.PLATFORM_PAIR }}
           build-args: |
@@ -81,7 +79,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      packages: write
 
     steps:
       - name: Download digests
@@ -91,12 +88,11 @@ jobs:
           pattern: digests-*
           merge-multiple: true
 
-      - name: Login to GitHub Container Registry
+      - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -104,9 +100,9 @@ jobs:
       - name: Create manifest and push
         working-directory: ${{ runner.temp }}/digests
         run: |
-          IMAGE="ghcr.io/astromode-ai/${{ env.SERVICE }}"
+          IMAGE="astromodeai/${{ env.SERVICE }}"
           docker buildx imagetools create \
             -t "$IMAGE:${{ github.sha }}" \
             -t "$IMAGE:latest" \
             $(printf "$IMAGE@sha256:%s " *)
-          echo "::notice::GHCR: $IMAGE:${{ github.sha }}"
+          echo "::notice::Docker Hub: $IMAGE:${{ github.sha }}"

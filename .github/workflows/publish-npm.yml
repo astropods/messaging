@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
+      id-token: write
 
     steps:
       - name: Checkout
@@ -26,8 +26,8 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          registry-url: https://npm.pkg.github.com
+          node-version: 22
+          registry-url: https://registry.npmjs.org
           scope: "@astromode-ai"
 
       - name: Sync version from VERSION file
@@ -49,10 +49,8 @@ jobs:
         working-directory: sdk/node
 
       - name: Publish
-        run: npm publish
+        run: npm publish --provenance --access public
         working-directory: sdk/node
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Commit and tag release
         run: |
