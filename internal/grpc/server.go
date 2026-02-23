@@ -285,7 +285,7 @@ func (s *Server) GetConversationMetadata(ctx context.Context, req *pb.Conversati
 		ChannelId:       conv.ChannelID,
 		ThreadId:        conv.ThreadID,
 		LastMessageTime: timestamppb.New(conv.LastMessageAt),
-		MessageCount:    int32(conv.MessageCount),
+		MessageCount:    int32(conv.MessageCount), //nolint:gosec // MessageCount is bounded
 		Found:           true,
 	}, nil
 }

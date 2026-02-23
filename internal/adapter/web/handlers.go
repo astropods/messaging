@@ -79,7 +79,7 @@ func (h *Handlers) HandleCreateConversation(w http.ResponseWriter, r *http.Reque
 	// Parse request
 	var req CreateConversationRequest
 	if r.Body != nil {
-		json.NewDecoder(r.Body).Decode(&req) // Ignore errors, allow empty body
+		_ = json.NewDecoder(r.Body).Decode(&req) // Allow empty body
 	}
 
 	// Generate conversation ID
@@ -92,8 +92,9 @@ func (h *Handlers) HandleCreateConversation(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(resp)
-
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("[Web] Encode error on create conversation: %v", err)
+	}
 	log.Printf("[Web] Conversation created: id=%s, user=%s", conversationID, session.UserID)
 }
 
@@ -185,8 +186,9 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("[Web] Encode error on send message: %v", err)
+	}
 	log.Printf("[Web] Message sent: id=%s, conversation=%s, user=%s", messageID, conversationID, session.UserID)
 }
 
@@ -325,7 +327,9 @@ func (h *Handlers) HandleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("[Web] Encode error on get history: %v", err)
+	}
 }
 
 // HandleHealth handles GET /health
@@ -337,7 +341,9 @@ func (h *Handlers) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("[Web] Encode error on health: %v", err)
+	}
 }
 
 // HandleAgentConfig handles GET /api/agent/config
@@ -410,7 +416,9 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("[Web] Encode error on agent config: %v", err)
+	}
 }
 
 // sendErrorEvent broadcasts an error event to all connections for a conversation

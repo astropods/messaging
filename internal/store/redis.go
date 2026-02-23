@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -46,7 +47,7 @@ func (s *RedisStore) Get(ctx context.Context, conversationID string) (*types.Con
 	key := fmt.Sprintf("conversation:%s", conversationID)
 
 	data, err := s.client.Get(ctx, key).Bytes()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return nil, fmt.Errorf("conversation not found: %s", conversationID)
 	}
 	if err != nil {

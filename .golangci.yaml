@@ -30,4 +30,13 @@ linters:
     rules:
       - path: _test\.go
         linters:
+          - canonicalheader
+          - errcheck
+          - errchkjson
+          - gosec
+          - usetesting
+      - path: tools/test-serialization/
+        linters:
+          - errcheck
+          - errchkjson
           - gosec

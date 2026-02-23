@@ -330,7 +330,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 			log.Printf("[Slack] Error handling mention: %v", err)
 			a.sendErrorMessage(ctx, ev.Channel, threadID, err)
 			// Clear loading state on error
-			a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "", "")
+			_ = a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "", "")
 		}
 	}
 }
@@ -463,7 +463,7 @@ func parseSlackTimestamp(ts string) time.Time {
 		return time.Now()
 	}
 	var seconds int64
-	fmt.Sscanf(parts[0], "%d", &seconds)
+	_, _ = fmt.Sscanf(parts[0], "%d", &seconds)
 	return time.Unix(seconds, 0)
 }
 

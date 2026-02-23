@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -20,7 +21,7 @@ type MessagingClient struct {
 // NewClient creates a new messaging client
 func NewClient(addr string) (*MessagingClient, error) {
 	// Connect to gRPC server
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to gRPC server: %w", err)
 	}
@@ -69,7 +70,7 @@ func (c *MessagingClient) ProcessMessage(ctx context.Context, msg *pb.Message) (
 func (c *MessagingClient) GetThreadHistory(ctx context.Context, conversationID string, maxMessages int) (*pb.ThreadHistoryResponse, error) {
 	req := &pb.ThreadHistoryRequest{
 		ConversationId: conversationID,
-		MaxMessages:    int32(maxMessages),
+		MaxMessages:    int32(maxMessages), //nolint:gosec // G115: maxMessages is bounded by caller
 		IncludeEdited:  true,
 		IncludeDeleted: false,
 	}
@@ -147,7 +148,7 @@ func (s *ConversationStream) Receive() (*pb.AgentResponse, error) {
 func (s *ConversationStream) ReceiveAll(handler func(*pb.AgentResponse) error) error {
 	for {
 		resp, err := s.stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
@@ -179,7 +180,7 @@ func (s *MessageStream) Receive() (*pb.AgentResponse, error) {
 func (s *MessageStream) ReceiveAll(handler func(*pb.AgentResponse) error) error {
 	for {
 		resp, err := s.stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
