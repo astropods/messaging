@@ -10,6 +10,7 @@ import (
 
 	"github.com/astropods/messaging/config"
 	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/adapter/mcp"
 	"github.com/astropods/messaging/internal/adapter/slack"
 	"github.com/astropods/messaging/internal/adapter/web"
 	"github.com/astropods/messaging/internal/grpc"
@@ -170,6 +171,18 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			webAdapter.SetAgentConfigStore(agentConfigStore)
 			adapters["web"] = webAdapter
 			log.Println("Web adapter initialized")
+		}
+	}
+
+	// Initialize MCP adapter if enabled
+	if cfg.MCP.Enabled {
+		log.Println("Initializing MCP adapter...")
+		mcpAdapter := mcp.New(mcp.WithListenAddr(cfg.MCP.ListenAddr))
+		if err := mcpAdapter.Initialize(ctx, adapter.Config{}); err != nil {
+			log.Printf("Error initializing MCP adapter: %v", err)
+		} else {
+			adapters["mcp"] = mcpAdapter
+			log.Println("MCP adapter initialized")
 		}
 	}
 

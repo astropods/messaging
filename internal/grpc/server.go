@@ -70,6 +70,25 @@ func (s *Server) RegisterAdapter(name string, adpt adapter.Adapter) {
 	log.Printf("[gRPC] Registered adapter: %s", name)
 }
 
+// notifyAgentConfig notifies adapters that implement AgentConfigReceiver.
+func (s *Server) notifyAgentConfig(config *pb.AgentConfig) {
+	if config == nil {
+		return
+	}
+	s.mu.RLock()
+	adapters := make(map[string]adapter.Adapter, len(s.adapters))
+	for k, v := range s.adapters {
+		adapters[k] = v
+	}
+	s.mu.RUnlock()
+	for name, adpt := range adapters {
+		if recv, ok := adpt.(adapter.AgentConfigReceiver); ok {
+			recv.UpdateFromAgentConfig(config)
+			log.Printf("[gRPC] Notified adapter %s of agent config", name)
+		}
+	}
+}
+
 // Start starts the gRPC server
 func (s *Server) Start(ctx context.Context) error {
 	lis, err := net.Listen("tcp", s.listenAddr)
@@ -136,6 +155,7 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 			s.agentConfigStore.Set(payload.AgentConfig)
 			log.Printf("[gRPC] Stored agent config from stream")
 		}
+		s.notifyAgentConfig(payload.AgentConfig)
 		conversationID = "agent-stream"
 	default:
 		// For now, use a generic ID if no message provided
@@ -203,6 +223,7 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 				s.agentConfigStore.Set(payload.AgentConfig)
 				log.Printf("[gRPC] Stored agent config from stream")
 			}
+			s.notifyAgentConfig(payload.AgentConfig)
 
 		case *pb.ConversationRequest_AgentResponse:
 			// Agent sending a typed response (ContentChunk, StatusUpdate, etc.)

@@ -29,6 +29,12 @@ type Adapter interface {
 	HydrateThread(ctx context.Context, conversationID string, store *store.ThreadHistoryStore) error
 }
 
+// AgentConfigReceiver is an optional interface. Adapters that implement it
+// receive AgentConfig updates when the agent sends config on the stream.
+type AgentConfigReceiver interface {
+	UpdateFromAgentConfig(config *pb.AgentConfig)
+}
+
 // MessageHandler is called when a message is received from the platform.
 // It should forward the message to the gRPC server which sends it to the agent.
 type MessageHandler func(ctx context.Context, msg *pb.Message) error

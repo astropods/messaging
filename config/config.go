@@ -20,6 +20,9 @@ type Config struct {
 	// Web configuration
 	Web WebConfig
 
+	// MCP (Model Context Protocol) configuration
+	MCP MCPConfig
+
 	// Storage configuration
 	Storage StorageConfig
 
@@ -59,6 +62,12 @@ type WebConfig struct {
 	Enabled        bool
 	ListenAddr     string
 	AllowedOrigins []string
+}
+
+// MCPConfig holds MCP (Model Context Protocol) adapter configuration
+type MCPConfig struct {
+	Enabled    bool
+	ListenAddr string
 }
 
 // StorageConfig holds storage configuration
@@ -124,6 +133,12 @@ func Load() (*Config, error) {
 		Enabled:        getEnvBool("WEB_ENABLED", false),
 		ListenAddr:     getEnv("WEB_LISTEN_ADDR", ":8080"),
 		AllowedOrigins: getEnvList("WEB_ALLOWED_ORIGINS", []string{"*"}),
+	}
+
+	// MCP configuration
+	cfg.MCP = MCPConfig{
+		Enabled:    getEnvBool("MCP_ENABLED", false),
+		ListenAddr: getEnv("MCP_LISTEN_ADDR", ":8081"),
 	}
 
 	// Storage configuration
