@@ -7,16 +7,18 @@ option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
 // Agent configuration declared at startup
 message AgentConfig {
   string system_prompt = 1;
-  repeated AgentToolConfig tools = 2;
+  repeated AgentToolConfig tools = 2;       // Agent's tools (for execution, graph workflows, etc.)
+  repeated AgentToolConfig mcp_definition = 3;   // MCP tool definitions (what to expose over MCP; name, description, input_schema_json)
 }
 
-// Tool configuration for any agent
+// Tool configuration. Used for both agent tools (with graph, type) and MCP tool definitions (with input_schema_json).
 message AgentToolConfig {
   string name = 1;
   string title = 2;
   string description = 3;
-  string type = 4;                        // "graph" | "other"
-  AgentToolGraph graph = 5;               // Optional, present when type = "graph"
+  string type = 4;                        // "graph" | "other" (for agent tools)
+  AgentToolGraph graph = 5;               // Optional, present when type = "graph" (for agent tools)
+  string input_schema_json = 6;           // Optional. JSON Schema for MCP tool input (must have "type":"object"). If empty, MCP uses {"type":"object"}.
 }
 
 // Graph visualization for tool workflows

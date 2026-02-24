@@ -142,11 +142,15 @@ export interface AgentToolConfig {
   description: string;
   type: string;
   graph?: AgentToolGraph;
+  /** Optional. JSON Schema for MCP tool input (must have "type":"object"). If omitted, MCP uses {"type":"object"}. */
+  inputSchemaJson?: string;
 }
 
 export interface AgentConfig {
   systemPrompt: string;
   tools: AgentToolConfig[];
+  /** MCP tool definitions (what to expose over MCP). Separate from agent tools. */
+  mcpDefinition?: AgentToolConfig[];
 }
 
 export interface ConversationRequest {

@@ -161,11 +161,19 @@ cd sdk/node && bun test
 go run tools/test-serialization/main.go deserialize
 ```
 
-### Regenerate protobuf
+### How and when `pkg/gen` is updated
+
+`pkg/gen` contains Go code generated from the `.proto` files. It is **not** updated automatically.
+
+**When to regenerate:** After any change to files under `proto/` (e.g. new or edited messages, fields, or services).
+
+**How to regenerate:** From `packages/astro-messaging`:
 
 ```bash
 ./scripts/generate-proto.sh
 ```
+
+Then **commit** the changed files under `pkg/gen`.
 
 ## Versioning
 

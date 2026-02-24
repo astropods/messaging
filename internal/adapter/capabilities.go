@@ -49,3 +49,18 @@ func WebCapabilities() AdapterCapabilities {
 		SupportsCards:            true,  // Rich cards/embeds
 	}
 }
+
+// MCPCapabilities returns capabilities for MCP (Model Context Protocol) clients
+func MCPCapabilities() AdapterCapabilities {
+	return AdapterCapabilities{
+		SupportsStreaming:        true, // SSE streaming
+		SupportsStatusUpdates:    true, // Status events via SSE
+		SupportsSuggestedPrompts: false,
+		SupportsThreads:          false,
+		SupportsTypingIndicator:  false,
+		MaxUpdateRateHz:          0,
+		MaxContentLength:         0,
+		SupportsReactions:        false,
+		SupportsCards:            false,
+	}
+}
