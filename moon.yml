@@ -1,0 +1,9 @@
+# Build task for messaging SDK (sdk/node). Used by ast dev --local.
+tasks:
+  "sdk-build":
+    command: "cd sdk/node && bun run build"
+    inputs:
+      - "sdk/node/**/*"
+      - "proto/**/*"
+    outputs:
+      - "sdk/node/dist"
