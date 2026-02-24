@@ -26,11 +26,8 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
-
-      - name: Clear npm auth token
-        run: sed -i '/_authToken/d' ~/.npmrc
 
       - name: Sync version from VERSION file
         run: |
