@@ -1,0 +1,42 @@
+linters:
+  disable-all: true
+  enable:
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - canonicalheader
+    - copyloopvar
+    - dogsled
+    - dupword
+    - durationcheck
+    - errcheck
+    - errchkjson
+    - errorlint
+    - goprintffuncname
+    - gosec
+    - govet
+    - ineffassign
+    - makezero
+    - mirror
+    - misspell
+    - sloglint
+    - staticcheck
+    - testifylint
+    - unconvert
+    - unused
+    - usestdlibvars
+    - usetesting
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - canonicalheader
+          - errcheck
+          - errchkjson
+          - gosec
+          - usetesting
+      - path: tools/test-serialization/
+        linters:
+          - errcheck
+          - errchkjson
+          - gosec

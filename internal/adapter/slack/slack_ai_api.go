@@ -194,7 +194,7 @@ func (c *SlackAIClient) postJSON(ctx context.Context, method string, body interf
 	}
 
 	// Create request
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
