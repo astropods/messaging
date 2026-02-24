@@ -180,7 +180,7 @@ To release a new version:
 
 ## Build & Publish
 
-### Docker (`astropods/astro-messaging`)
+### Docker (`astropods/messaging`)
 
 The Docker image is built and published to Docker Hub via `.github/workflows/build.yml`. It builds multi-arch images (`linux/amd64` and `linux/arm64`) in parallel and merges them into a single manifest.
 
