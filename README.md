@@ -125,9 +125,9 @@ stream.ReceiveAll(func(resp *pb.AgentResponse) error {
 ### TypeScript
 
 ```bash
-bun add @astromode-ai/astro-messaging
+bun add @astropods/messaging
 # or
-npm install @astromode-ai/astro-messaging
+npm install @astropods/messaging
 ```
 
 SDK source lives in `sdk/node/`. See its `src/messaging-client.ts` for the full API.
@@ -177,6 +177,32 @@ To release a new version:
 2. Commit and push
 3. Create a GitHub release — this triggers the npm publish workflow
 4. The Docker build workflow embeds the version in the binary via ldflags
+
+## Build & Publish
+
+### Docker (`astropods/astro-messaging`)
+
+The Docker image is built and published to Docker Hub via `.github/workflows/build.yml`. It builds multi-arch images (`linux/amd64` and `linux/arm64`) in parallel and merges them into a single manifest.
+
+Triggered manually via **Actions → Build & Push → Run workflow**.
+
+Requires two GitHub secrets:
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+
+### npm (`@astropods/messaging`)
+
+The TypeScript SDK is published to npm via `.github/workflows/publish-npm.yml`.
+
+Triggered automatically when a GitHub release is published, or manually via **Actions → Publish npm package → Run workflow**.
+
+The workflow:
+1. Reads the version from `VERSION` and syncs it into `sdk/node/package.json`
+2. Builds and tests the SDK
+3. Publishes with provenance (`npm publish --provenance --access public`)
+4. Commits the version bump and tags the release
+
+> **Note:** A brand new package must be published manually once before the GitHub Action can take over.
 
 ## Slack App Setup
 

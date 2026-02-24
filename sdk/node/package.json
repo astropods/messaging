@@ -1,6 +1,6 @@
 {
-  "name": "@astromode-ai/astro-messaging",
-  "version": "0.1.1",
+  "name": "@astropods/messaging",
+  "version": "0.0.0",
   "description": "TypeScript SDK for Astro Messaging",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
