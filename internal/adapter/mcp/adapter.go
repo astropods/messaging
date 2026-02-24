@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/astromode-ai/astro-messaging/internal/adapter"
-	"github.com/astromode-ai/astro-messaging/internal/store"
-	pb "github.com/astromode-ai/astro-messaging/pkg/gen/astro/messaging/v1"
+	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/store"
+	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/protobuf/types/known/timestamppb"

@@ -8,16 +8,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/astromode-ai/astro-messaging/internal/adapter"
-	pb "github.com/astromode-ai/astro-messaging/pkg/gen/astro/messaging/v1"
+	"github.com/astropods/messaging/internal/adapter"
+	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
 func TestNew(t *testing.T) {
 	tests := []struct {
-		name      string
-		opts      []Option
-		wantAddr  string
-		wantMaps  bool
+		name     string
+		opts     []Option
+		wantAddr string
+		wantMaps bool
 	}{
 		{
 			name:     "default_listen_addr",
@@ -71,11 +71,11 @@ func TestMCPAdapter_Initialize(t *testing.T) {
 
 func TestMCPAdapter_UpdateFromAgentConfig(t *testing.T) {
 	tests := []struct {
-		name           string
-		config         *pb.AgentConfig
-		setupServer    bool
-		wantServerNil  bool
-		wantServerSet  bool
+		name          string
+		config        *pb.AgentConfig
+		setupServer   bool
+		wantServerNil bool
+		wantServerSet bool
 	}{
 		{
 			name:          "nil_config_no_panic",
