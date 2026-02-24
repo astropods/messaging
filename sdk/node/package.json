@@ -1,5 +1,6 @@
 {
   "name": "@astropods/messaging",
+  "license": "Apache-2.0",
   "version": "0.0.0",
   "description": "TypeScript SDK for Astro Messaging",
   "main": "dist/index.js",
