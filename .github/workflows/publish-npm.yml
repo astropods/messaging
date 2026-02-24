@@ -48,7 +48,7 @@ jobs:
         working-directory: sdk/node
 
       - name: Publish
-        run: npm publish --provenance --access public
+        run: npm publish --access public
         working-directory: sdk/node
 
       - name: Commit and tag release
