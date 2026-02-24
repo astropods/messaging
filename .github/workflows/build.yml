@@ -51,7 +51,7 @@ jobs:
           context: .
           file: Dockerfile
           platforms: ${{ matrix.platform }}
-          outputs: type=image,name=astromodeai/${{ env.SERVICE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=astropods/${{ env.SERVICE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ env.SERVICE }}-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,mode=max,scope=${{ env.SERVICE }}-${{ env.PLATFORM_PAIR }}
           build-args: |
@@ -100,7 +100,7 @@ jobs:
       - name: Create manifest and push
         working-directory: ${{ runner.temp }}/digests
         run: |
-          IMAGE="astromodeai/${{ env.SERVICE }}"
+          IMAGE="astropods/${{ env.SERVICE }}"
           docker buildx imagetools create \
             -t "$IMAGE:${{ github.sha }}" \
             -t "$IMAGE:latest" \

@@ -125,9 +125,9 @@ stream.ReceiveAll(func(resp *pb.AgentResponse) error {
 ### TypeScript
 
 ```bash
-bun add @astromode-ai/astro-messaging
+bun add @astropods/messaging
 # or
-npm install @astromode-ai/astro-messaging
+npm install @astropods/messaging
 ```
 
 SDK source lives in `sdk/node/`. See its `src/messaging-client.ts` for the full API.
