@@ -181,7 +181,7 @@ describe('Cross-language serialization: Go ↔ TypeScript', () => {
       const goSerializedPath = join(testDataDir, 'go-serialized.json');
 
       if (!existsSync(goSerializedPath)) {
-        console.log('⚠️  Go serialized file not found. Run: cd packages/astro-messaging && go run tools/test-serialization/main.go serialize');
+        console.log('⚠️  Go serialized file not found. Run from messaging package root: go run tools/test-serialization/main.go serialize');
         return;
       }
 

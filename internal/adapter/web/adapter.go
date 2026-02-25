@@ -312,7 +312,7 @@ func (a *WebAdapter) isOriginAllowed(origin string) bool {
 		if allowed == "*" || allowed == origin {
 			return true
 		}
-		// Support wildcard subdomains (e.g., "*.astropod.ai")
+		// Support wildcard subdomains
 		if strings.HasPrefix(allowed, "*.") {
 			domain := strings.TrimPrefix(allowed, "*")
 			if strings.HasSuffix(origin, domain) {

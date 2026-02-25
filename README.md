@@ -1,4 +1,4 @@
-# astro-messaging
+# Astropods Messaging
 
 Go messaging service that connects AI agents to messaging platforms via gRPC bidirectional streaming. Ships with Go and TypeScript client SDKs.
 
@@ -14,7 +14,7 @@ Go messaging service that connects AI agents to messaging platforms via gRPC bid
 ## Project Structure
 
 ```
-astro-messaging/
+messaging/
 ├── cmd/server/                  # Server entrypoint
 ├── config/                      # Configuration (config.go + config.yaml)
 ├── internal/
