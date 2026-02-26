@@ -156,12 +156,41 @@ export interface ConversationRequest {
   agentResponse?: AgentResponse;
 }
 
+export interface ReconnectOptions {
+  /** Maximum number of reconnect attempts. Default: Infinity */
+  maxRetries?: number;
+  /** Initial delay before first retry in ms. Default: 500 */
+  initialDelayMs?: number;
+  /** Maximum delay between retries in ms. Default: 30_000 */
+  maxDelayMs?: number;
+  /** Apply full jitter to backoff delay. Default: true */
+  jitter?: boolean;
+  /** Maximum number of writes to queue during reconnect. Default: 1000 */
+  maxBufferSize?: number;
+  /** gRPC status codes that trigger a reconnect attempt. Default: UNAVAILABLE, DEADLINE_EXCEEDED, INTERNAL, RESOURCE_EXHAUSTED */
+  retryableStatusCodes?: number[];
+}
+
+// gRPC status codes: DEADLINE_EXCEEDED=4, INTERNAL=13, UNAVAILABLE=14, RESOURCE_EXHAUSTED=8
+const DEFAULT_RETRYABLE_STATUS_CODES = [4, 8, 13, 14];
+
+function resolveReconnectOptions(options: ReconnectOptions): Required<ReconnectOptions> {
+  return {
+    maxRetries: options.maxRetries ?? Infinity,
+    initialDelayMs: options.initialDelayMs ?? 500,
+    maxDelayMs: options.maxDelayMs ?? 30_000,
+    jitter: options.jitter ?? true,
+    maxBufferSize: options.maxBufferSize ?? 1000,
+    retryableStatusCodes: options.retryableStatusCodes ?? DEFAULT_RETRYABLE_STATUS_CODES,
+  };
+}
+
 /**
  * MessagingClient provides a TypeScript interface to the Astro Messaging gRPC service
  */
 export class MessagingClient extends EventEmitter {
   private client: any;
-  private conversationStream: any;
+  private conversationStream: ConversationStream | null = null;
   private isConnected: boolean = false;
 
   constructor(private serverAddress: string) {
@@ -196,15 +225,44 @@ export class MessagingClient extends EventEmitter {
   }
 
   /**
-   * Create a bidirectional conversation stream
+   * Connect with automatic retry on failure (exponential backoff).
+   * Emits 'reconnecting' before each retry and 'reconnected' on success after failures.
    */
-  createConversationStream(): ConversationStream {
+  async connectWithRetry(options: ReconnectOptions = {}): Promise<void> {
+    const opts = resolveReconnectOptions(options);
+    let retryCount = 0;
+
+    while (true) {
+      try {
+        await this.connect();
+        if (retryCount > 0) {
+          this.emit('reconnected', { attempt: retryCount });
+        }
+        return;
+      } catch (err: any) {
+        if (retryCount >= opts.maxRetries) {
+          throw err;
+        }
+        const base = Math.min(opts.initialDelayMs * Math.pow(2, retryCount), opts.maxDelayMs);
+        const delayMs = opts.jitter ? base * (0.5 + Math.random() * 0.5) : base;
+        this.emit('reconnecting', { attempt: retryCount + 1, reason: err, delayMs });
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        retryCount++;
+      }
+    }
+  }
+
+  /**
+   * Create a bidirectional conversation stream with optional reconnect support
+   */
+  createConversationStream(options?: ReconnectOptions): ConversationStream {
     if (!this.isConnected) {
       throw new Error('Client not connected. Call connect() first.');
     }
 
-    this.conversationStream = this.client.ProcessConversation();
-    return new ConversationStream(this.conversationStream);
+    const factory = () => this.client.ProcessConversation();
+    this.conversationStream = new ConversationStream(factory, options);
+    return this.conversationStream;
   }
 
   /**
@@ -310,63 +368,132 @@ export class MessagingClient extends EventEmitter {
 }
 
 /**
- * ConversationStream wraps a bidirectional gRPC stream
+ * ConversationStream wraps a bidirectional gRPC stream with automatic reconnection.
+ *
+ * Events:
+ *   - 'response'     — AgentResponse received from server
+ *   - 'reconnecting' — { attempt, reason, delayMs } — before each retry delay
+ *   - 'reconnected'  — { attempt } — after a successful stream recreation
+ *   - 'error'        — non-retryable error OR max retries exceeded
+ *   - 'end'          — only on intentional close(), not on unexpected stream drop
  */
 export class ConversationStream extends EventEmitter {
-  constructor(private stream: any) {
-    super();
+  private stream: any;
+  private writeBuffer: ConversationRequest[] = [];
+  private reconnecting = false;
+  private closed = false;
+  private retryCount = 0;
+  private readonly opts: Required<ReconnectOptions>;
 
-    this.stream.on('data', (response: AgentResponse) => {
+  constructor(private streamFactory: () => any, options: ReconnectOptions = {}) {
+    super();
+    this.opts = resolveReconnectOptions(options);
+    this.stream = this.streamFactory();
+    this.attachHandlers(this.stream);
+  }
+
+  private attachHandlers(stream: any): void {
+    stream.on('data', (response: AgentResponse) => {
+      this.retryCount = 0;
       this.emit('response', response);
     });
 
-    this.stream.on('end', () => {
-      this.emit('end');
+    stream.on('error', (error: any) => {
+      if (!this.closed && this.isRetryable(error)) {
+        this.scheduleReconnect(error);
+      } else {
+        this.emit('error', error);
+      }
     });
 
-    this.stream.on('error', (error: Error) => {
-      this.emit('error', error);
+    stream.on('end', () => {
+      if (!this.closed) {
+        this.scheduleReconnect(new Error('Stream ended unexpectedly'));
+      }
+      // If closed, 'end' was already emitted by end() — do nothing
     });
+  }
+
+  private isRetryable(error: any): boolean {
+    return this.opts.retryableStatusCodes.includes(error.code);
+  }
+
+  private calculateDelay(): number {
+    const base = Math.min(this.opts.initialDelayMs * Math.pow(2, this.retryCount), this.opts.maxDelayMs);
+    return this.opts.jitter ? base * (0.5 + Math.random() * 0.5) : base;
+  }
+
+  private scheduleReconnect(reason: Error): void {
+    if (this.reconnecting || this.closed) return;
+    if (this.retryCount >= this.opts.maxRetries) {
+      this.emit('error', new Error(`Max reconnection attempts (${this.opts.maxRetries}) exceeded`));
+      return;
+    }
+    const delayMs = this.calculateDelay();
+    this.reconnecting = true;
+    this.emit('reconnecting', { attempt: this.retryCount + 1, reason, delayMs });
+    setTimeout(() => this.doReconnect(), delayMs);
+  }
+
+  private doReconnect(): void {
+    if (this.closed) return;
+    this.retryCount++;
+    try {
+      this.stream = this.streamFactory();
+      this.attachHandlers(this.stream);
+      this.reconnecting = false;
+      this.emit('reconnected', { attempt: this.retryCount });
+      this.flushBuffer();
+    } catch (err: any) {
+      this.reconnecting = false;
+      this.scheduleReconnect(err);
+    }
+  }
+
+  private flushBuffer(): void {
+    const toFlush = this.writeBuffer.splice(0);
+    for (const request of toFlush) {
+      this.stream.write(request);
+    }
+  }
+
+  private write(request: ConversationRequest): void {
+    if (this.reconnecting || this.closed) {
+      if (this.writeBuffer.length >= this.opts.maxBufferSize) {
+        this.writeBuffer.shift(); // drop oldest
+      }
+      this.writeBuffer.push(request);
+    } else {
+      this.stream.write(request);
+    }
   }
 
   /**
    * Send a message through the stream
    */
   sendMessage(message: Message): void {
-    const request: ConversationRequest = {
-      message,
-    };
-    this.stream.write(request);
+    this.write({ message });
   }
 
   /**
    * Send platform feedback through the stream
    */
   sendFeedback(feedback: any): void {
-    const request: ConversationRequest = {
-      feedback,
-    };
-    this.stream.write(request);
+    this.write({ feedback });
   }
 
   /**
    * Send agent configuration through the stream
    */
   sendAgentConfig(config: AgentConfig): void {
-    const request: ConversationRequest = {
-      agentConfig: config,
-    };
-    this.stream.write(request);
+    this.write({ agentConfig: config });
   }
 
   /**
    * Send a typed AgentResponse through the stream
    */
   sendAgentResponse(response: AgentResponse): void {
-    const request: ConversationRequest = {
-      agentResponse: response,
-    };
-    this.stream.write(request);
+    this.write({ agentResponse: response });
   }
 
   /**
@@ -390,10 +517,13 @@ export class ConversationStream extends EventEmitter {
   }
 
   /**
-   * End the stream
+   * End the stream intentionally. Emits 'end' and prevents any further reconnects.
    */
   end(): void {
+    this.closed = true;
+    this.writeBuffer = [];
     this.stream.end();
+    this.emit('end');
   }
 }
 

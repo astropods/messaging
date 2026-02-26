@@ -35,6 +35,16 @@ function createMessage(overrides: Partial<Message> = {}): Message {
   };
 }
 
+/** Resolve after `ms` milliseconds */
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/** Make a retryable error with the given gRPC status code */
+function retryableError(code: number, message = 'unavailable'): Error {
+  return Object.assign(new Error(message), { code });
+}
+
 // --- Mock stream that captures writes ---
 
 class MockGrpcStream extends EventEmitter {
@@ -265,7 +275,7 @@ describe('ConversationStream', () => {
 
   beforeEach(() => {
     mockGrpc = new MockGrpcStream();
-    stream = new ConversationStream(mockGrpc);
+    stream = new ConversationStream(() => mockGrpc);
   });
 
   describe('sendMessage', () => {
@@ -464,6 +474,14 @@ describe('ConversationStream', () => {
       stream.end();
       expect(mockGrpc.ended).toBe(true);
     });
+
+    it('should emit end event on intentional close', () => {
+      let ended = false;
+      stream.on('end', () => { ended = true; });
+
+      stream.end();
+      expect(ended).toBe(true);
+    });
   });
 
   describe('event forwarding', () => {
@@ -490,21 +508,248 @@ describe('ConversationStream', () => {
       expect(received[0].incomingMessage.platformContext.channelId).toBe('conv-1');
     });
 
-    it('should emit end event', () => {
+    it('should trigger reconnect on unexpected end (not emit end)', () => {
+      let reconnecting = false;
       let ended = false;
+      stream.on('reconnecting', () => { reconnecting = true; });
       stream.on('end', () => { ended = true; });
 
       mockGrpc.emit('end');
-      expect(ended).toBe(true);
+
+      expect(reconnecting).toBe(true);
+      expect(ended).toBe(false);
     });
 
-    it('should emit error event', () => {
+    it('should emit error event for non-retryable errors', () => {
       let receivedError: Error | null = null;
       stream.on('error', (err: Error) => { receivedError = err; });
 
+      // An error without a .code is not retryable
       mockGrpc.emit('error', new Error('stream broken'));
       expect(receivedError?.message).toBe('stream broken');
     });
+  });
+});
+
+// =============================================
+// ConversationStream — reconnect tests
+// =============================================
+
+describe('ConversationStream reconnect', () => {
+  it('retryable error emits reconnecting event with correct payload', () => {
+    const mockGrpc = new MockGrpcStream();
+    const stream = new ConversationStream(() => mockGrpc, { initialDelayMs: 500, jitter: false });
+
+    let reconnectPayload: any = null;
+    stream.on('reconnecting', (payload) => { reconnectPayload = payload; });
+
+    mockGrpc.emit('error', retryableError(14)); // UNAVAILABLE
+
+    expect(reconnectPayload).not.toBeNull();
+    expect(reconnectPayload.attempt).toBe(1);
+    expect(reconnectPayload.delayMs).toBe(500);
+    expect(reconnectPayload.reason).toBeInstanceOf(Error);
+  });
+
+  it('after reconnect, writes go to the new stream', async () => {
+    let streamIndex = 0;
+    const streams = [new MockGrpcStream(), new MockGrpcStream()];
+    const factory = () => streams[streamIndex++];
+
+    const convStream = new ConversationStream(factory, { initialDelayMs: 0, jitter: false });
+
+    streams[0].emit('error', retryableError(14));
+    await wait(20);
+
+    convStream.sendMessage(createMessage({ content: 'after reconnect' }));
+
+    expect(streams[1].written).toHaveLength(1);
+    expect(streams[0].written).toHaveLength(0);
+  });
+
+  it('writes during reconnect are buffered and flushed after reconnect', async () => {
+    let streamIndex = 0;
+    const streams = [new MockGrpcStream(), new MockGrpcStream()];
+    const factory = () => streams[streamIndex++];
+
+    const convStream = new ConversationStream(factory, { initialDelayMs: 30, jitter: false });
+
+    // Trigger reconnect
+    streams[0].emit('error', retryableError(14));
+
+    // Write while reconnecting (before the 30ms timeout fires)
+    convStream.sendMessage(createMessage({ content: 'buffered message' }));
+
+    // Old stream should NOT have received this write
+    expect(streams[0].written).toHaveLength(0);
+
+    // Wait for reconnect to complete
+    await wait(60);
+
+    // New stream should have received the flushed write
+    expect(streams[1].written).toHaveLength(1);
+    expect(streams[1].written[0].message?.content).toBe('buffered message');
+  });
+
+  it('non-retryable error propagates immediately as error event', () => {
+    const mockGrpc = new MockGrpcStream();
+    const stream = new ConversationStream(() => mockGrpc, { initialDelayMs: 0, jitter: false });
+
+    let receivedError: Error | null = null;
+    let reconnecting = false;
+    stream.on('error', (err: Error) => { receivedError = err; });
+    stream.on('reconnecting', () => { reconnecting = true; });
+
+    // UNAUTHENTICATED (code 16) is not in the default retryable list
+    mockGrpc.emit('error', retryableError(16, 'unauthenticated'));
+
+    expect(receivedError?.message).toBe('unauthenticated');
+    expect(reconnecting).toBe(false);
+  });
+
+  it('unexpected stream end triggers reconnect, not an end event', () => {
+    const mockGrpc = new MockGrpcStream();
+    const stream = new ConversationStream(() => mockGrpc, { initialDelayMs: 500, jitter: false });
+
+    let reconnecting = false;
+    let ended = false;
+    stream.on('reconnecting', () => { reconnecting = true; });
+    stream.on('end', () => { ended = true; });
+
+    mockGrpc.emit('end');
+
+    expect(reconnecting).toBe(true);
+    expect(ended).toBe(false);
+  });
+
+  it('intentional end() emits end event and prevents any further reconnect', () => {
+    const mockGrpc = new MockGrpcStream();
+    const stream = new ConversationStream(() => mockGrpc, { initialDelayMs: 0, jitter: false });
+
+    let ended = false;
+    let reconnecting = false;
+    stream.on('end', () => { ended = true; });
+    stream.on('reconnecting', () => { reconnecting = true; });
+    // absorb errors that may surface after close (no reconnect should happen)
+    stream.on('error', () => {});
+
+    stream.end();
+
+    expect(ended).toBe(true);
+    expect(mockGrpc.ended).toBe(true);
+
+    // Even if the underlying stream emits end or error afterwards, no reconnect
+    mockGrpc.emit('end');
+    mockGrpc.emit('error', retryableError(14));
+
+    expect(reconnecting).toBe(false);
+  });
+
+  it('maxRetries exceeded emits error with clear message', async () => {
+    let streamIndex = 0;
+    const streams: MockGrpcStream[] = [];
+    const factory = () => {
+      const s = new MockGrpcStream();
+      streams.push(s);
+      return s;
+    };
+
+    const convStream = new ConversationStream(factory, {
+      maxRetries: 2,
+      initialDelayMs: 0,
+      jitter: false,
+    });
+
+    let receivedError: Error | null = null;
+    convStream.on('error', (err: Error) => { receivedError = err; });
+
+    // First stream fails → reconnect attempt 1
+    streams[0].emit('error', retryableError(14));
+    await wait(20);
+
+    // Second stream fails → reconnect attempt 2
+    streams[1].emit('error', retryableError(14));
+    await wait(20);
+
+    // Third stream fails → maxRetries (2) exceeded → error
+    streams[2].emit('error', retryableError(14));
+
+    expect(receivedError).not.toBeNull();
+    expect(receivedError?.message).toContain('Max reconnection attempts');
+    expect(receivedError?.message).toContain('2');
+  });
+
+  it('maxBufferSize is respected — oldest writes are dropped when buffer is full', async () => {
+    let streamIndex = 0;
+    const streams = [new MockGrpcStream(), new MockGrpcStream()];
+    const factory = () => streams[streamIndex++];
+
+    const convStream = new ConversationStream(factory, {
+      maxBufferSize: 2,
+      initialDelayMs: 0,
+      jitter: false,
+    });
+
+    // Trigger reconnect
+    streams[0].emit('error', retryableError(14));
+
+    // Write 3 messages during reconnect — only the last 2 should be kept
+    convStream.sendMessage(createMessage({ content: 'msg1' }));
+    convStream.sendMessage(createMessage({ content: 'msg2' }));
+    convStream.sendMessage(createMessage({ content: 'msg3' })); // msg1 dropped
+
+    await wait(20);
+
+    expect(streams[1].written).toHaveLength(2);
+    expect(streams[1].written[0].message?.content).toBe('msg2');
+    expect(streams[1].written[1].message?.content).toBe('msg3');
+  });
+
+  it('retryCount resets to 0 after successful data received', async () => {
+    let streamIndex = 0;
+    const streams: MockGrpcStream[] = [];
+    const factory = () => {
+      const s = new MockGrpcStream();
+      streams.push(s);
+      return s;
+    };
+
+    const convStream = new ConversationStream(factory, {
+      maxRetries: 1,
+      initialDelayMs: 0,
+      jitter: false,
+    });
+
+    // Trigger reconnect on first stream
+    streams[0].emit('error', retryableError(14));
+    await wait(20);
+
+    // Second stream receives data — resets retryCount
+    streams[1].emit('data', { conversationId: 'conv-1' });
+
+    // Now a new error on the second stream should trigger reconnect (not exceed maxRetries)
+    let reconnecting = false;
+    convStream.on('reconnecting', () => { reconnecting = true; });
+    streams[1].emit('error', retryableError(14));
+
+    expect(reconnecting).toBe(true);
+  });
+
+  it('reconnected event is emitted with attempt count after successful reconnect', async () => {
+    let streamIndex = 0;
+    const streams = [new MockGrpcStream(), new MockGrpcStream()];
+    const factory = () => streams[streamIndex++];
+
+    const convStream = new ConversationStream(factory, { initialDelayMs: 0, jitter: false });
+
+    let reconnectedPayload: any = null;
+    convStream.on('reconnected', (payload) => { reconnectedPayload = payload; });
+
+    streams[0].emit('error', retryableError(14));
+    await wait(20);
+
+    expect(reconnectedPayload).not.toBeNull();
+    expect(reconnectedPayload.attempt).toBe(1);
   });
 });
 
@@ -594,7 +839,7 @@ describe('MessagingClient', () => {
 describe('PlatformContext roundtrip', () => {
   it('should preserve context when agent echoes back incoming message context', () => {
     const mockGrpc = new MockGrpcStream();
-    const stream = new ConversationStream(mockGrpc);
+    const stream = new ConversationStream(() => mockGrpc);
 
     // Simulate what astro-messaging sends to the agent (incoming platform message)
     const incomingFromServer = {
@@ -655,7 +900,7 @@ describe('PlatformContext roundtrip', () => {
 
   it('should preserve Slack threaded message context through roundtrip', () => {
     const mockGrpc = new MockGrpcStream();
-    const stream = new ConversationStream(mockGrpc);
+    const stream = new ConversationStream(() => mockGrpc);
 
     const incomingFromServer = {
       conversationId: 'C123456-1234567890.000001',
@@ -704,7 +949,7 @@ describe('PlatformContext roundtrip', () => {
 
   it('should handle missing platformContext in incoming message', () => {
     const mockGrpc = new MockGrpcStream();
-    const stream = new ConversationStream(mockGrpc);
+    const stream = new ConversationStream(() => mockGrpc);
 
     // Incoming message WITHOUT platformContext (edge case / bug scenario)
     const incomingFromServer = {
@@ -742,7 +987,7 @@ describe('PlatformContext roundtrip', () => {
 
   it('should handle platformContext with all empty string fields', () => {
     const mockGrpc = new MockGrpcStream();
-    const stream = new ConversationStream(mockGrpc);
+    const stream = new ConversationStream(() => mockGrpc);
 
     // proto3 defaults: empty strings for all fields
     const incomingFromServer = {
@@ -805,7 +1050,7 @@ describe('proto-loader oneofs: true behavior', () => {
     //   response.payload = "incomingMessage"
 
     const mockGrpc = new MockGrpcStream();
-    const stream = new ConversationStream(mockGrpc);
+    const stream = new ConversationStream(() => mockGrpc);
 
     // This is the shape proto-loader actually produces with oneofs: true
     const serverResponse = {
@@ -839,7 +1084,7 @@ describe('proto-loader oneofs: true behavior', () => {
 
   it('should handle content chunk oneof correctly', () => {
     const mockGrpc = new MockGrpcStream();
-    const stream = new ConversationStream(mockGrpc);
+    const stream = new ConversationStream(() => mockGrpc);
 
     const serverResponse = {
       conversationId: 'conv-1',
@@ -866,7 +1111,7 @@ describe('proto-loader oneofs: true behavior', () => {
 describe('ConversationRequest serialization', () => {
   it('should use "message" key for message requests (matching proto oneof)', () => {
     const mockGrpc = new MockGrpcStream();
-    const stream = new ConversationStream(mockGrpc);
+    const stream = new ConversationStream(() => mockGrpc);
 
     stream.sendMessage(createMessage({ content: 'test' }));
 
@@ -878,7 +1123,7 @@ describe('ConversationRequest serialization', () => {
 
   it('should use "feedback" key for feedback requests', () => {
     const mockGrpc = new MockGrpcStream();
-    const stream = new ConversationStream(mockGrpc);
+    const stream = new ConversationStream(() => mockGrpc);
 
     stream.sendFeedback({ conversationId: 'conv-1' });
 
@@ -889,7 +1134,7 @@ describe('ConversationRequest serialization', () => {
 
   it('should serialize nested platformContext correctly for gRPC wire format', () => {
     const mockGrpc = new MockGrpcStream();
-    const stream = new ConversationStream(mockGrpc);
+    const stream = new ConversationStream(() => mockGrpc);
 
     const msg = createMessage({
       platform: 'slack',
