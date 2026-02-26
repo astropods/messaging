@@ -9,7 +9,7 @@
     "dist"
   ],
   "scripts": {
-    "postinstall": "ln -sf ../../proto proto",
+    "postinstall": "rm -rf proto && ln -sf ../../proto proto",
     "build": "tsc && cp -r ../../proto dist/proto",
     "watch": "tsc --watch",
     "test": "bun test",
