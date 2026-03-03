@@ -386,15 +386,9 @@ func (a *SlackAdapter) Capabilities() adapter.AdapterCapabilities {
 
 // HydrateThread fetches thread history from Slack API
 func (a *SlackAdapter) HydrateThread(ctx context.Context, conversationID string, threadStore *store.ThreadHistoryStore) error {
-	parts := strings.Split(conversationID, "-")
-	if len(parts) < 2 {
-		return fmt.Errorf("invalid conversation ID format: %s", conversationID)
-	}
-
-	channelID := parts[1]
-	var threadTS string
-	if len(parts) == 3 {
-		threadTS = parts[2]
+	channelID, threadTS, err := a.parseConversationID(conversationID)
+	if err != nil {
+		return fmt.Errorf("invalid conversation ID: %w", err)
 	}
 
 	log.Printf("[Slack] Hydrating thread: channel=%s, thread=%s", channelID, threadTS)
