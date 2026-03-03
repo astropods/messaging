@@ -210,26 +210,32 @@ var (
 // markdownToMrkdwn converts standard Markdown to Slack mrkdwn.
 // Handles links, bold, headings, and tables (rendered as code blocks).
 func markdownToMrkdwn(md string) string {
-	// Convert tables first — they span multiple lines, so handle before
-	// line-level transforms. Replace table blocks with ```-wrapped text.
 	md = convertTables(md)
+	md = convertLinks(md)
+	md = convertBold(md)
+	md = convertHeadings(md)
+	return md
+}
 
-	// [text](url) → <url|text>
-	md = reMarkdownLink.ReplaceAllString(md, "<$2|$1>")
+// convertLinks converts [text](url) → <url|text>
+func convertLinks(text string) string {
+	return reMarkdownLink.ReplaceAllString(text, "<$2|$1>")
+}
 
-	// **bold** → *bold*  (must come after link conversion)
-	md = reBoldDouble.ReplaceAllString(md, "*$1*")
+// convertBold converts **bold** → *bold*
+func convertBold(text string) string {
+	return reBoldDouble.ReplaceAllString(text, "*$1*")
+}
 
-	// ## Heading → *Heading*
-	md = reHeading.ReplaceAllStringFunc(md, func(m string) string {
+// convertHeadings converts ## Heading → *Heading*
+func convertHeadings(text string) string {
+	return reHeading.ReplaceAllStringFunc(text, func(m string) string {
 		sub := reHeading.FindStringSubmatch(m)
 		if len(sub) < 2 {
 			return m
 		}
 		return "*" + strings.TrimSpace(sub[1]) + "*"
 	})
-
-	return md
 }
 
 // convertTables finds Markdown table blocks and wraps them in code fences

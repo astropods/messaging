@@ -384,9 +384,9 @@ func TestSlackAIClient_postJSON_SetsHeaders(t *testing.T) {
 	}
 }
 
-// --- Tests for markdownToMrkdwn ---
+// --- Tests for convertLinks ---
 
-func TestMarkdownToMrkdwn_Links(t *testing.T) {
+func TestConvertLinks(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
@@ -396,10 +396,11 @@ func TestMarkdownToMrkdwn_Links(t *testing.T) {
 		{"jira link", "[FLOWS-123](https://jira.atlassian.net/browse/FLOWS-123)", "<https://jira.atlassian.net/browse/FLOWS-123|FLOWS-123>"},
 		{"multiple links", "[a](https://a.com) and [b](https://b.com)", "<https://a.com|a> and <https://b.com|b>"},
 		{"no links", "plain text", "plain text"},
+		{"link in sentence", "see [docs](https://docs.io) for info", "see <https://docs.io|docs> for info"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := markdownToMrkdwn(tt.in)
+			got := convertLinks(tt.in)
 			if got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
@@ -407,7 +408,9 @@ func TestMarkdownToMrkdwn_Links(t *testing.T) {
 	}
 }
 
-func TestMarkdownToMrkdwn_Bold(t *testing.T) {
+// --- Tests for convertBold ---
+
+func TestConvertBold(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
@@ -417,10 +420,11 @@ func TestMarkdownToMrkdwn_Bold(t *testing.T) {
 		{"multiple bold", "**a** and **b**", "*a* and *b*"},
 		{"bold in sentence", "this is **important** stuff", "this is *important* stuff"},
 		{"single asterisk unchanged", "*italic*", "*italic*"},
+		{"empty bold", "****", "****"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := markdownToMrkdwn(tt.in)
+			got := convertBold(tt.in)
 			if got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
@@ -428,7 +432,9 @@ func TestMarkdownToMrkdwn_Bold(t *testing.T) {
 	}
 }
 
-func TestMarkdownToMrkdwn_Headings(t *testing.T) {
+// --- Tests for convertHeadings ---
+
+func TestConvertHeadings(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
@@ -440,16 +446,19 @@ func TestMarkdownToMrkdwn_Headings(t *testing.T) {
 		{"h6", "###### Deep", "*Deep*"},
 		{"heading with surrounding text", "before\n## Middle\nafter", "before\n*Middle*\nafter"},
 		{"not a heading", "this # is not a heading", "this # is not a heading"},
+		{"multiple headings", "# One\n## Two", "*One*\n*Two*"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := markdownToMrkdwn(tt.in)
+			got := convertHeadings(tt.in)
 			if got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
+
+// --- Tests for markdownToMrkdwn (combined) ---
 
 func TestMarkdownToMrkdwn_Combined(t *testing.T) {
 	input := "## Release Notes\n\n**New Features**\n\n- [FLOWS-123](https://jira.com/browse/FLOWS-123): Added feature"
@@ -463,6 +472,14 @@ func TestMarkdownToMrkdwn_Combined(t *testing.T) {
 	}
 	if !strings.Contains(got, "<https://jira.com/browse/FLOWS-123|FLOWS-123>") {
 		t.Errorf("link not converted: %s", got)
+	}
+}
+
+func TestMarkdownToMrkdwn_PlainText(t *testing.T) {
+	input := "just some plain text"
+	got := markdownToMrkdwn(input)
+	if got != input {
+		t.Errorf("plain text should be unchanged, got %q", got)
 	}
 }
 
