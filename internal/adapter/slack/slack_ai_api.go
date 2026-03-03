@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 const (
@@ -117,38 +118,48 @@ func (c *SlackAIClient) SetTitle(ctx context.Context, channelID, threadTS, title
 // PostMessageWithFeedback posts a message with feedback buttons
 // https://api.slack.com/methods/chat.postMessage
 func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, content, threadID string) (string, error) {
-	// Build blocks with feedback buttons
-	blocks := []map[string]interface{}{
-		{
+	// Slack section blocks have a 3000 char text limit. Split long content
+	// into multiple sections so messages with tables or lists aren't rejected.
+	chunks := splitIntoChunks(content, 3000)
+
+	blocks := make([]map[string]interface{}, 0, len(chunks)+1)
+	for _, chunk := range chunks {
+		blocks = append(blocks, map[string]interface{}{
 			"type": "section",
 			"text": map[string]interface{}{
 				"type": "mrkdwn",
-				"text": content,
+				"text": chunk,
 			},
-		},
-		{
-			"type": "context_actions",
-			"elements": []map[string]interface{}{
-				{
-					"type":      "feedback_buttons",
-					"action_id": "feedback_buttons",
-					"positive_button": map[string]interface{}{
-						"text": map[string]interface{}{
-							"type": "plain_text",
-							"text": "👍",
-						},
-						"value": "positive_feedback",
+		})
+	}
+
+	blocks = append(blocks, map[string]interface{}{
+		"type": "context_actions",
+		"elements": []map[string]interface{}{
+			{
+				"type":      "feedback_buttons",
+				"action_id": "feedback_buttons",
+				"positive_button": map[string]interface{}{
+					"text": map[string]interface{}{
+						"type": "plain_text",
+						"text": "👍",
 					},
-					"negative_button": map[string]interface{}{
-						"text": map[string]interface{}{
-							"type": "plain_text",
-							"text": "👎",
-						},
-						"value": "negative_feedback",
+					"value": "positive_feedback",
+				},
+				"negative_button": map[string]interface{}{
+					"text": map[string]interface{}{
+						"type": "plain_text",
+						"text": "👎",
 					},
+					"value": "negative_feedback",
 				},
 			},
 		},
+	})
+
+	// Slack caps at 50 blocks per message; keep the last block (feedback buttons)
+	if len(blocks) > 50 {
+		blocks = append(blocks[:49], blocks[len(blocks)-1])
 	}
 
 	payload := map[string]interface{}{
@@ -181,6 +192,37 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 
 	fmt.Printf("[SlackAI] ✓ Message posted successfully: timestamp=%s\n", result.Timestamp)
 	return result.Timestamp, nil
+}
+
+// splitIntoChunks breaks text into pieces of at most maxLen characters,
+// splitting on newline boundaries so markdown formatting isn't broken mid-line.
+func splitIntoChunks(text string, maxLen int) []string {
+	if len(text) <= maxLen {
+		return []string{text}
+	}
+
+	var chunks []string
+	for len(text) > 0 {
+		if len(text) <= maxLen {
+			chunks = append(chunks, text)
+			break
+		}
+
+		// Find the last newline within the limit
+		cut := strings.LastIndex(text[:maxLen], "\n")
+		if cut <= 0 {
+			cut = maxLen
+		}
+
+		chunks = append(chunks, text[:cut])
+		text = text[cut:]
+		// Trim leading newline from next chunk
+		if len(text) > 0 && text[0] == '\n' {
+			text = text[1:]
+		}
+	}
+
+	return chunks
 }
 
 // postJSON makes a POST request to a Slack API endpoint with JSON body
