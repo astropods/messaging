@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -118,6 +119,9 @@ func (c *SlackAIClient) SetTitle(ctx context.Context, channelID, threadTS, title
 // PostMessageWithFeedback posts a message with feedback buttons
 // https://api.slack.com/methods/chat.postMessage
 func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, content, threadID string) (string, error) {
+	// Convert standard Markdown to Slack mrkdwn before building blocks.
+	content = markdownToMrkdwn(content)
+
 	// Slack section blocks have a 3000 char text limit. Split long content
 	// into multiple sections so messages with tables or lists aren't rejected.
 	chunks := splitIntoChunks(content, 3000)
@@ -192,6 +196,85 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 
 	fmt.Printf("[SlackAI] ✓ Message posted successfully: timestamp=%s\n", result.Timestamp)
 	return result.Timestamp, nil
+}
+
+var (
+	reMarkdownLink = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	reBoldDouble   = regexp.MustCompile(`\*\*(.+?)\*\*`)
+	reHeading      = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
+	reTableRow     = regexp.MustCompile(`(?m)^\|(.+)\|$`)
+	reTableSep     = regexp.MustCompile(`(?m)^\|[-| :]+\|$`)
+)
+
+// markdownToMrkdwn converts standard Markdown to Slack mrkdwn.
+// Handles links, bold, headings, and tables (rendered as code blocks).
+func markdownToMrkdwn(md string) string {
+	// Convert tables first — they span multiple lines, so handle before
+	// line-level transforms. Replace table blocks with ```-wrapped text.
+	md = convertTables(md)
+
+	// [text](url) → <url|text>
+	md = reMarkdownLink.ReplaceAllString(md, "<$2|$1>")
+
+	// **bold** → *bold*  (must come after link conversion)
+	md = reBoldDouble.ReplaceAllString(md, "*$1*")
+
+	// ## Heading → *Heading*
+	md = reHeading.ReplaceAllStringFunc(md, func(m string) string {
+		sub := reHeading.FindStringSubmatch(m)
+		if len(sub) < 2 {
+			return m
+		}
+		return "*" + strings.TrimSpace(sub[1]) + "*"
+	})
+
+	return md
+}
+
+// convertTables finds Markdown table blocks and wraps them in code fences
+// so Slack renders them as pre-formatted text with alignment preserved.
+func convertTables(text string) string {
+	lines := strings.Split(text, "\n")
+	var result []string
+	inTable := false
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		isTableLine := reTableRow.MatchString(line) || reTableSep.MatchString(line)
+
+		if isTableLine && !inTable {
+			inTable = true
+			result = append(result, "```")
+		}
+
+		if !isTableLine && inTable {
+			inTable = false
+			result = append(result, "```")
+		}
+
+		if inTable {
+			// Strip leading/trailing pipe and convert inner pipes to
+			// padded separators for cleaner display
+			trimmed := strings.TrimSpace(line)
+			trimmed = strings.TrimPrefix(trimmed, "|")
+			trimmed = strings.TrimSuffix(trimmed, "|")
+			if !reTableSep.MatchString(line) {
+				cells := strings.Split(trimmed, "|")
+				for j := range cells {
+					cells[j] = strings.TrimSpace(cells[j])
+				}
+				result = append(result, strings.Join(cells, "  |  "))
+			}
+		} else {
+			result = append(result, line)
+		}
+	}
+
+	if inTable {
+		result = append(result, "```")
+	}
+
+	return strings.Join(result, "\n")
 }
 
 // splitIntoChunks breaks text into pieces of at most maxLen characters,
