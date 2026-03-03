@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
@@ -26,7 +27,7 @@ type SlackAIClient struct {
 func NewSlackAIClient(botToken string) *SlackAIClient {
 	return &SlackAIClient{
 		botToken:   botToken,
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 		baseURL:    slackAPIBaseURL,
 	}
 }
@@ -293,15 +294,21 @@ func splitIntoChunks(text string, maxLen int) []string {
 
 		// Find the last newline within the limit
 		cut := strings.LastIndex(text[:maxLen], "\n")
-		if cut <= 0 {
+		if cut < 1 {
+			// No usable newline — hard-split at maxLen
 			cut = maxLen
 		}
 
-		chunks = append(chunks, text[:cut])
+		chunk := text[:cut]
 		text = text[cut:]
-		// Trim leading newline from next chunk
+
+		// Trim the newline between chunks
 		if len(text) > 0 && text[0] == '\n' {
 			text = text[1:]
+		}
+
+		if chunk != "" {
+			chunks = append(chunks, chunk)
 		}
 	}
 
