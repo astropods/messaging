@@ -112,6 +112,8 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/conversations/{id}/stream", a.handlers.HandleStream)
 	mux.HandleFunc("GET /api/conversations/{id}/history", a.handlers.HandleHistory)
 	mux.HandleFunc("GET /api/agent/config", a.handlers.HandleAgentConfig)
+	mux.HandleFunc("GET /api/conversations/{id}/audio", a.handlers.HandleAudioStream)
+	mux.HandleFunc("POST /api/conversations/{id}/audio", a.handlers.HandleAudioUpload)
 	mux.HandleFunc("GET /health", a.handlers.HandleHealth)
 
 	// Wrap with CORS middleware

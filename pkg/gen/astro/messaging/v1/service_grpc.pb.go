@@ -23,6 +23,7 @@ const (
 	AgentMessaging_ProcessMessage_FullMethodName          = "/astro.messaging.v1.AgentMessaging/ProcessMessage"
 	AgentMessaging_GetThreadHistory_FullMethodName        = "/astro.messaging.v1.AgentMessaging/GetThreadHistory"
 	AgentMessaging_GetConversationMetadata_FullMethodName = "/astro.messaging.v1.AgentMessaging/GetConversationMetadata"
+	AgentMessaging_ProcessAudioStream_FullMethodName      = "/astro.messaging.v1.AgentMessaging/ProcessAudioStream"
 	AgentMessaging_HealthCheck_FullMethodName             = "/astro.messaging.v1.AgentMessaging/HealthCheck"
 )
 
@@ -41,6 +42,9 @@ type AgentMessagingClient interface {
 	GetThreadHistory(ctx context.Context, in *ThreadHistoryRequest, opts ...grpc.CallOption) (*ThreadHistoryResponse, error)
 	// Optional: Query cache for conversation metadata (not full history)
 	GetConversationMetadata(ctx context.Context, in *ConversationMetadataRequest, opts ...grpc.CallOption) (*ConversationMetadataResponse, error)
+	// Audio: client streams raw audio, server responds with text
+	// First message MUST be AudioStreamConfig, rest are AudioChunks
+	ProcessAudioStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[AudioStreamRequest, AgentResponse], error)
 	// Health check
 	HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error)
 }
@@ -105,6 +109,19 @@ func (c *agentMessagingClient) GetConversationMetadata(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *agentMessagingClient) ProcessAudioStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[AudioStreamRequest, AgentResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AgentMessaging_ServiceDesc.Streams[2], AgentMessaging_ProcessAudioStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[AudioStreamRequest, AgentResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentMessaging_ProcessAudioStreamClient = grpc.BidiStreamingClient[AudioStreamRequest, AgentResponse]
+
 func (c *agentMessagingClient) HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HealthCheckResponse)
@@ -130,6 +147,9 @@ type AgentMessagingServer interface {
 	GetThreadHistory(context.Context, *ThreadHistoryRequest) (*ThreadHistoryResponse, error)
 	// Optional: Query cache for conversation metadata (not full history)
 	GetConversationMetadata(context.Context, *ConversationMetadataRequest) (*ConversationMetadataResponse, error)
+	// Audio: client streams raw audio, server responds with text
+	// First message MUST be AudioStreamConfig, rest are AudioChunks
+	ProcessAudioStream(grpc.BidiStreamingServer[AudioStreamRequest, AgentResponse]) error
 	// Health check
 	HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error)
 	mustEmbedUnimplementedAgentMessagingServer()
@@ -153,6 +173,9 @@ func (UnimplementedAgentMessagingServer) GetThreadHistory(context.Context, *Thre
 }
 func (UnimplementedAgentMessagingServer) GetConversationMetadata(context.Context, *ConversationMetadataRequest) (*ConversationMetadataResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetConversationMetadata not implemented")
+}
+func (UnimplementedAgentMessagingServer) ProcessAudioStream(grpc.BidiStreamingServer[AudioStreamRequest, AgentResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method ProcessAudioStream not implemented")
 }
 func (UnimplementedAgentMessagingServer) HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method HealthCheck not implemented")
@@ -232,6 +255,13 @@ func _AgentMessaging_GetConversationMetadata_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentMessaging_ProcessAudioStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(AgentMessagingServer).ProcessAudioStream(&grpc.GenericServerStream[AudioStreamRequest, AgentResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentMessaging_ProcessAudioStreamServer = grpc.BidiStreamingServer[AudioStreamRequest, AgentResponse]
+
 func _AgentMessaging_HealthCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(HealthCheckRequest)
 	if err := dec(in); err != nil {
@@ -281,6 +311,12 @@ var AgentMessaging_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "ProcessMessage",
 			Handler:       _AgentMessaging_ProcessMessage_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "ProcessAudioStream",
+			Handler:       _AgentMessaging_ProcessAudioStream_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "astro/messaging/v1/service.proto",

@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package astro.messaging.v1;
+
+option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
+
+// Audio encoding format — covers browser, telephony, and mobile sources
+enum AudioEncoding {
+  AUDIO_ENCODING_UNSPECIFIED = 0;
+  LINEAR16 = 1;          // PCM signed 16-bit little-endian (universal baseline)
+  MULAW = 2;             // G.711 mu-law (Twilio, telephony)
+  OPUS = 3;              // Raw Opus frames
+  MP3 = 4;               // MP3 (batch uploads)
+  WEBM_OPUS = 5;         // WebM container with Opus (browser MediaRecorder default)
+  OGG_OPUS = 6;          // OGG container with Opus
+  FLAC = 7;              // FLAC lossless
+  AAC = 8;               // AAC (iOS native recording)
+}
+
+// Sent once at the start of an audio stream to configure the session
+message AudioStreamConfig {
+  AudioEncoding encoding = 1;
+  int32 sample_rate = 2;        // Hz: 8000, 16000, 24000, 44100, 48000
+  int32 channels = 3;           // 1 = mono (speech default), 2 = stereo
+  string language = 4;          // BCP-47 hint, e.g. "en-US" (optional)
+  string conversation_id = 5;   // Links audio to an existing conversation
+
+  // Source metadata — helps the agent pick the right STT config
+  string source = 6;            // "browser", "twilio", "vonage", "mobile", "sip"
+}
+
+// A chunk of raw audio bytes
+message AudioChunk {
+  bytes data = 1;               // Raw audio bytes
+  int64 sequence = 2;           // Monotonic sequence number for ordering
+  bool done = 3;                // Signals end of current audio segment
+}
+
+// Wrapper for the audio streaming RPC
+message AudioStreamRequest {
+  oneof request {
+    AudioStreamConfig config = 1;    // First message: session setup
+    AudioChunk audio = 2;            // Subsequent: audio data
+  }
+}

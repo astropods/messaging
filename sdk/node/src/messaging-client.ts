@@ -149,11 +149,54 @@ export interface AgentConfig {
   tools: AgentToolConfig[];
 }
 
+// Audio types
+export type AudioEncoding =
+  | 'LINEAR16'
+  | 'MULAW'
+  | 'OPUS'
+  | 'MP3'
+  | 'WEBM_OPUS'
+  | 'OGG_OPUS'
+  | 'FLAC'
+  | 'AAC';
+
+export interface AudioStreamConfig {
+  encoding: AudioEncoding;
+  sampleRate: number;
+  channels: number;
+  language?: string;
+  conversationId: string;
+  source?: string;
+}
+
+export interface AudioChunk {
+  data: Buffer | Uint8Array;
+  sequence?: number;
+  done?: boolean;
+}
+
+/** Map AudioEncoding to the filetype string expected by Mastra's voice.listen() */
+export function audioEncodingToFiletype(encoding: AudioEncoding): string {
+  const map: Record<AudioEncoding, string> = {
+    LINEAR16: 'wav',
+    MULAW: 'wav',
+    OPUS: 'opus',
+    MP3: 'mp3',
+    WEBM_OPUS: 'webm',
+    OGG_OPUS: 'ogg',
+    FLAC: 'flac',
+    AAC: 'm4a',
+  };
+  return map[encoding] ?? 'wav';
+}
+
 export interface ConversationRequest {
   message?: Message;
   feedback?: any;
   agentConfig?: AgentConfig;
   agentResponse?: AgentResponse;
+  audioConfig?: AudioStreamConfig;
+  audio?: AudioChunk;
 }
 
 export interface ReconnectOptions {
@@ -393,9 +436,17 @@ export class ConversationStream extends EventEmitter {
   }
 
   private attachHandlers(stream: any): void {
-    stream.on('data', (response: AgentResponse) => {
+    stream.on('data', (response: any) => {
       this.retryCount = 0;
-      this.emit('response', response);
+
+      // Emit audio-specific events if present (from ConversationRequest oneof)
+      if (response.audioConfig) {
+        this.emit('audioConfig', response.audioConfig as AudioStreamConfig);
+      } else if (response.audio) {
+        this.emit('audioChunk', response.audio as AudioChunk);
+      }
+
+      this.emit('response', response as AgentResponse);
     });
 
     stream.on('error', (error: any) => {
@@ -513,6 +564,68 @@ export class ConversationStream extends EventEmitter {
     this.sendAgentResponse({
       conversationId,
       status,
+    });
+  }
+
+  // --- Audio support ---
+
+  /**
+   * Send an audio stream config (must be sent before audio chunks)
+   */
+  sendAudioConfig(config: AudioStreamConfig): void {
+    this.write({ audioConfig: config });
+  }
+
+  /**
+   * Send a raw audio chunk through the stream
+   */
+  sendAudioChunk(chunk: AudioChunk): void {
+    this.write({ audio: chunk });
+  }
+
+  /**
+   * Signal end of the current audio segment.
+   * After this, more audio can follow (new config or more chunks).
+   */
+  endAudio(): void {
+    this.write({ audio: { data: Buffer.alloc(0), done: true } });
+  }
+
+  /**
+   * Returns a ReadableStream of audio bytes received from the remote client.
+   * Listens for 'audioChunk' events and pipes them into the stream.
+   * The stream closes when an AudioChunk with done=true arrives, or on 'end'/'error'.
+   *
+   * Usage with Mastra:
+   *   const audioStream = conversation.audioAsReadable();
+   *   const transcript = await agent.voice.listen(audioStream, { filetype: 'webm' });
+   */
+  audioAsReadable(): ReadableStream<Uint8Array> {
+    return new ReadableStream({
+      start: (controller) => {
+        const onChunk = (chunk: AudioChunk) => {
+          if (chunk.done) {
+            this.removeListener('audioChunk', onChunk);
+            try { controller.close(); } catch {}
+          } else {
+            controller.enqueue(new Uint8Array(chunk.data));
+          }
+        };
+
+        const onEnd = () => {
+          this.removeListener('audioChunk', onChunk);
+          try { controller.close(); } catch {}
+        };
+
+        const onError = (err: Error) => {
+          this.removeListener('audioChunk', onChunk);
+          try { controller.error(err); } catch {}
+        };
+
+        this.on('audioChunk', onChunk);
+        this.once('end', onEnd);
+        this.once('error', onError);
+      },
     });
   }
 

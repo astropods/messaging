@@ -83,6 +83,8 @@ type ConversationRequest struct {
 	//	*ConversationRequest_Feedback
 	//	*ConversationRequest_AgentConfig
 	//	*ConversationRequest_AgentResponse
+	//	*ConversationRequest_AudioConfig
+	//	*ConversationRequest_Audio
 	Request       isConversationRequest_Request `protobuf_oneof:"request"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -161,6 +163,24 @@ func (x *ConversationRequest) GetAgentResponse() *AgentResponse {
 	return nil
 }
 
+func (x *ConversationRequest) GetAudioConfig() *AudioStreamConfig {
+	if x != nil {
+		if x, ok := x.Request.(*ConversationRequest_AudioConfig); ok {
+			return x.AudioConfig
+		}
+	}
+	return nil
+}
+
+func (x *ConversationRequest) GetAudio() *AudioChunk {
+	if x != nil {
+		if x, ok := x.Request.(*ConversationRequest_Audio); ok {
+			return x.Audio
+		}
+	}
+	return nil
+}
+
 type isConversationRequest_Request interface {
 	isConversationRequest_Request()
 }
@@ -181,6 +201,14 @@ type ConversationRequest_AgentResponse struct {
 	AgentResponse *AgentResponse `protobuf:"bytes,4,opt,name=agent_response,json=agentResponse,proto3,oneof"`
 }
 
+type ConversationRequest_AudioConfig struct {
+	AudioConfig *AudioStreamConfig `protobuf:"bytes,5,opt,name=audio_config,json=audioConfig,proto3,oneof"` // Start audio within conversation
+}
+
+type ConversationRequest_Audio struct {
+	Audio *AudioChunk `protobuf:"bytes,6,opt,name=audio,proto3,oneof"` // Audio data within conversation
+}
+
 func (*ConversationRequest_Message) isConversationRequest_Request() {}
 
 func (*ConversationRequest_Feedback) isConversationRequest_Request() {}
@@ -188,6 +216,10 @@ func (*ConversationRequest_Feedback) isConversationRequest_Request() {}
 func (*ConversationRequest_AgentConfig) isConversationRequest_Request() {}
 
 func (*ConversationRequest_AgentResponse) isConversationRequest_Request() {}
+
+func (*ConversationRequest_AudioConfig) isConversationRequest_Request() {}
+
+func (*ConversationRequest_Audio) isConversationRequest_Request() {}
 
 // Conversation metadata (routing info, not full history)
 type ConversationMetadataRequest struct {
@@ -517,12 +549,14 @@ var File_astro_messaging_v1_service_proto protoreflect.FileDescriptor
 
 const file_astro_messaging_v1_service_proto_rawDesc = "" +
 	"\n" +
-	" astro/messaging/v1/service.proto\x12\x12astro.messaging.v1\x1a astro/messaging/v1/message.proto\x1a!astro/messaging/v1/response.proto\x1a!astro/messaging/v1/feedback.proto\x1a\x1fastro/messaging/v1/config.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xaf\x02\n" +
+	" astro/messaging/v1/service.proto\x12\x12astro.messaging.v1\x1a astro/messaging/v1/message.proto\x1a!astro/messaging/v1/response.proto\x1a!astro/messaging/v1/feedback.proto\x1a\x1eastro/messaging/v1/audio.proto\x1a\x1fastro/messaging/v1/config.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb3\x03\n" +
 	"\x13ConversationRequest\x127\n" +
 	"\amessage\x18\x01 \x01(\v2\x1b.astro.messaging.v1.MessageH\x00R\amessage\x12B\n" +
 	"\bfeedback\x18\x02 \x01(\v2$.astro.messaging.v1.PlatformFeedbackH\x00R\bfeedback\x12D\n" +
 	"\fagent_config\x18\x03 \x01(\v2\x1f.astro.messaging.v1.AgentConfigH\x00R\vagentConfig\x12J\n" +
-	"\x0eagent_response\x18\x04 \x01(\v2!.astro.messaging.v1.AgentResponseH\x00R\ragentResponseB\t\n" +
+	"\x0eagent_response\x18\x04 \x01(\v2!.astro.messaging.v1.AgentResponseH\x00R\ragentResponse\x12J\n" +
+	"\faudio_config\x18\x05 \x01(\v2%.astro.messaging.v1.AudioStreamConfigH\x00R\vaudioConfig\x126\n" +
+	"\x05audio\x18\x06 \x01(\v2\x1e.astro.messaging.v1.AudioChunkH\x00R\x05audioB\t\n" +
 	"\arequest\"\xa1\x01\n" +
 	"\x1bConversationMetadataRequest\x12)\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tH\x00R\x0econversationId\x12I\n" +
@@ -552,12 +586,13 @@ const file_astro_messaging_v1_service_proto_rawDesc = "" +
 	"\aUNKNOWN\x10\x00\x12\v\n" +
 	"\aHEALTHY\x10\x01\x12\f\n" +
 	"\bDEGRADED\x10\x02\x12\r\n" +
-	"\tUNHEALTHY\x10\x032\x92\x04\n" +
+	"\tUNHEALTHY\x10\x032\xf7\x04\n" +
 	"\x0eAgentMessaging\x12e\n" +
 	"\x13ProcessConversation\x12'.astro.messaging.v1.ConversationRequest\x1a!.astro.messaging.v1.AgentResponse(\x010\x01\x12R\n" +
 	"\x0eProcessMessage\x12\x1b.astro.messaging.v1.Message\x1a!.astro.messaging.v1.AgentResponse0\x01\x12g\n" +
 	"\x10GetThreadHistory\x12(.astro.messaging.v1.ThreadHistoryRequest\x1a).astro.messaging.v1.ThreadHistoryResponse\x12|\n" +
-	"\x17GetConversationMetadata\x12/.astro.messaging.v1.ConversationMetadataRequest\x1a0.astro.messaging.v1.ConversationMetadataResponse\x12^\n" +
+	"\x17GetConversationMetadata\x12/.astro.messaging.v1.ConversationMetadataRequest\x1a0.astro.messaging.v1.ConversationMetadataResponse\x12c\n" +
+	"\x12ProcessAudioStream\x12&.astro.messaging.v1.AudioStreamRequest\x1a!.astro.messaging.v1.AgentResponse(\x010\x01\x12^\n" +
 	"\vHealthCheck\x12&.astro.messaging.v1.HealthCheckRequest\x1a'.astro.messaging.v1.HealthCheckResponseB3Z1github.com/postman/astro/messaging/v1;messagingv1b\x06proto3"
 
 var (
@@ -586,33 +621,40 @@ var file_astro_messaging_v1_service_proto_goTypes = []any{
 	(*PlatformFeedback)(nil),             // 8: astro.messaging.v1.PlatformFeedback
 	(*AgentConfig)(nil),                  // 9: astro.messaging.v1.AgentConfig
 	(*AgentResponse)(nil),                // 10: astro.messaging.v1.AgentResponse
-	(*timestamppb.Timestamp)(nil),        // 11: google.protobuf.Timestamp
-	(*ThreadHistoryRequest)(nil),         // 12: astro.messaging.v1.ThreadHistoryRequest
-	(*ThreadHistoryResponse)(nil),        // 13: astro.messaging.v1.ThreadHistoryResponse
+	(*AudioStreamConfig)(nil),            // 11: astro.messaging.v1.AudioStreamConfig
+	(*AudioChunk)(nil),                   // 12: astro.messaging.v1.AudioChunk
+	(*timestamppb.Timestamp)(nil),        // 13: google.protobuf.Timestamp
+	(*ThreadHistoryRequest)(nil),         // 14: astro.messaging.v1.ThreadHistoryRequest
+	(*AudioStreamRequest)(nil),           // 15: astro.messaging.v1.AudioStreamRequest
+	(*ThreadHistoryResponse)(nil),        // 16: astro.messaging.v1.ThreadHistoryResponse
 }
 var file_astro_messaging_v1_service_proto_depIdxs = []int32{
 	7,  // 0: astro.messaging.v1.ConversationRequest.message:type_name -> astro.messaging.v1.Message
 	8,  // 1: astro.messaging.v1.ConversationRequest.feedback:type_name -> astro.messaging.v1.PlatformFeedback
 	9,  // 2: astro.messaging.v1.ConversationRequest.agent_config:type_name -> astro.messaging.v1.AgentConfig
 	10, // 3: astro.messaging.v1.ConversationRequest.agent_response:type_name -> astro.messaging.v1.AgentResponse
-	3,  // 4: astro.messaging.v1.ConversationMetadataRequest.platform_id:type_name -> astro.messaging.v1.PlatformIdentifier
-	11, // 5: astro.messaging.v1.ConversationMetadataResponse.last_message_time:type_name -> google.protobuf.Timestamp
-	0,  // 6: astro.messaging.v1.HealthCheckResponse.status:type_name -> astro.messaging.v1.HealthCheckResponse.Status
-	1,  // 7: astro.messaging.v1.AgentMessaging.ProcessConversation:input_type -> astro.messaging.v1.ConversationRequest
-	7,  // 8: astro.messaging.v1.AgentMessaging.ProcessMessage:input_type -> astro.messaging.v1.Message
-	12, // 9: astro.messaging.v1.AgentMessaging.GetThreadHistory:input_type -> astro.messaging.v1.ThreadHistoryRequest
-	2,  // 10: astro.messaging.v1.AgentMessaging.GetConversationMetadata:input_type -> astro.messaging.v1.ConversationMetadataRequest
-	5,  // 11: astro.messaging.v1.AgentMessaging.HealthCheck:input_type -> astro.messaging.v1.HealthCheckRequest
-	10, // 12: astro.messaging.v1.AgentMessaging.ProcessConversation:output_type -> astro.messaging.v1.AgentResponse
-	10, // 13: astro.messaging.v1.AgentMessaging.ProcessMessage:output_type -> astro.messaging.v1.AgentResponse
-	13, // 14: astro.messaging.v1.AgentMessaging.GetThreadHistory:output_type -> astro.messaging.v1.ThreadHistoryResponse
-	4,  // 15: astro.messaging.v1.AgentMessaging.GetConversationMetadata:output_type -> astro.messaging.v1.ConversationMetadataResponse
-	6,  // 16: astro.messaging.v1.AgentMessaging.HealthCheck:output_type -> astro.messaging.v1.HealthCheckResponse
-	12, // [12:17] is the sub-list for method output_type
-	7,  // [7:12] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	11, // 4: astro.messaging.v1.ConversationRequest.audio_config:type_name -> astro.messaging.v1.AudioStreamConfig
+	12, // 5: astro.messaging.v1.ConversationRequest.audio:type_name -> astro.messaging.v1.AudioChunk
+	3,  // 6: astro.messaging.v1.ConversationMetadataRequest.platform_id:type_name -> astro.messaging.v1.PlatformIdentifier
+	13, // 7: astro.messaging.v1.ConversationMetadataResponse.last_message_time:type_name -> google.protobuf.Timestamp
+	0,  // 8: astro.messaging.v1.HealthCheckResponse.status:type_name -> astro.messaging.v1.HealthCheckResponse.Status
+	1,  // 9: astro.messaging.v1.AgentMessaging.ProcessConversation:input_type -> astro.messaging.v1.ConversationRequest
+	7,  // 10: astro.messaging.v1.AgentMessaging.ProcessMessage:input_type -> astro.messaging.v1.Message
+	14, // 11: astro.messaging.v1.AgentMessaging.GetThreadHistory:input_type -> astro.messaging.v1.ThreadHistoryRequest
+	2,  // 12: astro.messaging.v1.AgentMessaging.GetConversationMetadata:input_type -> astro.messaging.v1.ConversationMetadataRequest
+	15, // 13: astro.messaging.v1.AgentMessaging.ProcessAudioStream:input_type -> astro.messaging.v1.AudioStreamRequest
+	5,  // 14: astro.messaging.v1.AgentMessaging.HealthCheck:input_type -> astro.messaging.v1.HealthCheckRequest
+	10, // 15: astro.messaging.v1.AgentMessaging.ProcessConversation:output_type -> astro.messaging.v1.AgentResponse
+	10, // 16: astro.messaging.v1.AgentMessaging.ProcessMessage:output_type -> astro.messaging.v1.AgentResponse
+	16, // 17: astro.messaging.v1.AgentMessaging.GetThreadHistory:output_type -> astro.messaging.v1.ThreadHistoryResponse
+	4,  // 18: astro.messaging.v1.AgentMessaging.GetConversationMetadata:output_type -> astro.messaging.v1.ConversationMetadataResponse
+	10, // 19: astro.messaging.v1.AgentMessaging.ProcessAudioStream:output_type -> astro.messaging.v1.AgentResponse
+	6,  // 20: astro.messaging.v1.AgentMessaging.HealthCheck:output_type -> astro.messaging.v1.HealthCheckResponse
+	15, // [15:21] is the sub-list for method output_type
+	9,  // [9:15] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_astro_messaging_v1_service_proto_init() }
@@ -623,12 +665,15 @@ func file_astro_messaging_v1_service_proto_init() {
 	file_astro_messaging_v1_message_proto_init()
 	file_astro_messaging_v1_response_proto_init()
 	file_astro_messaging_v1_feedback_proto_init()
+	file_astro_messaging_v1_audio_proto_init()
 	file_astro_messaging_v1_config_proto_init()
 	file_astro_messaging_v1_service_proto_msgTypes[0].OneofWrappers = []any{
 		(*ConversationRequest_Message)(nil),
 		(*ConversationRequest_Feedback)(nil),
 		(*ConversationRequest_AgentConfig)(nil),
 		(*ConversationRequest_AgentResponse)(nil),
+		(*ConversationRequest_AudioConfig)(nil),
+		(*ConversationRequest_Audio)(nil),
 	}
 	file_astro_messaging_v1_service_proto_msgTypes[1].OneofWrappers = []any{
 		(*ConversationMetadataRequest_ConversationId)(nil),

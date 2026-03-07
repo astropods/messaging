@@ -7,10 +7,13 @@ import {
   ConversationStream,
   MessageStream,
   Helpers,
+  audioEncodingToFiletype,
   type Message,
   type PlatformContext,
   type AgentResponse,
   type ConversationRequest,
+  type AudioStreamConfig,
+  type AudioChunk,
 } from './messaging-client';
 
 // --- Helper factories ---
@@ -1132,6 +1135,49 @@ describe('ConversationRequest serialization', () => {
     expect(written).not.toHaveProperty('message');
   });
 
+  it('should use "audioConfig" key for audio config requests', () => {
+    const mockGrpc = new MockGrpcStream();
+    const stream = new ConversationStream(() => mockGrpc);
+
+    stream.sendAudioConfig({
+      encoding: 'WEBM_OPUS',
+      sampleRate: 48000,
+      channels: 1,
+      conversationId: 'conv-1',
+      source: 'browser',
+    });
+
+    const written = mockGrpc.written[0];
+    expect(written).toHaveProperty('audioConfig');
+    expect(written.audioConfig.encoding).toBe('WEBM_OPUS');
+    expect(written.audioConfig.sampleRate).toBe(48000);
+    expect(written.audioConfig.source).toBe('browser');
+  });
+
+  it('should use "audio" key for audio chunk requests', () => {
+    const mockGrpc = new MockGrpcStream();
+    const stream = new ConversationStream(() => mockGrpc);
+
+    stream.sendAudioChunk({
+      data: Buffer.from([0x01, 0x02, 0x03]),
+      sequence: 1,
+    });
+
+    const written = mockGrpc.written[0];
+    expect(written).toHaveProperty('audio');
+    expect(written.audio.sequence).toBe(1);
+  });
+
+  it('should send done=true via endAudio()', () => {
+    const mockGrpc = new MockGrpcStream();
+    const stream = new ConversationStream(() => mockGrpc);
+
+    stream.endAudio();
+
+    const written = mockGrpc.written[0];
+    expect(written.audio.done).toBe(true);
+  });
+
   it('should serialize nested platformContext correctly for gRPC wire format', () => {
     const mockGrpc = new MockGrpcStream();
     const stream = new ConversationStream(() => mockGrpc);
@@ -1169,5 +1215,148 @@ describe('ConversationRequest serialization', () => {
         },
       },
     });
+  });
+});
+
+// =============================================
+// Audio support tests
+// =============================================
+
+describe('audioEncodingToFiletype', () => {
+  it('should map all encodings to Mastra filetypes', () => {
+    expect(audioEncodingToFiletype('LINEAR16')).toBe('wav');
+    expect(audioEncodingToFiletype('MULAW')).toBe('wav');
+    expect(audioEncodingToFiletype('OPUS')).toBe('opus');
+    expect(audioEncodingToFiletype('MP3')).toBe('mp3');
+    expect(audioEncodingToFiletype('WEBM_OPUS')).toBe('webm');
+    expect(audioEncodingToFiletype('OGG_OPUS')).toBe('ogg');
+    expect(audioEncodingToFiletype('FLAC')).toBe('flac');
+    expect(audioEncodingToFiletype('AAC')).toBe('m4a');
+  });
+});
+
+describe('ConversationStream audio events', () => {
+  it('should emit audioConfig when server sends audio config', () => {
+    const mockGrpc = new MockGrpcStream();
+    const stream = new ConversationStream(() => mockGrpc);
+
+    let receivedConfig: AudioStreamConfig | null = null;
+    stream.on('audioConfig', (config: AudioStreamConfig) => {
+      receivedConfig = config;
+    });
+
+    mockGrpc.emit('data', {
+      audioConfig: {
+        encoding: 'WEBM_OPUS',
+        sampleRate: 48000,
+        channels: 1,
+        conversationId: 'conv-1',
+        source: 'browser',
+      },
+    });
+
+    expect(receivedConfig).not.toBeNull();
+    expect(receivedConfig!.encoding).toBe('WEBM_OPUS');
+    expect(receivedConfig!.sampleRate).toBe(48000);
+  });
+
+  it('should emit audioChunk when server sends audio data', () => {
+    const mockGrpc = new MockGrpcStream();
+    const stream = new ConversationStream(() => mockGrpc);
+
+    let receivedChunk: AudioChunk | null = null;
+    stream.on('audioChunk', (chunk: AudioChunk) => {
+      receivedChunk = chunk;
+    });
+
+    mockGrpc.emit('data', {
+      audio: {
+        data: Buffer.from([0x01, 0x02, 0x03]),
+        sequence: 5,
+        done: false,
+      },
+    });
+
+    expect(receivedChunk).not.toBeNull();
+    expect(receivedChunk!.sequence).toBe(5);
+    expect(receivedChunk!.done).toBe(false);
+  });
+
+  it('should still emit response event alongside audio events', () => {
+    const mockGrpc = new MockGrpcStream();
+    const stream = new ConversationStream(() => mockGrpc);
+
+    let gotAudioConfig = false;
+    let gotResponse = false;
+    stream.on('audioConfig', () => { gotAudioConfig = true; });
+    stream.on('response', () => { gotResponse = true; });
+
+    mockGrpc.emit('data', {
+      audioConfig: {
+        encoding: 'MULAW',
+        sampleRate: 8000,
+        channels: 1,
+        conversationId: 'conv-1',
+      },
+    });
+
+    expect(gotAudioConfig).toBe(true);
+    expect(gotResponse).toBe(true);
+  });
+});
+
+describe('ConversationStream.audioAsReadable', () => {
+  it('should return a ReadableStream that yields audio chunks', async () => {
+    const mockGrpc = new MockGrpcStream();
+    const stream = new ConversationStream(() => mockGrpc);
+
+    const readable = stream.audioAsReadable();
+    const reader = readable.getReader();
+
+    // Send some chunks
+    mockGrpc.emit('data', {
+      audio: { data: Buffer.from([0x01, 0x02]), done: false },
+    });
+    mockGrpc.emit('data', {
+      audio: { data: Buffer.from([0x03, 0x04]), done: false },
+    });
+
+    const chunk1 = await reader.read();
+    expect(chunk1.done).toBe(false);
+    expect(Array.from(chunk1.value!)).toEqual([0x01, 0x02]);
+
+    const chunk2 = await reader.read();
+    expect(chunk2.done).toBe(false);
+    expect(Array.from(chunk2.value!)).toEqual([0x03, 0x04]);
+
+    // Send done
+    mockGrpc.emit('data', {
+      audio: { data: Buffer.alloc(0), done: true },
+    });
+
+    const final = await reader.read();
+    expect(final.done).toBe(true);
+  });
+
+  it('should close on stream end event', async () => {
+    const mockGrpc = new MockGrpcStream();
+    const stream = new ConversationStream(() => mockGrpc);
+    stream.on('error', () => {}); // suppress unhandled
+
+    const readable = stream.audioAsReadable();
+    const reader = readable.getReader();
+
+    mockGrpc.emit('data', {
+      audio: { data: Buffer.from([0xAA]), done: false },
+    });
+
+    const chunk = await reader.read();
+    expect(chunk.done).toBe(false);
+
+    // Simulate intentional close
+    stream.end();
+
+    const final = await reader.read();
+    expect(final.done).toBe(true);
   });
 });

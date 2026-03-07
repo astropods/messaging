@@ -5,6 +5,7 @@ package astro.messaging.v1;
 import "astro/messaging/v1/message.proto";
 import "astro/messaging/v1/response.proto";
 import "astro/messaging/v1/feedback.proto";
+import "astro/messaging/v1/audio.proto";
 import "astro/messaging/v1/config.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -29,6 +30,11 @@ service AgentMessaging {
   rpc GetConversationMetadata(ConversationMetadataRequest)
       returns (ConversationMetadataResponse);
 
+  // Audio: client streams raw audio, server responds with text
+  // First message MUST be AudioStreamConfig, rest are AudioChunks
+  rpc ProcessAudioStream(stream AudioStreamRequest)
+      returns (stream AgentResponse);
+
   // Health check
   rpc HealthCheck(HealthCheckRequest)
       returns (HealthCheckResponse);
@@ -41,6 +47,8 @@ message ConversationRequest {
     PlatformFeedback feedback = 2;
     AgentConfig agent_config = 3;
     AgentResponse agent_response = 4;
+    AudioStreamConfig audio_config = 5;  // Start audio within conversation
+    AudioChunk audio = 6;                // Audio data within conversation
   }
 }
 

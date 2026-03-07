@@ -18,6 +18,10 @@ type AdapterCapabilities struct {
 	// Advanced features
 	SupportsReactions bool // Platform supports emoji reactions
 	SupportsCards     bool // Platform supports rich cards/embeds
+
+	// Audio features
+	SupportsAudioInput bool     // Can receive audio streams
+	AudioEncodings     []string // Accepted encodings (e.g., "webm_opus", "linear16", "mulaw")
 }
 
 // SlackCapabilities returns capabilities for Slack
@@ -32,6 +36,7 @@ func SlackCapabilities(aiFeatures bool) AdapterCapabilities {
 		MaxContentLength:         4000,
 		SupportsReactions:        true,
 		SupportsCards:            true, // Block Kit support (future)
+		SupportsAudioInput:      false,
 	}
 }
 
@@ -47,5 +52,7 @@ func WebCapabilities() AdapterCapabilities {
 		MaxContentLength:         0,     // No content length limit
 		SupportsReactions:        false, // No reactions
 		SupportsCards:            true,  // Rich cards/embeds
+		SupportsAudioInput:      true,
+		AudioEncodings:          []string{"webm_opus", "opus", "linear16"},
 	}
 }
