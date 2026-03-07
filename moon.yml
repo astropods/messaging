@@ -12,3 +12,7 @@ tasks:
       - "proto/**/*"
     outputs:
       - "sdk/node/dist"
+  "publish-local":
+    command: "bash ../../scripts/publish-local.sh sdk/node"
+    deps:
+      - "sdk-build"
