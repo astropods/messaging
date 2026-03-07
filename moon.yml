@@ -1,4 +1,10 @@
 tasks:
+  "proto-gen":
+    command: "bash scripts/generate-proto.sh"
+    inputs:
+      - "proto/**/*"
+    outputs:
+      - "pkg/gen"
   "sdk-build":
     command: "cd sdk/node && bun run build"
     inputs:
