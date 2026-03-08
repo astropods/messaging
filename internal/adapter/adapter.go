@@ -33,6 +33,10 @@ type Adapter interface {
 // It should forward the message to the gRPC server which sends it to the agent.
 type MessageHandler func(ctx context.Context, msg *pb.Message) error
 
+// AudioHandler is called to forward audio data to the agent via the gRPC stream.
+// Called after MessageHandler for audio messages so the agent has message context first.
+type AudioHandler func(conversationID string, config *pb.AudioStreamConfig, audioData []byte) error
+
 // Config holds adapter configuration
 type Config struct {
 	BotToken   string

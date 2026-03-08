@@ -22,6 +22,7 @@ const (
 	EventError          = "error"
 	EventHeartbeat      = "heartbeat"
 	EventPrompts        = "prompts"
+	EventTranscript     = "transcript"
 )
 
 // SSEEvent represents a Server-Sent Event
@@ -259,6 +260,32 @@ func NewFinishEvent(responseID string) SSEEvent {
 	}
 	return SSEEvent{
 		Event: EventFinish,
+		Data:  string(jsonData),
+	}
+}
+
+// TranscriptEventData represents the data for a transcript event
+type TranscriptEventData struct {
+	Type      string `json:"type"`
+	Text      string `json:"text"`
+	MessageID string `json:"message_id,omitempty"`
+	Language  string `json:"language,omitempty"`
+}
+
+// NewTranscriptEvent creates a transcript SSE event from a protobuf Transcript
+func NewTranscriptEvent(transcript *pb.Transcript) SSEEvent {
+	data := TranscriptEventData{
+		Type:      "transcript",
+		Text:      transcript.Text,
+		MessageID: transcript.MessageId,
+		Language:  transcript.Language,
+	}
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[Web] Error marshaling transcript event: %v", err)
+	}
+	return SSEEvent{
+		Event: EventTranscript,
 		Data:  string(jsonData),
 	}
 }

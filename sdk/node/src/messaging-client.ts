@@ -53,6 +53,9 @@ export interface AgentResponse {
   threadMetadata?: ThreadMetadata;
   error?: ErrorResponse;
   contextRequest?: ThreadHistoryRequest;
+  transcript?: Transcript;
+  audioConfig?: AudioStreamConfig;
+  audioChunk?: AudioChunk;
 }
 
 export interface StatusUpdate {
@@ -89,6 +92,12 @@ export interface ErrorResponse {
   message: string;
   details?: string;
   retryable?: boolean;
+}
+
+export interface Transcript {
+  text: string;
+  messageId?: string;
+  language?: string;
 }
 
 export interface ThreadHistoryRequest {
@@ -439,11 +448,11 @@ export class ConversationStream extends EventEmitter {
     stream.on('data', (response: any) => {
       this.retryCount = 0;
 
-      // Emit audio-specific events if present (from ConversationRequest oneof)
+      // Emit audio-specific events if present
       if (response.audioConfig) {
         this.emit('audioConfig', response.audioConfig as AudioStreamConfig);
-      } else if (response.audio) {
-        this.emit('audioChunk', response.audio as AudioChunk);
+      } else if (response.audioChunk) {
+        this.emit('audioChunk', response.audioChunk as AudioChunk);
       }
 
       this.emit('response', response as AgentResponse);
@@ -564,6 +573,17 @@ export class ConversationStream extends EventEmitter {
     this.sendAgentResponse({
       conversationId,
       status,
+    });
+  }
+
+  /**
+   * Send a transcript of the user's audio input.
+   * The platform uses this to update the placeholder message with actual text.
+   */
+  sendTranscript(conversationId: string, text: string, messageId?: string): void {
+    this.sendAgentResponse({
+      conversationId,
+      transcript: { text, messageId },
     });
   }
 

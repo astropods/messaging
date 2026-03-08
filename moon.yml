@@ -13,6 +13,6 @@ tasks:
     outputs:
       - "sdk/node/dist"
   "publish-local":
-    command: "bash ../../scripts/publish-local.sh sdk/node"
+    command: "bash scripts/publish-local.sh"
     deps:
       - "sdk-build"
