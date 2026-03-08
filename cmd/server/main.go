@@ -38,7 +38,11 @@ func main() {
 			log.Fatalf("Failed to initialize Redis store: %v", err)
 		}
 		conversationStore = redisStore
-		defer redisStore.Close()
+		defer func() {
+			if err := redisStore.Close(); err != nil {
+				log.Printf("Error closing Redis store: %v", err)
+			}
+		}()
 		log.Println("Redis store initialized")
 	} else {
 		log.Println("Using in-memory conversation store (data will not persist)")

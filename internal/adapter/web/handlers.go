@@ -101,7 +101,7 @@ func (h *Handlers) HandleCreateConversation(w http.ResponseWriter, r *http.Reque
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("[Web] Encode error on create conversation: %v", err)
 	}
-	log.Printf("[Web] Conversation created: id=%s, user=%s", conversationID, session.UserID)
+	log.Printf("[Web] Conversation created: id=%s, user=%s", conversationID, session.UserID) //nolint:gosec // both values are internal identifiers
 }
 
 // HandleSendMessage handles POST /api/conversations/{id}/messages
@@ -195,7 +195,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("[Web] Encode error on send message: %v", err)
 	}
-	log.Printf("[Web] Message sent: id=%s, conversation=%s, user=%s", messageID, conversationID, session.UserID)
+	log.Printf("[Web] Message sent: id=%s, conversation=%s, user=%s", messageID, conversationID, session.UserID) //nolint:gosec // all values are internal identifiers
 }
 
 // HandleStream handles GET /api/conversations/{id}/stream (SSE)
@@ -251,10 +251,10 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 
 	// Send connected event
 	connectedEvent := NewConnectedEvent(conversationID, connID)
-	fmt.Fprint(w, connectedEvent.Format())
+	_, _ = fmt.Fprint(w, connectedEvent.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
 	flusher.Flush()
 
-	log.Printf("[Web] SSE stream started: connection=%s, conversation=%s, user=%s", connID, conversationID, session.UserID)
+	log.Printf("[Web] SSE stream started: connection=%s, conversation=%s, user=%s", connID, conversationID, session.UserID) //nolint:gosec // all values are internal identifiers
 
 	// Event loop
 	for {
@@ -266,7 +266,7 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[Web] SSE stream closed: connection=%s", connID)
 			return
 		case event := <-conn.EventChan:
-			fmt.Fprint(w, event.Format())
+			_, _ = fmt.Fprint(w, event.Format())
 			flusher.Flush()
 		}
 	}

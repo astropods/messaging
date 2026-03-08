@@ -1270,7 +1270,7 @@ describe('ConversationStream audio events', () => {
     });
 
     mockGrpc.emit('data', {
-      audio: {
+      audioChunk: {
         data: Buffer.from([0x01, 0x02, 0x03]),
         sequence: 5,
         done: false,
@@ -1315,10 +1315,10 @@ describe('ConversationStream.audioAsReadable', () => {
 
     // Send some chunks
     mockGrpc.emit('data', {
-      audio: { data: Buffer.from([0x01, 0x02]), done: false },
+      audioChunk: { data: Buffer.from([0x01, 0x02]), done: false },
     });
     mockGrpc.emit('data', {
-      audio: { data: Buffer.from([0x03, 0x04]), done: false },
+      audioChunk: { data: Buffer.from([0x03, 0x04]), done: false },
     });
 
     const chunk1 = await reader.read();
@@ -1331,7 +1331,7 @@ describe('ConversationStream.audioAsReadable', () => {
 
     // Send done
     mockGrpc.emit('data', {
-      audio: { data: Buffer.alloc(0), done: true },
+      audioChunk: { data: Buffer.alloc(0), done: true },
     });
 
     const final = await reader.read();
@@ -1347,7 +1347,7 @@ describe('ConversationStream.audioAsReadable', () => {
     const reader = readable.getReader();
 
     mockGrpc.emit('data', {
-      audio: { data: Buffer.from([0xAA]), done: false },
+      audioChunk: { data: Buffer.from([0xAA]), done: false },
     });
 
     const chunk = await reader.read();
