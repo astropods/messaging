@@ -354,48 +354,45 @@ func (s *Server) HandleIncomingMessage(ctx context.Context, msg *pb.Message) err
 	return nil
 }
 
-// HandleIncomingAudio forwards audio data to the agent via the gRPC stream.
-// Sends AudioStreamConfig followed by AudioChunk(s) as AgentResponse payloads.
+// SendAudioConfig sends an AudioStreamConfig to the agent via the gRPC stream.
 // Must be called after HandleIncomingMessage so the agent has message context.
-func (s *Server) HandleIncomingAudio(conversationID string, config *pb.AudioStreamConfig, audioData []byte) error {
-	s.streamsMu.RLock()
-	var stream *conversationStream
-	for _, cs := range s.streams {
-		stream = cs
-		break
-	}
-	s.streamsMu.RUnlock()
-
+func (s *Server) SendAudioConfig(conversationID string, config *pb.AudioStreamConfig) error {
+	stream := s.findAgentStream()
 	if stream == nil {
 		return fmt.Errorf("no active agent stream available")
 	}
-
-	// Send audio config
-	if err := stream.stream.Send(&pb.AgentResponse{
+	log.Printf("[gRPC] Sending audio config to agent: conversation=%s, encoding=%s, sampleRate=%d",
+		conversationID, config.Encoding.String(), config.SampleRate)
+	return stream.stream.Send(&pb.AgentResponse{
 		ConversationId: conversationID,
-		Payload: &pb.AgentResponse_AudioConfig{
-			AudioConfig: config,
-		},
-	}); err != nil {
-		return fmt.Errorf("failed to send audio config: %w", err)
-	}
+		Payload:        &pb.AgentResponse_AudioConfig{AudioConfig: config},
+	})
+}
 
-	// Send audio data as a single chunk (already fully buffered from WebSocket)
-	if err := stream.stream.Send(&pb.AgentResponse{
+// SendAudioChunk sends a chunk of audio data to the agent via the gRPC stream.
+func (s *Server) SendAudioChunk(conversationID string, data []byte, sequence int64, done bool) error {
+	stream := s.findAgentStream()
+	if stream == nil {
+		return fmt.Errorf("no active agent stream available")
+	}
+	return stream.stream.Send(&pb.AgentResponse{
 		ConversationId: conversationID,
 		Payload: &pb.AgentResponse_AudioChunk{
 			AudioChunk: &pb.AudioChunk{
-				Data:     audioData,
-				Sequence: 1,
-				Done:     true,
+				Data:     data,
+				Sequence: sequence,
+				Done:     done,
 			},
 		},
-	}); err != nil {
-		return fmt.Errorf("failed to send audio chunk: %w", err)
-	}
+	})
+}
 
-	log.Printf("[gRPC] Audio forwarded to agent: conversation=%s, config=%s/%dHz, size=%d bytes",
-		conversationID, config.Encoding.String(), config.SampleRate, len(audioData))
+func (s *Server) findAgentStream() *conversationStream {
+	s.streamsMu.RLock()
+	defer s.streamsMu.RUnlock()
+	for _, cs := range s.streams {
+		return cs
+	}
 	return nil
 }
 

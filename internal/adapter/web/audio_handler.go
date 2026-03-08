@@ -27,17 +27,16 @@ var encodingToMIME = map[string]string{
 	"aac":       "audio/aac",
 }
 
-// handleAudioSegment takes a completed audio segment and forwards it through
-// the message handler as a Message with an AUDIO attachment containing the raw bytes.
-func (h *Handlers) handleAudioSegment(
+// handleAudioSegmentStart sends the audio message metadata to the agent.
+// Called on audio.config before any audio chunks are streamed.
+func (h *Handlers) handleAudioSegmentStart(
 	ctx context.Context,
 	conversationID string,
 	session *Session,
 	config *AudioConfig,
-	audioData []byte,
 ) {
 	if h.msgHandler == nil {
-		log.Printf("[Web] No message handler registered, dropping audio segment")
+		log.Printf("[Web] No message handler registered, dropping audio segment start")
 		return
 	}
 
@@ -62,7 +61,6 @@ func (h *Handlers) handleAudioSegment(
 				"audio_channels":    fmt.Sprintf("%d", config.Channels),
 				"audio_language":    config.Language,
 				"audio_source":      config.Source,
-				"audio_size_bytes":  fmt.Sprintf("%d", len(audioData)),
 			},
 		},
 		User: &pb.User{
@@ -74,10 +72,9 @@ func (h *Handlers) handleAudioSegment(
 		ConversationId: conversationID,
 		Attachments: []*pb.Attachment{
 			{
-				Type:      pb.Attachment_AUDIO,
-				Filename:  fmt.Sprintf("audio.%s", encodingToExtension(config.Encoding)),
-				SizeBytes: int64(len(audioData)),
-				MimeType:  mimeType,
+				Type:     pb.Attachment_AUDIO,
+				Filename: fmt.Sprintf("audio.%s", encodingToExtension(config.Encoding)),
+				MimeType: mimeType,
 			},
 		},
 	}
@@ -85,29 +82,19 @@ func (h *Handlers) handleAudioSegment(
 	if err := h.msgHandler(ctx, msg); err != nil {
 		log.Printf("[Web] Error forwarding audio message: %v", err)
 		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process audio")
-		return
 	}
+}
 
-	// Forward audio bytes as AudioStreamConfig + AudioChunk on the gRPC stream
-	if h.audioHandler != nil {
-		protoEncoding := encodingToProto(config.Encoding)
-		audioConfig := &pb.AudioStreamConfig{
-			Encoding:       protoEncoding,
-			SampleRate:     int32(config.SampleRate), //nolint:gosec
-			Channels:       int32(config.Channels),   //nolint:gosec
-			Language:       config.Language,
-			ConversationId: conversationID,
-			Source:         config.Source,
-		}
-		if err := h.audioHandler(conversationID, audioConfig, audioData); err != nil {
-			log.Printf("[Web] Error forwarding audio data: %v", err)
-			h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to forward audio")
-			return
-		}
+// audioConfigToProto converts a WebSocket AudioConfig to a proto AudioStreamConfig.
+func audioConfigToProto(config *AudioConfig, conversationID string) *pb.AudioStreamConfig {
+	return &pb.AudioStreamConfig{
+		Encoding:       encodingToProto(config.Encoding),
+		SampleRate:     int32(config.SampleRate), //nolint:gosec
+		Channels:       int32(config.Channels),   //nolint:gosec
+		Language:       config.Language,
+		ConversationId: conversationID,
+		Source:         config.Source,
 	}
-
-	log.Printf("[Web] Audio segment forwarded: conversation=%s, encoding=%s, size=%d bytes",
-		conversationID, config.Encoding, len(audioData))
 }
 
 // HandleAudioUpload handles POST /api/conversations/{id}/audio
@@ -168,7 +155,17 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 		config.Source = "upload"
 	}
 
-	h.handleAudioSegment(ctx, conversationID, session, &config, audioData)
+	// Send message metadata + audio config + full audio as a single chunk
+	h.handleAudioSegmentStart(ctx, conversationID, session, &config)
+	if h.audioForwarder != nil {
+		protoConfig := audioConfigToProto(&config, conversationID)
+		if err := h.audioForwarder.SendAudioConfig(conversationID, protoConfig); err != nil {
+			log.Printf("[Web] Error sending upload audio config: %v", err)
+		}
+		if err := h.audioForwarder.SendAudioChunk(conversationID, audioData, 1, true); err != nil {
+			log.Printf("[Web] Error sending upload audio data: %v", err)
+		}
+	}
 
 	resp := map[string]string{
 		"message_id": uuid.NewString(),

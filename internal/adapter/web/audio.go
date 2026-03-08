@@ -73,10 +73,11 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[Web] Audio WebSocket opened: conversation=%s, user=%s", conversationID, session.UserID)
 
-	// Read loop: config → binary chunks → audio.end, repeat
+	// Read loop: stream audio through to the agent in real time
 	var currentConfig *AudioConfig
-	var audioBuffer []byte
 	var chunkCount int
+	var totalBytes int
+	var segmentActive bool // true after config sent, false after audio.end
 
 	for {
 		msgType, data, err := ws.ReadMessage()
@@ -106,45 +107,69 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				currentConfig = &config
-				audioBuffer = audioBuffer[:0]
+				chunkCount = 0
+				totalBytes = 0
 				log.Printf("[Web] Audio config: encoding=%s, sampleRate=%d, source=%s",
 					config.Encoding, config.SampleRate, config.Source)
 
-			case "audio.end":
-				if currentConfig == nil {
-					log.Printf("[Web] Audio WS got audio.end without config")
-					continue
+				// Send message metadata to agent immediately so it has context
+				h.handleAudioSegmentStart(ctx, conversationID, session, &config)
+
+				// Send audio config to agent via gRPC
+				if h.audioForwarder != nil {
+					protoConfig := audioConfigToProto(&config, conversationID)
+					if err := h.audioForwarder.SendAudioConfig(conversationID, protoConfig); err != nil {
+						log.Printf("[Web] Error sending audio config to agent: %v", err)
+					}
 				}
-				if len(audioBuffer) == 0 {
-					log.Printf("[Web] Audio WS got audio.end with no data")
+				segmentActive = true
+
+			case "audio.end":
+				if !segmentActive {
+					log.Printf("[Web] Audio WS got audio.end without active segment")
 					continue
 				}
 
-				// Forward audio to message handler as an attachment-bearing message
+				// Send final chunk with done=true
+				if h.audioForwarder != nil {
+					if err := h.audioForwarder.SendAudioChunk(conversationID, nil, int64(chunkCount+1), true); err != nil {
+						log.Printf("[Web] Error sending audio end to agent: %v", err)
+					}
+				}
+
 				log.Printf("[Web] Audio segment complete: conversation=%s, chunks=%d, total=%d bytes, encoding=%s",
-					conversationID, chunkCount, len(audioBuffer), currentConfig.Encoding)
-				h.handleAudioSegment(ctx, conversationID, session, currentConfig, audioBuffer)
-				audioBuffer = audioBuffer[:0]
-				chunkCount = 0
+					conversationID, chunkCount, totalBytes, currentConfig.Encoding)
+				segmentActive = false
 
 			default:
 				log.Printf("[Web] Audio WS unknown control type: %s", ctrl.Type)
 			}
 
 		case websocket.BinaryMessage:
-			// Raw audio bytes
-			audioBuffer = append(audioBuffer, data...)
+			if !segmentActive {
+				log.Printf("[Web] Audio WS got binary data without active segment, dropping")
+				continue
+			}
+			// Stream audio chunk directly to agent
 			chunkCount++
+			totalBytes += len(data)
+			if h.audioForwarder != nil {
+				if err := h.audioForwarder.SendAudioChunk(conversationID, data, int64(chunkCount), false); err != nil {
+					log.Printf("[Web] Error streaming audio chunk to agent: %v", err)
+				}
+			}
 			if chunkCount%20 == 1 {
-				log.Printf("[Web] Audio WS receiving: conversation=%s, chunks=%d, buffered=%d bytes",
-					conversationID, chunkCount, len(audioBuffer))
+				log.Printf("[Web] Audio WS streaming: conversation=%s, chunks=%d, total=%d bytes",
+					conversationID, chunkCount, totalBytes)
 			}
 		}
 	}
 
-	// If there's buffered audio when the connection closes, process it
-	if currentConfig != nil && len(audioBuffer) > 0 {
-		h.handleAudioSegment(ctx, conversationID, session, currentConfig, audioBuffer)
+	// If segment was active when connection closed, send done signal
+	if segmentActive && h.audioForwarder != nil {
+		_ = h.audioForwarder.SendAudioChunk(conversationID, nil, int64(chunkCount+1), true)
+		log.Printf("[Web] Audio segment flushed on close: conversation=%s, chunks=%d, total=%d bytes",
+			conversationID, chunkCount, totalBytes)
 	}
 
 	log.Printf("[Web] Audio WebSocket handler done: conversation=%s", conversationID)

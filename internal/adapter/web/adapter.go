@@ -189,10 +189,10 @@ func (a *WebAdapter) SetMessageHandler(handler adapter.MessageHandler) {
 	}
 }
 
-// SetAudioHandler sets the handler for forwarding audio data to the agent
-func (a *WebAdapter) SetAudioHandler(handler adapter.AudioHandler) {
+// SetAudioForwarder sets the audio streaming forwarder
+func (a *WebAdapter) SetAudioForwarder(fwd adapter.AudioForwarder) {
 	if a.handlers != nil {
-		a.handlers.SetAudioHandler(handler)
+		a.handlers.SetAudioForwarder(fwd)
 	}
 }
 

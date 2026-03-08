@@ -264,9 +264,6 @@ func TestHandleAudioStream_WebSocket(t *testing.T) {
 	if pd["audio_encoding"] != "linear16" {
 		t.Errorf("expected encoding 'linear16', got %q", pd["audio_encoding"])
 	}
-	if pd["audio_size_bytes"] != "2048" {
-		t.Errorf("expected size '2048', got %q", pd["audio_size_bytes"])
-	}
 }
 
 func TestHandleAudioStream_MultipleSegments(t *testing.T) {

@@ -87,10 +87,10 @@ func main() {
 			log.Printf("Registering gRPC message handler for %s adapter...", name)
 			adpt.SetMessageHandler(grpcServer.HandleIncomingMessage)
 
-			// Wire audio handler for adapters that support it
+			// Wire audio forwarder for adapters that support it
 			if wa, ok := adpt.(*web.WebAdapter); ok {
-				wa.SetAudioHandler(grpcServer.HandleIncomingAudio)
-				log.Printf("Registered audio handler for %s adapter", name)
+				wa.SetAudioForwarder(grpcServer)
+				log.Printf("Registered audio forwarder for %s adapter", name)
 			}
 		}
 	}

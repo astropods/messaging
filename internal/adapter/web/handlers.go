@@ -19,7 +19,7 @@ type Handlers struct {
 	connManager      *ConnectionManager
 	sessionManager   SessionManager
 	msgHandler       adapter.MessageHandler
-	audioHandler     adapter.AudioHandler
+	audioForwarder   adapter.AudioForwarder
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
 }
@@ -39,9 +39,9 @@ func (h *Handlers) SetMessageHandler(handler adapter.MessageHandler) {
 	h.msgHandler = handler
 }
 
-// SetAudioHandler sets the audio forwarding handler
-func (h *Handlers) SetAudioHandler(handler adapter.AudioHandler) {
-	h.audioHandler = handler
+// SetAudioForwarder sets the audio streaming forwarder
+func (h *Handlers) SetAudioForwarder(fwd adapter.AudioForwarder) {
+	h.audioForwarder = fwd
 }
 
 // CreateConversationRequest represents a request to create a new conversation
