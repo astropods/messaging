@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -379,7 +378,7 @@ func TestHandleAudioStream_FlushOnClose(t *testing.T) {
 	}
 }
 
-func TestHandleAudioStream_ServerResponses(t *testing.T) {
+func TestHandleAudioStream_DoesNotReceiveBroadcasts(t *testing.T) {
 	handler := newTestHandlers(func(ctx context.Context, msg *pb.Message) error {
 		return nil
 	})
@@ -397,29 +396,68 @@ func TestHandleAudioStream_ServerResponses(t *testing.T) {
 	}
 	defer ws.Close()
 
-	// Give time for connection to register
+	// Give time for handler to start
 	time.Sleep(50 * time.Millisecond)
 
-	// Broadcast a status event to the conversation
+	// Broadcast a status event to the conversation — audio WS should NOT receive it
 	statusEvent := NewStatusEvent(&pb.StatusUpdate{
 		Status:        pb.StatusUpdate_THINKING,
 		CustomMessage: "Processing audio...",
 	})
 	handler.connManager.Broadcast("conv-resp", statusEvent)
 
-	// Read the response from WebSocket
-	ws.SetReadDeadline(time.Now().Add(2 * time.Second))
-	_, data, err := ws.ReadMessage()
-	if err != nil {
-		t.Fatalf("Failed to read WS response: %v", err)
+	// Attempt to read — should time out because the audio WS is ingest-only
+	ws.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, _, err = ws.ReadMessage()
+	if err == nil {
+		t.Fatal("expected no message on audio WS, but received one — audio WS should be ingest-only")
 	}
+}
 
-	var envelope map[string]json.RawMessage
-	if err := json.Unmarshal(data, &envelope); err != nil {
-		t.Fatalf("Failed to parse response: %v", err)
+func TestHandleAudioStream_ResponsesGoToSSE(t *testing.T) {
+	handler := newTestHandlers(func(ctx context.Context, msg *pb.Message) error {
+		return nil
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/conversations/{id}/audio", handler.HandleAudioStream)
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	// Open audio WS (ingest-only)
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/conversations/conv-sse/audio"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WebSocket dial failed: %v", err)
 	}
-	if string(envelope["event"]) != `"status"` {
-		t.Errorf("expected event 'status', got %s", envelope["event"])
+	defer ws.Close()
+
+	// Register a regular SSE connection for the same conversation
+	sseConn := &SSEConnection{
+		ID:             "sse-test",
+		ConversationID: "conv-sse",
+		EventChan:      make(chan SSEEvent, 10),
+		Done:           make(chan struct{}),
+	}
+	handler.connManager.Add(sseConn)
+	defer handler.connManager.Remove("conv-sse", sseConn.ID)
+
+	// Broadcast an event
+	statusEvent := NewStatusEvent(&pb.StatusUpdate{
+		Status:        pb.StatusUpdate_THINKING,
+		CustomMessage: "Thinking...",
+	})
+	handler.connManager.Broadcast("conv-sse", statusEvent)
+
+	// SSE connection should receive the event
+	select {
+	case event := <-sseConn.EventChan:
+		if event.Event != EventStatus {
+			t.Errorf("expected status event, got %q", event.Event)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("SSE connection did not receive broadcast event")
 	}
 }
 
@@ -488,8 +526,3 @@ func TestEncodingToMIME(t *testing.T) {
 	}
 }
 
-// Helpers
-func readAll(r io.Reader) []byte {
-	data, _ := io.ReadAll(r)
-	return data
-}

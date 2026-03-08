@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"sync/atomic"
 
 	"github.com/gorilla/websocket"
 )
@@ -36,12 +35,14 @@ var wsUpgrader = websocket.Upgrader{
 
 // HandleAudioStream handles WS /api/conversations/{id}/audio
 //
+// This is an ingest-only WebSocket for streaming audio from the client.
+// Agent responses flow through the regular conversation SSE stream, not this WebSocket.
+//
 // Protocol:
 //  1. Client sends JSON text frame: AudioConfig (type: "audio.config")
 //  2. Client sends binary frames: raw audio bytes
 //  3. Client sends JSON text frame: AudioControl (type: "audio.end") to end a segment
-//  4. Server processes segment and sends SSE-style JSON responses as text frames
-//  5. Client can repeat 1-3 for multiple segments on the same connection
+//  4. Client can repeat 1-3 for multiple segments on the same connection
 func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -72,47 +73,10 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[Web] Audio WebSocket opened: conversation=%s, user=%s", conversationID, session.UserID)
 
-	// Register an SSE connection so agent responses get routed back to this WebSocket
-	conn := &SSEConnection{
-		ID:             "ws-audio-" + conversationID,
-		ConversationID: conversationID,
-		EventChan:      make(chan SSEEvent, 100),
-		Done:           make(chan struct{}),
-	}
-	h.connManager.Add(conn)
-	defer h.connManager.Remove(conversationID, conn.ID)
-
-	// Forward SSE events as WebSocket text frames
-	var wsClosed atomic.Bool
-	go func() {
-		for {
-			select {
-			case <-conn.Done:
-				return
-			case event, ok := <-conn.EventChan:
-				if !ok {
-					return
-				}
-				if wsClosed.Load() {
-					return
-				}
-				// Send as JSON matching SSE format: {"event": "...", "data": ...}
-				envelope := map[string]any{
-					"event": event.Event,
-					"data":  json.RawMessage(event.Data),
-				}
-				msg, _ := json.Marshal(envelope)
-				if err := ws.WriteMessage(websocket.TextMessage, msg); err != nil {
-					log.Printf("[Web] Audio WS write error: %v", err)
-					return
-				}
-			}
-		}
-	}()
-
 	// Read loop: config → binary chunks → audio.end, repeat
 	var currentConfig *AudioConfig
 	var audioBuffer []byte
+	var chunkCount int
 
 	for {
 		msgType, data, err := ws.ReadMessage()
@@ -157,8 +121,11 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 				}
 
 				// Forward audio to message handler as an attachment-bearing message
+				log.Printf("[Web] Audio segment complete: conversation=%s, chunks=%d, total=%d bytes, encoding=%s",
+					conversationID, chunkCount, len(audioBuffer), currentConfig.Encoding)
 				h.handleAudioSegment(ctx, conversationID, session, currentConfig, audioBuffer)
 				audioBuffer = audioBuffer[:0]
+				chunkCount = 0
 
 			default:
 				log.Printf("[Web] Audio WS unknown control type: %s", ctrl.Type)
@@ -167,10 +134,13 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 		case websocket.BinaryMessage:
 			// Raw audio bytes
 			audioBuffer = append(audioBuffer, data...)
+			chunkCount++
+			if chunkCount%20 == 1 {
+				log.Printf("[Web] Audio WS receiving: conversation=%s, chunks=%d, buffered=%d bytes",
+					conversationID, chunkCount, len(audioBuffer))
+			}
 		}
 	}
-
-	wsClosed.Store(true)
 
 	// If there's buffered audio when the connection closes, process it
 	if currentConfig != nil && len(audioBuffer) > 0 {

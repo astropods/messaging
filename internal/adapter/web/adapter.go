@@ -189,6 +189,13 @@ func (a *WebAdapter) SetMessageHandler(handler adapter.MessageHandler) {
 	}
 }
 
+// SetAudioHandler sets the handler for forwarding audio data to the agent
+func (a *WebAdapter) SetAudioHandler(handler adapter.AudioHandler) {
+	if a.handlers != nil {
+		a.handlers.SetAudioHandler(handler)
+	}
+}
+
 // HandleAgentResponse processes responses from the agent and sends to SSE clients
 func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.AgentResponse) error {
 	conversationID := response.ConversationId
@@ -234,6 +241,12 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 	case *pb.AgentResponse_Error:
 		// Error response
 		event := NewErrorEvent(payload.Error)
+		a.connManager.Broadcast(conversationID, event)
+
+	case *pb.AgentResponse_Transcript:
+		// Audio transcript — update user message placeholder
+		log.Printf("[Web] Transcript received: conversation=%s, text=%q", conversationID, payload.Transcript.Text)
+		event := NewTranscriptEvent(payload.Transcript)
 		a.connManager.Broadcast(conversationID, event)
 
 	case *pb.AgentResponse_ThreadMetadata:

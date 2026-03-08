@@ -196,7 +196,7 @@ func (x ErrorResponse_ErrorCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ErrorResponse_ErrorCode.Descriptor instead.
 func (ErrorResponse_ErrorCode) EnumDescriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{11, 0}
+	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{12, 0}
 }
 
 // Agent's streamed response (agent → platform)
@@ -215,6 +215,9 @@ type AgentResponse struct {
 	//	*AgentResponse_ThreadMetadata
 	//	*AgentResponse_Error
 	//	*AgentResponse_ContextRequest
+	//	*AgentResponse_Transcript
+	//	*AgentResponse_AudioConfig
+	//	*AgentResponse_AudioChunk
 	Payload       isAgentResponse_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -334,6 +337,33 @@ func (x *AgentResponse) GetContextRequest() *ThreadHistoryRequest {
 	return nil
 }
 
+func (x *AgentResponse) GetTranscript() *Transcript {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentResponse_Transcript); ok {
+			return x.Transcript
+		}
+	}
+	return nil
+}
+
+func (x *AgentResponse) GetAudioConfig() *AudioStreamConfig {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentResponse_AudioConfig); ok {
+			return x.AudioConfig
+		}
+	}
+	return nil
+}
+
+func (x *AgentResponse) GetAudioChunk() *AudioChunk {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentResponse_AudioChunk); ok {
+			return x.AudioChunk
+		}
+	}
+	return nil
+}
+
 type isAgentResponse_Payload interface {
 	isAgentResponse_Payload()
 }
@@ -366,6 +396,18 @@ type AgentResponse_ContextRequest struct {
 	ContextRequest *ThreadHistoryRequest `protobuf:"bytes,9,opt,name=context_request,json=contextRequest,proto3,oneof"` // Request cached context (optional)
 }
 
+type AgentResponse_Transcript struct {
+	Transcript *Transcript `protobuf:"bytes,10,opt,name=transcript,proto3,oneof"` // Audio transcript (agent → platform)
+}
+
+type AgentResponse_AudioConfig struct {
+	AudioConfig *AudioStreamConfig `protobuf:"bytes,11,opt,name=audio_config,json=audioConfig,proto3,oneof"` // Audio session config (server → agent)
+}
+
+type AgentResponse_AudioChunk struct {
+	AudioChunk *AudioChunk `protobuf:"bytes,12,opt,name=audio_chunk,json=audioChunk,proto3,oneof"` // Audio data (server → agent)
+}
+
 func (*AgentResponse_IncomingMessage) isAgentResponse_Payload() {}
 
 func (*AgentResponse_Status) isAgentResponse_Payload() {}
@@ -379,6 +421,12 @@ func (*AgentResponse_ThreadMetadata) isAgentResponse_Payload() {}
 func (*AgentResponse_Error) isAgentResponse_Payload() {}
 
 func (*AgentResponse_ContextRequest) isAgentResponse_Payload() {}
+
+func (*AgentResponse_Transcript) isAgentResponse_Payload() {}
+
+func (*AgentResponse_AudioConfig) isAgentResponse_Payload() {}
+
+func (*AgentResponse_AudioChunk) isAgentResponse_Payload() {}
 
 // AI status indicators (loading states, typing)
 // Platform translation:
@@ -1081,6 +1129,68 @@ func (x *ThreadMetadata) GetCreateNew() bool {
 	return false
 }
 
+// Transcript of user audio input (agent → platform after STT)
+// Used to update a placeholder message with the actual transcribed text
+type Transcript struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`                            // Transcribed text
+	MessageId     string                 `protobuf:"bytes,2,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"` // User message ID to update (optional)
+	Language      string                 `protobuf:"bytes,3,opt,name=language,proto3" json:"language,omitempty"`                    // Detected language BCP-47 (optional)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Transcript) Reset() {
+	*x = Transcript{}
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Transcript) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Transcript) ProtoMessage() {}
+
+func (x *Transcript) ProtoReflect() protoreflect.Message {
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Transcript.ProtoReflect.Descriptor instead.
+func (*Transcript) Descriptor() ([]byte, []int) {
+	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *Transcript) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *Transcript) GetMessageId() string {
+	if x != nil {
+		return x.MessageId
+	}
+	return ""
+}
+
+func (x *Transcript) GetLanguage() string {
+	if x != nil {
+		return x.Language
+	}
+	return ""
+}
+
 // Error response from agent
 type ErrorResponse struct {
 	state         protoimpl.MessageState  `protogen:"open.v1"`
@@ -1094,7 +1204,7 @@ type ErrorResponse struct {
 
 func (x *ErrorResponse) Reset() {
 	*x = ErrorResponse{}
-	mi := &file_astro_messaging_v1_response_proto_msgTypes[11]
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1106,7 +1216,7 @@ func (x *ErrorResponse) String() string {
 func (*ErrorResponse) ProtoMessage() {}
 
 func (x *ErrorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_astro_messaging_v1_response_proto_msgTypes[11]
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1119,7 +1229,7 @@ func (x *ErrorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ErrorResponse.ProtoReflect.Descriptor instead.
 func (*ErrorResponse) Descriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{11}
+	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ErrorResponse) GetCode() ErrorResponse_ErrorCode {
@@ -1163,7 +1273,7 @@ type ThreadHistoryRequest struct {
 
 func (x *ThreadHistoryRequest) Reset() {
 	*x = ThreadHistoryRequest{}
-	mi := &file_astro_messaging_v1_response_proto_msgTypes[12]
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1175,7 +1285,7 @@ func (x *ThreadHistoryRequest) String() string {
 func (*ThreadHistoryRequest) ProtoMessage() {}
 
 func (x *ThreadHistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_astro_messaging_v1_response_proto_msgTypes[12]
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1188,7 +1298,7 @@ func (x *ThreadHistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThreadHistoryRequest.ProtoReflect.Descriptor instead.
 func (*ThreadHistoryRequest) Descriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{12}
+	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ThreadHistoryRequest) GetConversationId() string {
@@ -1231,7 +1341,7 @@ type ThreadHistoryResponse struct {
 
 func (x *ThreadHistoryResponse) Reset() {
 	*x = ThreadHistoryResponse{}
-	mi := &file_astro_messaging_v1_response_proto_msgTypes[13]
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1243,7 +1353,7 @@ func (x *ThreadHistoryResponse) String() string {
 func (*ThreadHistoryResponse) ProtoMessage() {}
 
 func (x *ThreadHistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_astro_messaging_v1_response_proto_msgTypes[13]
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1256,7 +1366,7 @@ func (x *ThreadHistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThreadHistoryResponse.ProtoReflect.Descriptor instead.
 func (*ThreadHistoryResponse) Descriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{13}
+	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ThreadHistoryResponse) GetConversationId() string {
@@ -1309,7 +1419,7 @@ type ThreadMessage struct {
 
 func (x *ThreadMessage) Reset() {
 	*x = ThreadMessage{}
-	mi := &file_astro_messaging_v1_response_proto_msgTypes[14]
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1321,7 +1431,7 @@ func (x *ThreadMessage) String() string {
 func (*ThreadMessage) ProtoMessage() {}
 
 func (x *ThreadMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_astro_messaging_v1_response_proto_msgTypes[14]
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1334,7 +1444,7 @@ func (x *ThreadMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThreadMessage.ProtoReflect.Descriptor instead.
 func (*ThreadMessage) Descriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{14}
+	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ThreadMessage) GetMessageId() string {
@@ -1426,7 +1536,7 @@ type SuggestedPrompts_Prompt struct {
 
 func (x *SuggestedPrompts_Prompt) Reset() {
 	*x = SuggestedPrompts_Prompt{}
-	mi := &file_astro_messaging_v1_response_proto_msgTypes[15]
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1438,7 +1548,7 @@ func (x *SuggestedPrompts_Prompt) String() string {
 func (*SuggestedPrompts_Prompt) ProtoMessage() {}
 
 func (x *SuggestedPrompts_Prompt) ProtoReflect() protoreflect.Message {
-	mi := &file_astro_messaging_v1_response_proto_msgTypes[15]
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1486,7 +1596,7 @@ var File_astro_messaging_v1_response_proto protoreflect.FileDescriptor
 
 const file_astro_messaging_v1_response_proto_rawDesc = "" +
 	"\n" +
-	"!astro/messaging/v1/response.proto\x12\x12astro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a astro/messaging/v1/message.proto\"\xc9\x04\n" +
+	"!astro/messaging/v1/response.proto\x12\x12astro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a astro/messaging/v1/message.proto\x1a\x1eastro/messaging/v1/audio.proto\"\x9a\x06\n" +
 	"\rAgentResponse\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x1f\n" +
 	"\vresponse_id\x18\x02 \x01(\tR\n" +
@@ -1497,7 +1607,14 @@ const file_astro_messaging_v1_response_proto_rawDesc = "" +
 	"\aprompts\x18\x06 \x01(\v2$.astro.messaging.v1.SuggestedPromptsH\x00R\aprompts\x12M\n" +
 	"\x0fthread_metadata\x18\a \x01(\v2\".astro.messaging.v1.ThreadMetadataH\x00R\x0ethreadMetadata\x129\n" +
 	"\x05error\x18\b \x01(\v2!.astro.messaging.v1.ErrorResponseH\x00R\x05error\x12S\n" +
-	"\x0fcontext_request\x18\t \x01(\v2(.astro.messaging.v1.ThreadHistoryRequestH\x00R\x0econtextRequestB\t\n" +
+	"\x0fcontext_request\x18\t \x01(\v2(.astro.messaging.v1.ThreadHistoryRequestH\x00R\x0econtextRequest\x12@\n" +
+	"\n" +
+	"transcript\x18\n" +
+	" \x01(\v2\x1e.astro.messaging.v1.TranscriptH\x00R\n" +
+	"transcript\x12J\n" +
+	"\faudio_config\x18\v \x01(\v2%.astro.messaging.v1.AudioStreamConfigH\x00R\vaudioConfig\x12A\n" +
+	"\vaudio_chunk\x18\f \x01(\v2\x1e.astro.messaging.v1.AudioChunkH\x00R\n" +
+	"audioChunkB\t\n" +
 	"\apayload\"\x86\x02\n" +
 	"\fStatusUpdate\x12?\n" +
 	"\x06status\x18\x01 \x01(\x0e2'.astro.messaging.v1.StatusUpdate.StatusR\x06status\x12%\n" +
@@ -1568,7 +1685,13 @@ const file_astro_messaging_v1_response_proto_rawDesc = "" +
 	"\tthread_id\x18\x01 \x01(\tR\bthreadId\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x1d\n" +
 	"\n" +
-	"create_new\x18\x03 \x01(\bR\tcreateNew\"\xbc\x02\n" +
+	"create_new\x18\x03 \x01(\bR\tcreateNew\"[\n" +
+	"\n" +
+	"Transcript\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\x02 \x01(\tR\tmessageId\x12\x1a\n" +
+	"\blanguage\x18\x03 \x01(\tR\blanguage\"\xbc\x02\n" +
 	"\rErrorResponse\x12?\n" +
 	"\x04code\x18\x01 \x01(\x0e2+.astro.messaging.v1.ErrorResponse.ErrorCodeR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x18\n" +
@@ -1630,7 +1753,7 @@ func file_astro_messaging_v1_response_proto_rawDescGZIP() []byte {
 }
 
 var file_astro_messaging_v1_response_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_astro_messaging_v1_response_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_astro_messaging_v1_response_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_astro_messaging_v1_response_proto_goTypes = []any{
 	(StatusUpdate_Status)(0),        // 0: astro.messaging.v1.StatusUpdate.Status
 	(ContentChunk_ChunkType)(0),     // 1: astro.messaging.v1.ContentChunk.ChunkType
@@ -1646,48 +1769,54 @@ var file_astro_messaging_v1_response_proto_goTypes = []any{
 	(*MessageOptions)(nil),          // 11: astro.messaging.v1.MessageOptions
 	(*SuggestedPrompts)(nil),        // 12: astro.messaging.v1.SuggestedPrompts
 	(*ThreadMetadata)(nil),          // 13: astro.messaging.v1.ThreadMetadata
-	(*ErrorResponse)(nil),           // 14: astro.messaging.v1.ErrorResponse
-	(*ThreadHistoryRequest)(nil),    // 15: astro.messaging.v1.ThreadHistoryRequest
-	(*ThreadHistoryResponse)(nil),   // 16: astro.messaging.v1.ThreadHistoryResponse
-	(*ThreadMessage)(nil),           // 17: astro.messaging.v1.ThreadMessage
-	(*SuggestedPrompts_Prompt)(nil), // 18: astro.messaging.v1.SuggestedPrompts.Prompt
-	nil,                             // 19: astro.messaging.v1.ThreadMessage.PlatformDataEntry
-	(*Message)(nil),                 // 20: astro.messaging.v1.Message
-	(*timestamppb.Timestamp)(nil),   // 21: google.protobuf.Timestamp
-	(*User)(nil),                    // 22: astro.messaging.v1.User
-	(*Attachment)(nil),              // 23: astro.messaging.v1.Attachment
+	(*Transcript)(nil),              // 14: astro.messaging.v1.Transcript
+	(*ErrorResponse)(nil),           // 15: astro.messaging.v1.ErrorResponse
+	(*ThreadHistoryRequest)(nil),    // 16: astro.messaging.v1.ThreadHistoryRequest
+	(*ThreadHistoryResponse)(nil),   // 17: astro.messaging.v1.ThreadHistoryResponse
+	(*ThreadMessage)(nil),           // 18: astro.messaging.v1.ThreadMessage
+	(*SuggestedPrompts_Prompt)(nil), // 19: astro.messaging.v1.SuggestedPrompts.Prompt
+	nil,                             // 20: astro.messaging.v1.ThreadMessage.PlatformDataEntry
+	(*Message)(nil),                 // 21: astro.messaging.v1.Message
+	(*AudioStreamConfig)(nil),       // 22: astro.messaging.v1.AudioStreamConfig
+	(*AudioChunk)(nil),              // 23: astro.messaging.v1.AudioChunk
+	(*timestamppb.Timestamp)(nil),   // 24: google.protobuf.Timestamp
+	(*User)(nil),                    // 25: astro.messaging.v1.User
+	(*Attachment)(nil),              // 26: astro.messaging.v1.Attachment
 }
 var file_astro_messaging_v1_response_proto_depIdxs = []int32{
-	20, // 0: astro.messaging.v1.AgentResponse.incoming_message:type_name -> astro.messaging.v1.Message
+	21, // 0: astro.messaging.v1.AgentResponse.incoming_message:type_name -> astro.messaging.v1.Message
 	4,  // 1: astro.messaging.v1.AgentResponse.status:type_name -> astro.messaging.v1.StatusUpdate
 	5,  // 2: astro.messaging.v1.AgentResponse.content:type_name -> astro.messaging.v1.ContentChunk
 	12, // 3: astro.messaging.v1.AgentResponse.prompts:type_name -> astro.messaging.v1.SuggestedPrompts
 	13, // 4: astro.messaging.v1.AgentResponse.thread_metadata:type_name -> astro.messaging.v1.ThreadMetadata
-	14, // 5: astro.messaging.v1.AgentResponse.error:type_name -> astro.messaging.v1.ErrorResponse
-	15, // 6: astro.messaging.v1.AgentResponse.context_request:type_name -> astro.messaging.v1.ThreadHistoryRequest
-	0,  // 7: astro.messaging.v1.StatusUpdate.status:type_name -> astro.messaging.v1.StatusUpdate.Status
-	1,  // 8: astro.messaging.v1.ContentChunk.type:type_name -> astro.messaging.v1.ContentChunk.ChunkType
-	6,  // 9: astro.messaging.v1.ContentChunk.attachments:type_name -> astro.messaging.v1.ResponseAttachment
-	11, // 10: astro.messaging.v1.ContentChunk.options:type_name -> astro.messaging.v1.MessageOptions
-	7,  // 11: astro.messaging.v1.ResponseAttachment.image:type_name -> astro.messaging.v1.ImageAttachment
-	8,  // 12: astro.messaging.v1.ResponseAttachment.file:type_name -> astro.messaging.v1.FileAttachment
-	9,  // 13: astro.messaging.v1.ResponseAttachment.card:type_name -> astro.messaging.v1.CardAttachment
-	10, // 14: astro.messaging.v1.ResponseAttachment.link:type_name -> astro.messaging.v1.LinkPreview
-	18, // 15: astro.messaging.v1.SuggestedPrompts.prompts:type_name -> astro.messaging.v1.SuggestedPrompts.Prompt
-	2,  // 16: astro.messaging.v1.ErrorResponse.code:type_name -> astro.messaging.v1.ErrorResponse.ErrorCode
-	17, // 17: astro.messaging.v1.ThreadHistoryResponse.messages:type_name -> astro.messaging.v1.ThreadMessage
-	21, // 18: astro.messaging.v1.ThreadHistoryResponse.fetched_at:type_name -> google.protobuf.Timestamp
-	22, // 19: astro.messaging.v1.ThreadMessage.user:type_name -> astro.messaging.v1.User
-	23, // 20: astro.messaging.v1.ThreadMessage.attachments:type_name -> astro.messaging.v1.Attachment
-	21, // 21: astro.messaging.v1.ThreadMessage.timestamp:type_name -> google.protobuf.Timestamp
-	21, // 22: astro.messaging.v1.ThreadMessage.edited_at:type_name -> google.protobuf.Timestamp
-	21, // 23: astro.messaging.v1.ThreadMessage.deleted_at:type_name -> google.protobuf.Timestamp
-	19, // 24: astro.messaging.v1.ThreadMessage.platform_data:type_name -> astro.messaging.v1.ThreadMessage.PlatformDataEntry
-	25, // [25:25] is the sub-list for method output_type
-	25, // [25:25] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	15, // 5: astro.messaging.v1.AgentResponse.error:type_name -> astro.messaging.v1.ErrorResponse
+	16, // 6: astro.messaging.v1.AgentResponse.context_request:type_name -> astro.messaging.v1.ThreadHistoryRequest
+	14, // 7: astro.messaging.v1.AgentResponse.transcript:type_name -> astro.messaging.v1.Transcript
+	22, // 8: astro.messaging.v1.AgentResponse.audio_config:type_name -> astro.messaging.v1.AudioStreamConfig
+	23, // 9: astro.messaging.v1.AgentResponse.audio_chunk:type_name -> astro.messaging.v1.AudioChunk
+	0,  // 10: astro.messaging.v1.StatusUpdate.status:type_name -> astro.messaging.v1.StatusUpdate.Status
+	1,  // 11: astro.messaging.v1.ContentChunk.type:type_name -> astro.messaging.v1.ContentChunk.ChunkType
+	6,  // 12: astro.messaging.v1.ContentChunk.attachments:type_name -> astro.messaging.v1.ResponseAttachment
+	11, // 13: astro.messaging.v1.ContentChunk.options:type_name -> astro.messaging.v1.MessageOptions
+	7,  // 14: astro.messaging.v1.ResponseAttachment.image:type_name -> astro.messaging.v1.ImageAttachment
+	8,  // 15: astro.messaging.v1.ResponseAttachment.file:type_name -> astro.messaging.v1.FileAttachment
+	9,  // 16: astro.messaging.v1.ResponseAttachment.card:type_name -> astro.messaging.v1.CardAttachment
+	10, // 17: astro.messaging.v1.ResponseAttachment.link:type_name -> astro.messaging.v1.LinkPreview
+	19, // 18: astro.messaging.v1.SuggestedPrompts.prompts:type_name -> astro.messaging.v1.SuggestedPrompts.Prompt
+	2,  // 19: astro.messaging.v1.ErrorResponse.code:type_name -> astro.messaging.v1.ErrorResponse.ErrorCode
+	18, // 20: astro.messaging.v1.ThreadHistoryResponse.messages:type_name -> astro.messaging.v1.ThreadMessage
+	24, // 21: astro.messaging.v1.ThreadHistoryResponse.fetched_at:type_name -> google.protobuf.Timestamp
+	25, // 22: astro.messaging.v1.ThreadMessage.user:type_name -> astro.messaging.v1.User
+	26, // 23: astro.messaging.v1.ThreadMessage.attachments:type_name -> astro.messaging.v1.Attachment
+	24, // 24: astro.messaging.v1.ThreadMessage.timestamp:type_name -> google.protobuf.Timestamp
+	24, // 25: astro.messaging.v1.ThreadMessage.edited_at:type_name -> google.protobuf.Timestamp
+	24, // 26: astro.messaging.v1.ThreadMessage.deleted_at:type_name -> google.protobuf.Timestamp
+	20, // 27: astro.messaging.v1.ThreadMessage.platform_data:type_name -> astro.messaging.v1.ThreadMessage.PlatformDataEntry
+	28, // [28:28] is the sub-list for method output_type
+	28, // [28:28] is the sub-list for method input_type
+	28, // [28:28] is the sub-list for extension type_name
+	28, // [28:28] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_astro_messaging_v1_response_proto_init() }
@@ -1696,6 +1825,7 @@ func file_astro_messaging_v1_response_proto_init() {
 		return
 	}
 	file_astro_messaging_v1_message_proto_init()
+	file_astro_messaging_v1_audio_proto_init()
 	file_astro_messaging_v1_response_proto_msgTypes[0].OneofWrappers = []any{
 		(*AgentResponse_IncomingMessage)(nil),
 		(*AgentResponse_Status)(nil),
@@ -1704,6 +1834,9 @@ func file_astro_messaging_v1_response_proto_init() {
 		(*AgentResponse_ThreadMetadata)(nil),
 		(*AgentResponse_Error)(nil),
 		(*AgentResponse_ContextRequest)(nil),
+		(*AgentResponse_Transcript)(nil),
+		(*AgentResponse_AudioConfig)(nil),
+		(*AgentResponse_AudioChunk)(nil),
 	}
 	file_astro_messaging_v1_response_proto_msgTypes[3].OneofWrappers = []any{
 		(*ResponseAttachment_Image)(nil),
@@ -1717,7 +1850,7 @@ func file_astro_messaging_v1_response_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_astro_messaging_v1_response_proto_rawDesc), len(file_astro_messaging_v1_response_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   17,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

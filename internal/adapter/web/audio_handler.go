@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
@@ -77,8 +78,6 @@ func (h *Handlers) handleAudioSegment(
 				Filename:  fmt.Sprintf("audio.%s", encodingToExtension(config.Encoding)),
 				SizeBytes: int64(len(audioData)),
 				MimeType:  mimeType,
-				// URL is empty — the audio bytes travel via the gRPC AudioStreamConfig/AudioChunk
-				// on the ConversationRequest stream. The attachment here is metadata only.
 			},
 		},
 	}
@@ -87,6 +86,24 @@ func (h *Handlers) handleAudioSegment(
 		log.Printf("[Web] Error forwarding audio message: %v", err)
 		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process audio")
 		return
+	}
+
+	// Forward audio bytes as AudioStreamConfig + AudioChunk on the gRPC stream
+	if h.audioHandler != nil {
+		protoEncoding := encodingToProto(config.Encoding)
+		audioConfig := &pb.AudioStreamConfig{
+			Encoding:       protoEncoding,
+			SampleRate:     int32(config.SampleRate), //nolint:gosec
+			Channels:       int32(config.Channels),   //nolint:gosec
+			Language:       config.Language,
+			ConversationId: conversationID,
+			Source:         config.Source,
+		}
+		if err := h.audioHandler(conversationID, audioConfig, audioData); err != nil {
+			log.Printf("[Web] Error forwarding audio data: %v", err)
+			h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to forward audio")
+			return
+		}
 	}
 
 	log.Printf("[Web] Audio segment forwarded: conversation=%s, encoding=%s, size=%d bytes",
@@ -187,6 +204,29 @@ func encodingToExtension(encoding string) string {
 		return "m4a"
 	default:
 		return "bin"
+	}
+}
+
+func encodingToProto(encoding string) pb.AudioEncoding {
+	switch strings.ToLower(encoding) {
+	case "linear16":
+		return pb.AudioEncoding_LINEAR16
+	case "mulaw":
+		return pb.AudioEncoding_MULAW
+	case "opus":
+		return pb.AudioEncoding_OPUS
+	case "mp3":
+		return pb.AudioEncoding_MP3
+	case "webm_opus":
+		return pb.AudioEncoding_WEBM_OPUS
+	case "ogg_opus":
+		return pb.AudioEncoding_OGG_OPUS
+	case "flac":
+		return pb.AudioEncoding_FLAC
+	case "aac":
+		return pb.AudioEncoding_AAC
+	default:
+		return pb.AudioEncoding_AUDIO_ENCODING_UNSPECIFIED
 	}
 }
 

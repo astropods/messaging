@@ -4,6 +4,7 @@ package astro.messaging.v1;
 
 import "google/protobuf/timestamp.proto";
 import "astro/messaging/v1/message.proto";
+import "astro/messaging/v1/audio.proto";
 
 option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
 
@@ -22,6 +23,9 @@ message AgentResponse {
     ThreadMetadata thread_metadata = 7;   // Thread title, creation
     ErrorResponse error = 8;              // Error during processing
     ThreadHistoryRequest context_request = 9;  // Request cached context (optional)
+    Transcript transcript = 10;           // Audio transcript (agent → platform)
+    AudioStreamConfig audio_config = 11;  // Audio session config (server → agent)
+    AudioChunk audio_chunk = 12;          // Audio data (server → agent)
   }
 }
 
@@ -142,6 +146,14 @@ message ThreadMetadata {
   string thread_id = 1;                   // Platform thread ID (if updating) (optional)
   string title = 2;                       // Thread title/subject (optional)
   bool create_new = 3;                    // Create new thread
+}
+
+// Transcript of user audio input (agent → platform after STT)
+// Used to update a placeholder message with the actual transcribed text
+message Transcript {
+  string text = 1;                        // Transcribed text
+  string message_id = 2;                  // User message ID to update (optional)
+  string language = 3;                    // Detected language BCP-47 (optional)
 }
 
 // Error response from agent
