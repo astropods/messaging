@@ -60,7 +60,7 @@ func TestHandleAudioUpload(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/conversations/{id}/audio", handler.HandleAudioUpload)
 
-	req := httptest.NewRequest("POST", "/api/conversations/conv-123/audio", &buf)
+	req := httptest.NewRequest(http.MethodPost, "/api/conversations/conv-123/audio", &buf)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	w := httptest.NewRecorder()
 
@@ -123,7 +123,7 @@ func TestHandleAudioUpload_MissingFile(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/conversations/{id}/audio", handler.HandleAudioUpload)
 
-	req := httptest.NewRequest("POST", "/api/conversations/conv-123/audio",
+	req := httptest.NewRequest(http.MethodPost, "/api/conversations/conv-123/audio",
 		strings.NewReader("not multipart"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -161,7 +161,7 @@ func TestHandleAudioUpload_InferEncoding(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/conversations/{id}/audio", handler.HandleAudioUpload)
 
-	req := httptest.NewRequest("POST", "/api/conversations/conv-456/audio", &buf)
+	req := httptest.NewRequest(http.MethodPost, "/api/conversations/conv-456/audio", &buf)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	w := httptest.NewRecorder()
 
@@ -203,7 +203,10 @@ func TestHandleAudioStream_WebSocket(t *testing.T) {
 
 	// Connect WebSocket
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/conversations/conv-ws-1/audio"
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	ws, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
 	if err != nil {
 		t.Fatalf("WebSocket dial failed: %v", err)
 	}
@@ -284,7 +287,10 @@ func TestHandleAudioStream_MultipleSegments(t *testing.T) {
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/conversations/conv-multi/audio"
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	ws, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
 	if err != nil {
 		t.Fatalf("WebSocket dial failed: %v", err)
 	}
@@ -338,7 +344,10 @@ func TestHandleAudioStream_FlushOnClose(t *testing.T) {
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/conversations/conv-flush/audio"
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	ws, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
 	if err != nil {
 		t.Fatalf("WebSocket dial failed: %v", err)
 	}
@@ -387,7 +396,10 @@ func TestHandleAudioStream_DoesNotReceiveBroadcasts(t *testing.T) {
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/conversations/conv-resp/audio"
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	ws, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
 	if err != nil {
 		t.Fatalf("WebSocket dial failed: %v", err)
 	}
@@ -424,7 +436,10 @@ func TestHandleAudioStream_ResponsesGoToSSE(t *testing.T) {
 
 	// Open audio WS (ingest-only)
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/conversations/conv-sse/audio"
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	ws, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
 	if err != nil {
 		t.Fatalf("WebSocket dial failed: %v", err)
 	}

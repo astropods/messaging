@@ -90,9 +90,9 @@ func (h *TwilioHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[Twilio] WebSocket upgrade failed: %v", err)
 		return
 	}
-	defer ws.Close()
+	defer func() { _ = ws.Close() }()
 
-	log.Printf("[Twilio] WebSocket connected from %s", r.RemoteAddr)
+	log.Printf("[Twilio] WebSocket connected from %s", r.RemoteAddr) //nolint:gosec // r.RemoteAddr is set by net/http, not user-controlled
 
 	var (
 		config         *AudioConfig
@@ -104,10 +104,9 @@ func (h *TwilioHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// Set read deadline for idle timeout (5 minutes)
-	ws.SetReadDeadline(time.Now().Add(5 * time.Minute))
+	_ = ws.SetReadDeadline(time.Now().Add(5 * time.Minute))
 	ws.SetPongHandler(func(string) error {
-		ws.SetReadDeadline(time.Now().Add(5 * time.Minute))
-		return nil
+		return ws.SetReadDeadline(time.Now().Add(5 * time.Minute))
 	})
 
 	for {
@@ -122,7 +121,7 @@ func (h *TwilioHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Reset read deadline on activity
-		ws.SetReadDeadline(time.Now().Add(5 * time.Minute))
+		_ = ws.SetReadDeadline(time.Now().Add(5 * time.Minute))
 
 		var msg twilioMessage
 		if err := json.Unmarshal(data, &msg); err != nil {

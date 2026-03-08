@@ -130,7 +130,7 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing 'audio' file field", http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	audioData, err := io.ReadAll(file)
 	if err != nil {
@@ -175,9 +175,11 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("[Web] Encode error on audio upload response: %v", err)
+	}
 
-	log.Printf("[Web] Audio upload accepted: conversation=%s, file=%s, size=%d",
+	log.Printf("[Web] Audio upload accepted: conversation=%s, file=%s, size=%d", //nolint:gosec // conversationID is internal, filename is logged for debugging
 		conversationID, header.Filename, len(audioData))
 }
 
