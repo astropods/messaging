@@ -31,6 +31,14 @@ type AudioHandler func(conversationID string, config AudioConfig, data []byte)
 // memory exhaustion from oversized binary frames.
 const maxAudioMessageSize = 1 * 1024 * 1024
 
+var wsUpgrader = websocket.Upgrader{
+	ReadBufferSize:  64 * 1024, // 64KB read buffer
+	WriteBufferSize: 4 * 1024,  // 4KB write buffer (ingest-only, minimal writes)
+	CheckOrigin: func(r *http.Request) bool {
+		return true // CORS handled by middleware
+	},
+}
+
 // HandleAudioStream handles WS /api/conversations/{id}/audio
 //
 // This is an ingest-only WebSocket for streaming audio from the client.
@@ -61,22 +69,8 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Upgrade to WebSocket with origin validation
-	upgrader := websocket.Upgrader{
-		ReadBufferSize:  64 * 1024, // 64KB read buffer
-		WriteBufferSize: 4 * 1024,  // 4KB write buffer (ingest-only, minimal writes)
-		CheckOrigin: func(req *http.Request) bool {
-			origin := req.Header.Get("Origin")
-			if origin == "" {
-				return true // non-browser clients don't send Origin
-			}
-			if h.originChecker != nil {
-				return h.originChecker(origin)
-			}
-			return true
-		},
-	}
-	ws, err := upgrader.Upgrade(w, r, nil)
+	// Upgrade to WebSocket
+	ws, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[Web] WebSocket upgrade failed: %v", err)
 		return
