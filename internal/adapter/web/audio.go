@@ -126,16 +126,17 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[Web] Audio config: encoding=%s, sampleRate=%d, source=%s",
 					config.Encoding, config.SampleRate, config.Source)
 
-				// Send message metadata to agent immediately so it has context
-				h.handleAudioSegmentStart(ctx, conversationID, session, &config)
-
-				// Send audio config to agent via gRPC
+				// Send audio config to agent first so it knows the format
+				// before the message metadata triggers processing
 				if h.audioForwarder != nil {
 					protoConfig := audioConfigToProto(&config, conversationID)
 					if err := h.audioForwarder.SendAudioConfig(conversationID, protoConfig); err != nil {
 						log.Printf("[Web] Error sending audio config to agent: %v", err)
 					}
 				}
+
+				// Then send message metadata so the agent has context
+				h.handleAudioSegmentStart(ctx, conversationID, session, &config)
 				segmentActive = true
 
 			case "audio.end":
