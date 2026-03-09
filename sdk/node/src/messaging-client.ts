@@ -621,30 +621,42 @@ export class ConversationStream extends EventEmitter {
    *   const transcript = await agent.voice.listen(audioStream, { filetype: 'webm' });
    */
   audioAsReadable(): ReadableStream<Uint8Array> {
+    const cleanup = () => {
+      this.removeListener('audioChunk', onChunk);
+      this.removeListener('end', onEnd);
+      this.removeListener('error', onError);
+    };
+
+    const onChunk = (chunk: AudioChunk) => {
+      if (chunk.done) {
+        cleanup();
+        try { controller.close(); } catch {}
+      } else {
+        controller.enqueue(new Uint8Array(chunk.data));
+      }
+    };
+
+    const onEnd = () => {
+      cleanup();
+      try { controller.close(); } catch {}
+    };
+
+    const onError = (err: Error) => {
+      cleanup();
+      try { controller.error(err); } catch {}
+    };
+
+    let controller: ReadableStreamDefaultController<Uint8Array>;
+
     return new ReadableStream({
-      start: (controller) => {
-        const onChunk = (chunk: AudioChunk) => {
-          if (chunk.done) {
-            this.removeListener('audioChunk', onChunk);
-            try { controller.close(); } catch {}
-          } else {
-            controller.enqueue(new Uint8Array(chunk.data));
-          }
-        };
-
-        const onEnd = () => {
-          this.removeListener('audioChunk', onChunk);
-          try { controller.close(); } catch {}
-        };
-
-        const onError = (err: Error) => {
-          this.removeListener('audioChunk', onChunk);
-          try { controller.error(err); } catch {}
-        };
-
+      start: (ctrl) => {
+        controller = ctrl;
         this.on('audioChunk', onChunk);
         this.once('end', onEnd);
         this.once('error', onError);
+      },
+      cancel: () => {
+        cleanup();
       },
     });
   }
