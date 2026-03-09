@@ -156,13 +156,15 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 		config.Source = "upload"
 	}
 
-	// Send message metadata + audio config + full audio as a single chunk
-	h.handleAudioSegmentStart(ctx, conversationID, session, &config)
+	// Send audio config first, then message metadata, then audio data
 	if h.audioForwarder != nil {
 		protoConfig := audioConfigToProto(&config, conversationID)
 		if err := h.audioForwarder.SendAudioConfig(conversationID, protoConfig); err != nil {
 			log.Printf("[Web] Error sending upload audio config: %v", err)
 		}
+	}
+	h.handleAudioSegmentStart(ctx, conversationID, session, &config)
+	if h.audioForwarder != nil {
 		if err := h.audioForwarder.SendAudioChunk(conversationID, audioData, 1, true); err != nil {
 			log.Printf("[Web] Error sending upload audio data: %v", err)
 		}
