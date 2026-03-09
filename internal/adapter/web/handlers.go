@@ -22,7 +22,6 @@ type Handlers struct {
 	audioForwarder   adapter.AudioForwarder
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
-	originChecker    func(origin string) bool
 }
 
 // NewHandlers creates a new Handlers instance

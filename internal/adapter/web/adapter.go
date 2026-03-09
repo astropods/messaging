@@ -85,7 +85,6 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 
 	// Initialize handlers
 	a.handlers = NewHandlers(a.connManager, a.sessionManager, a.threadStore, a.agentConfigStore)
-	a.handlers.originChecker = a.isOriginAllowed
 
 	log.Printf("[Web] Adapter initialized (listen: %s)", a.listenAddr)
 	return nil
