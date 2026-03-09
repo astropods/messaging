@@ -185,7 +185,7 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 				// before it receives the "[audio]" message that may trigger it to start
 				// listening for audio chunks.
 				if h.audioForwarder != nil {
-					protoConfig := audioConfigToProto(&config, conversationID)
+					protoConfig := audioConfigToProto(&config, conversationID, session.UserID)
 					if err := h.audioForwarder.SendAudioConfig(conversationID, protoConfig); err != nil {
 						log.Printf("[Web] Error sending audio config to agent: %v", err)
 					}

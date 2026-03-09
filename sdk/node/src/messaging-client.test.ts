@@ -1154,6 +1154,22 @@ describe('ConversationRequest serialization', () => {
     expect(written.audioConfig.source).toBe('browser');
   });
 
+  it('should include userId in audio config when provided', () => {
+    const mockGrpc = new MockGrpcStream();
+    const stream = new ConversationStream(() => mockGrpc);
+
+    stream.sendAudioConfig({
+      encoding: 'WEBM_OPUS',
+      sampleRate: 48000,
+      channels: 1,
+      conversationId: 'conv-1',
+      userId: 'user-123',
+    });
+
+    const written = mockGrpc.written[0];
+    expect(written.audioConfig.userId).toBe('user-123');
+  });
+
   it('should use "audio" key for audio chunk requests', () => {
     const mockGrpc = new MockGrpcStream();
     const stream = new ConversationStream(() => mockGrpc);
