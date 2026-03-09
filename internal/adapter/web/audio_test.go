@@ -358,7 +358,7 @@ func TestHandleAudioStream_FlushOnClose(t *testing.T) {
 		Encoding:   "mulaw",
 		SampleRate: 8000,
 		Channels:   1,
-		Source:     "twilio",
+		Source:     "browser",
 	}
 	configJSON, _ := json.Marshal(config)
 	ws.WriteMessage(websocket.TextMessage, configJSON)

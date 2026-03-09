@@ -119,7 +119,8 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse multipart form (max 25MB)
+	// Limit request body size to prevent memory exhaustion (25MB)
+	r.Body = http.MaxBytesReader(w, r.Body, 25<<20)
 	if err := r.ParseMultipartForm(25 << 20); err != nil {
 		http.Error(w, "Invalid multipart form", http.StatusBadRequest)
 		return

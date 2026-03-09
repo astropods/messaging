@@ -15,7 +15,7 @@ type AudioConfig struct {
 	SampleRate int    `json:"sample_rate"`
 	Channels   int    `json:"channels"`
 	Language   string `json:"language,omitempty"` // BCP-47
-	Source     string `json:"source,omitempty"`   // "browser", "twilio", "vonage", "mobile"
+	Source     string `json:"source,omitempty"`   // "browser"
 }
 
 // AudioControl is a JSON control message (e.g. audio.end)

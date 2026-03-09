@@ -8,7 +8,7 @@ option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
 enum AudioEncoding {
   AUDIO_ENCODING_UNSPECIFIED = 0;
   LINEAR16 = 1;          // PCM signed 16-bit little-endian (universal baseline)
-  MULAW = 2;             // G.711 mu-law (Twilio, telephony)
+  MULAW = 2;             // G.711 mu-law
   OPUS = 3;              // Raw Opus frames
   MP3 = 4;               // MP3 (batch uploads)
   WEBM_OPUS = 5;         // WebM container with Opus (browser MediaRecorder default)
@@ -26,7 +26,7 @@ message AudioStreamConfig {
   string conversation_id = 5;   // Links audio to an existing conversation
 
   // Source metadata — helps the agent pick the right STT config
-  string source = 6;            // "browser", "twilio", "vonage", "mobile", "sip"
+  string source = 6;            // "browser"
 }
 
 // A chunk of raw audio bytes

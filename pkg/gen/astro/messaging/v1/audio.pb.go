@@ -27,7 +27,7 @@ type AudioEncoding int32
 const (
 	AudioEncoding_AUDIO_ENCODING_UNSPECIFIED AudioEncoding = 0
 	AudioEncoding_LINEAR16                   AudioEncoding = 1 // PCM signed 16-bit little-endian (universal baseline)
-	AudioEncoding_MULAW                      AudioEncoding = 2 // G.711 mu-law (Twilio, telephony)
+	AudioEncoding_MULAW                      AudioEncoding = 2 // G.711 mu-law
 	AudioEncoding_OPUS                       AudioEncoding = 3 // Raw Opus frames
 	AudioEncoding_MP3                        AudioEncoding = 4 // MP3 (batch uploads)
 	AudioEncoding_WEBM_OPUS                  AudioEncoding = 5 // WebM container with Opus (browser MediaRecorder default)
@@ -98,7 +98,7 @@ type AudioStreamConfig struct {
 	Language       string                 `protobuf:"bytes,4,opt,name=language,proto3" json:"language,omitempty"`                                   // BCP-47 hint, e.g. "en-US" (optional)
 	ConversationId string                 `protobuf:"bytes,5,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"` // Links audio to an existing conversation
 	// Source metadata — helps the agent pick the right STT config
-	Source        string `protobuf:"bytes,6,opt,name=source,proto3" json:"source,omitempty"` // "browser", "twilio", "vonage", "mobile", "sip"
+	Source        string `protobuf:"bytes,6,opt,name=source,proto3" json:"source,omitempty"` // "browser"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

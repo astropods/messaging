@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"log"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -67,7 +68,7 @@ func (cm *ConnectionManager) Remove(conversationID, connID string) {
 		if conn, exists := conns[connID]; exists {
 			close(conn.Done)
 			delete(conns, connID)
-			log.Printf("[Web] SSE connection removed: id=%s, conversation=%s", connID, conversationID)
+			log.Printf("[Web] SSE connection removed: id=%s, conversation=%s", url.PathEscape(connID), url.PathEscape(conversationID))
 		}
 		if len(conns) == 0 {
 			delete(cm.connections, conversationID)
