@@ -102,8 +102,7 @@ func (h *Handlers) HandleCreateConversation(w http.ResponseWriter, r *http.Reque
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("[Web] Encode error on create conversation: %v", err)
 	}
-	log.Printf("[Web] Conversation created: id=%s, user=%s", conversationID, session.UserID) //nolint:gosec // both values are internal identifiers
-}
+	log.Printf("[Web] Conversation created: id=%s, user=%s", conversationID, session.UserID)}
 
 // HandleSendMessage handles POST /api/conversations/{id}/messages
 func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
@@ -196,8 +195,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("[Web] Encode error on send message: %v", err)
 	}
-	log.Printf("[Web] Message sent: id=%s, conversation=%s, user=%s", messageID, conversationID, session.UserID) //nolint:gosec // all values are internal identifiers
-}
+	log.Printf("[Web] Message sent: id=%s, conversation=%s, user=%s", messageID, conversationID, session.UserID)}
 
 // HandleStream handles GET /api/conversations/{id}/stream (SSE)
 func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
@@ -255,8 +253,7 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprint(w, connectedEvent.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
 	flusher.Flush()
 
-	log.Printf("[Web] SSE stream started: connection=%s, conversation=%s, user=%s", connID, conversationID, session.UserID) //nolint:gosec // all values are internal identifiers
-
+	log.Printf("[Web] SSE stream started: connection=%s, conversation=%s, user=%s", connID, conversationID, session.UserID)
 	// Event loop
 	for {
 		select {

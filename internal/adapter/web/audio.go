@@ -85,8 +85,7 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 
 	ws.SetReadLimit(maxAudioMessageSize)
 
-	log.Printf("[Web] Audio WebSocket opened: conversation=%s, user=%s", conversationID, session.UserID) //nolint:gosec // conversationID and UserID are internal identifiers, not user-controlled input
-
+	log.Printf("[Web] Audio WebSocket opened: conversation=%s, user=%s", conversationID, session.UserID)
 	// Read loop: stream audio through to the agent in real time
 	var currentConfig *AudioConfig
 	var chunkCount int
@@ -97,8 +96,7 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 		msgType, data, err := ws.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				log.Printf("[Web] Audio WebSocket closed normally: conversation=%s", conversationID) //nolint:gosec // conversationID is an internal identifier
-			} else {
+				log.Printf("[Web] Audio WebSocket closed normally: conversation=%s", conversationID)			} else {
 				log.Printf("[Web] Audio WebSocket read error: %v", err)
 			}
 			break
@@ -152,8 +150,7 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
-				log.Printf("[Web] Audio segment complete: conversation=%s, chunks=%d, total=%d bytes, encoding=%s", //nolint:gosec // conversationID is an internal identifier
-					conversationID, chunkCount, totalBytes, currentConfig.Encoding)
+				log.Printf("[Web] Audio segment complete: conversation=%s, chunks=%d, total=%d bytes, encoding=%s",					conversationID, chunkCount, totalBytes, currentConfig.Encoding)
 				segmentActive = false
 
 			default:
@@ -174,8 +171,7 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if chunkCount%20 == 1 {
-				log.Printf("[Web] Audio WS streaming: conversation=%s, chunks=%d, total=%d bytes", //nolint:gosec // conversationID is an internal identifier
-					conversationID, chunkCount, totalBytes)
+				log.Printf("[Web] Audio WS streaming: conversation=%s, chunks=%d, total=%d bytes",					conversationID, chunkCount, totalBytes)
 			}
 		}
 	}
@@ -183,9 +179,7 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 	// If segment was active when connection closed, send done signal
 	if segmentActive && h.audioForwarder != nil {
 		_ = h.audioForwarder.SendAudioChunk(conversationID, nil, int64(chunkCount+1), true)
-		log.Printf("[Web] Audio segment flushed on close: conversation=%s, chunks=%d, total=%d bytes", //nolint:gosec // conversationID is an internal identifier
-			conversationID, chunkCount, totalBytes)
+		log.Printf("[Web] Audio segment flushed on close: conversation=%s, chunks=%d, total=%d bytes",			conversationID, chunkCount, totalBytes)
 	}
 
-	log.Printf("[Web] Audio WebSocket handler done: conversation=%s", conversationID) //nolint:gosec // conversationID is an internal identifier
-}
+	log.Printf("[Web] Audio WebSocket handler done: conversation=%s", conversationID)}

@@ -185,8 +185,7 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[Web] Encode error on audio upload response: %v", err)
 	}
 
-	log.Printf("[Web] Audio upload accepted: conversation=%s, file=%s, size=%d", //nolint:gosec // conversationID is internal, filename is logged for debugging
-		conversationID, header.Filename, len(audioData))
+	log.Printf("[Web] Audio upload accepted: conversation=%s, file=%s, size=%d",		conversationID, header.Filename, len(audioData))
 }
 
 func encodingToExtension(encoding string) string {
