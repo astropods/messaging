@@ -580,10 +580,10 @@ export class ConversationStream extends EventEmitter {
    * Send a transcript of the user's audio input.
    * The platform uses this to update the placeholder message with actual text.
    */
-  sendTranscript(conversationId: string, text: string, messageId?: string): void {
+  sendTranscript(conversationId: string, text: string, messageId?: string, language?: string): void {
     this.sendAgentResponse({
       conversationId,
-      transcript: { text, messageId },
+      transcript: { text, messageId, language },
     });
   }
 
