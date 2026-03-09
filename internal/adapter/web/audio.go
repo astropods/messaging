@@ -131,7 +131,7 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 	// Cap individual frame size to prevent memory exhaustion
 	ws.SetReadLimit(maxAudioMessageSize)
 
-	log.Printf("[Web] Audio WebSocket opened: conversation=%s, user=%s", conversationID, session.UserID)
+	log.Printf("[Web] Audio WebSocket opened: conversation=%q, user=%q", conversationID, session.UserID)
 
 	// --- Read loop: stream audio through to the agent in real time ---
 	//
@@ -150,7 +150,7 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 		msgType, data, err := ws.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				log.Printf("[Web] Audio WebSocket closed normally: conversation=%s", conversationID)
+				log.Printf("[Web] Audio WebSocket closed normally: conversation=%q", conversationID)
 			} else {
 				log.Printf("[Web] Audio WebSocket read error: %v", err)
 			}
@@ -212,7 +212,7 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
-				log.Printf("[Web] Audio segment complete: conversation=%s, chunks=%d, total=%d bytes, encoding=%s",
+				log.Printf("[Web] Audio segment complete: conversation=%q, chunks=%d, total=%d bytes, encoding=%q",
 					conversationID, chunkCount, totalBytes, currentConfig.Encoding)
 				segmentActive = false
 
