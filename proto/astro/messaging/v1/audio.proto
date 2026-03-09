@@ -48,6 +48,10 @@ message AudioStreamConfig {
   // Source metadata — helps the agent pick the right STT config.
   // Examples: "browser", "twilio", "vonage", "mobile", "upload"
   string source = 6;
+
+  // Identity of the user sending audio, so the agent knows who is speaking
+  // without relying solely on the placeholder "[audio]" message.
+  string user_id = 7;
 }
 
 // A chunk of raw audio bytes in the encoding specified by AudioStreamConfig.

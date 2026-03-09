@@ -473,6 +473,142 @@ func TestHandleAudioStream_ResponsesGoToSSE(t *testing.T) {
 	}
 }
 
+func TestAudioConfigToProto_IncludesUserID(t *testing.T) {
+	config := &AudioConfig{
+		Encoding:   "webm_opus",
+		SampleRate: 48000,
+		Channels:   1,
+		Language:   "en-US",
+		Source:     "browser",
+	}
+
+	proto := audioConfigToProto(config, "conv-123", "user-456")
+
+	if proto.UserId != "user-456" {
+		t.Errorf("expected UserId 'user-456', got %q", proto.UserId)
+	}
+	if proto.ConversationId != "conv-123" {
+		t.Errorf("expected ConversationId 'conv-123', got %q", proto.ConversationId)
+	}
+	if proto.Encoding != pb.AudioEncoding_WEBM_OPUS {
+		t.Errorf("expected WEBM_OPUS, got %v", proto.Encoding)
+	}
+}
+
+func TestAudioConfigToProto_EmptyUserID(t *testing.T) {
+	config := &AudioConfig{
+		Encoding:   "mulaw",
+		SampleRate: 8000,
+		Channels:   1,
+	}
+
+	proto := audioConfigToProto(config, "conv-1", "")
+
+	if proto.UserId != "" {
+		t.Errorf("expected empty UserId, got %q", proto.UserId)
+	}
+}
+
+func TestHandleAudioStream_ForwardsUserIDInConfig(t *testing.T) {
+	fwd := &mockAudioForwarder{}
+
+	// Use a custom session manager that returns a specific user ID
+	cm := NewConnectionManager(30 * time.Second)
+	handler := &Handlers{
+		connManager:    cm,
+		sessionManager: &stubSessionManager{userID: "ws-user-789"},
+		audioForwarder: fwd,
+	}
+	handler.msgHandler = func(ctx context.Context, msg *pb.Message) error {
+		return nil
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/conversations/{id}/audio", handler.HandleAudioStream)
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/conversations/conv-uid/audio"
+	ws, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
+	if err != nil {
+		t.Fatalf("WebSocket dial failed: %v", err)
+	}
+	defer ws.Close()
+
+	configJSON, _ := json.Marshal(AudioConfig{
+		Type: "audio.config", Encoding: "linear16", SampleRate: 16000, Channels: 1,
+	})
+	ws.WriteMessage(websocket.TextMessage, configJSON)
+
+	time.Sleep(100 * time.Millisecond)
+
+	calls := fwd.getCalls()
+	if len(calls) < 1 {
+		t.Fatal("expected at least 1 forwarder call")
+	}
+	if calls[0].method != "config" {
+		t.Fatalf("first call should be config, got %q", calls[0].method)
+	}
+	if calls[0].config.UserId != "ws-user-789" {
+		t.Errorf("expected UserId 'ws-user-789' in audio config, got %q", calls[0].config.UserId)
+	}
+}
+
+func TestHandleAudioUpload_ForwardsUserIDInConfig(t *testing.T) {
+	fwd := &mockAudioForwarder{}
+
+	cm := NewConnectionManager(30 * time.Second)
+	handler := &Handlers{
+		connManager:    cm,
+		sessionManager: &stubSessionManager{userID: "upload-user-321"},
+		audioForwarder: fwd,
+	}
+	handler.msgHandler = func(ctx context.Context, msg *pb.Message) error {
+		return nil
+	}
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	part, _ := writer.CreateFormFile("audio", "recording.webm")
+	part.Write([]byte("fake-audio"))
+	writer.WriteField("encoding", "webm_opus")
+	writer.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/conversations/{id}/audio", handler.HandleAudioUpload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/conversations/conv-upload-uid/audio", &buf)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	calls := fwd.getCalls()
+	if len(calls) < 1 {
+		t.Fatal("expected at least 1 forwarder call")
+	}
+	if calls[0].config.UserId != "upload-user-321" {
+		t.Errorf("expected UserId 'upload-user-321' in audio config, got %q", calls[0].config.UserId)
+	}
+}
+
+// stubSessionManager returns a session with a configurable UserID.
+type stubSessionManager struct {
+	userID string
+}
+
+func (s *stubSessionManager) ValidateRequest(ctx context.Context, r *http.Request) (*Session, error) {
+	return &Session{UserID: s.userID, Username: "testuser"}, nil
+}
+
 func TestEncodingToExtension(t *testing.T) {
 	tests := []struct {
 		encoding string

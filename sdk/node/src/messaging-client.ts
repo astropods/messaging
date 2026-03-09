@@ -201,6 +201,7 @@ export interface AudioStreamConfig {
   language?: string;          // BCP-47 hint for STT (e.g. 'en-US')
   conversationId: string;     // Links audio to the conversation
   source?: string;            // Origin: 'browser', 'twilio', 'mobile', etc.
+  userId?: string;            // Identity of the user sending audio
 }
 
 /**

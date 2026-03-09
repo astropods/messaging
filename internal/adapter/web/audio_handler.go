@@ -119,7 +119,7 @@ func (h *Handlers) handleAudioSegmentStart(
 
 // audioConfigToProto converts a WebSocket-layer AudioConfig (JSON-based) to a
 // protobuf AudioStreamConfig that can be sent over the gRPC stream to the agent.
-func audioConfigToProto(config *AudioConfig, conversationID string) *pb.AudioStreamConfig {
+func audioConfigToProto(config *AudioConfig, conversationID string, userID string) *pb.AudioStreamConfig {
 	return &pb.AudioStreamConfig{
 		Encoding:       encodingToProto(config.Encoding),
 		SampleRate:     int32(config.SampleRate), //nolint:gosec
@@ -127,6 +127,7 @@ func audioConfigToProto(config *AudioConfig, conversationID string) *pb.AudioStr
 		Language:       config.Language,
 		ConversationId: conversationID,
 		Source:         config.Source,
+		UserId:         userID,
 	}
 }
 
@@ -208,7 +209,7 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 	//   2. "[audio]" message → gives agent user context
 	//   3. AudioChunk(done=true) → the complete audio data in one chunk
 	if h.audioForwarder != nil {
-		protoConfig := audioConfigToProto(&config, conversationID)
+		protoConfig := audioConfigToProto(&config, conversationID, session.UserID)
 		if err := h.audioForwarder.SendAudioConfig(conversationID, protoConfig); err != nil {
 			log.Printf("[Web] Error sending upload audio config: %v", err)
 		}
