@@ -36,7 +36,7 @@ func SlackCapabilities(aiFeatures bool) AdapterCapabilities {
 		MaxContentLength:         4000,
 		SupportsReactions:        true,
 		SupportsCards:            true, // Block Kit support (future)
-		SupportsAudioInput:      false,
+		SupportsAudioInput:       false,
 	}
 }
 
@@ -52,7 +52,7 @@ func WebCapabilities() AdapterCapabilities {
 		MaxContentLength:         0,     // No content length limit
 		SupportsReactions:        false, // No reactions
 		SupportsCards:            true,  // Rich cards/embeds
-		SupportsAudioInput:      true,
-		AudioEncodings:          []string{"webm_opus", "opus", "linear16"},
+		SupportsAudioInput:       true,
+		AudioEncodings:           []string{"webm_opus", "opus", "linear16"},
 	}
 }
