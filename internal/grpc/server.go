@@ -357,9 +357,9 @@ func (s *Server) HandleIncomingMessage(ctx context.Context, msg *pb.Message) err
 // SendAudioConfig sends an AudioStreamConfig to the agent via the gRPC stream.
 // Must be called after HandleIncomingMessage so the agent has message context.
 func (s *Server) SendAudioConfig(conversationID string, config *pb.AudioStreamConfig) error {
-	stream := s.findAgentStream()
+	stream := s.findStreamForConversation(conversationID)
 	if stream == nil {
-		return fmt.Errorf("no active agent stream available")
+		return fmt.Errorf("no active agent stream available for conversation: %s", conversationID)
 	}
 	log.Printf("[gRPC] Sending audio config to agent: conversation=%s, encoding=%s, sampleRate=%d",
 		conversationID, config.Encoding.String(), config.SampleRate)
@@ -371,9 +371,9 @@ func (s *Server) SendAudioConfig(conversationID string, config *pb.AudioStreamCo
 
 // SendAudioChunk sends a chunk of audio data to the agent via the gRPC stream.
 func (s *Server) SendAudioChunk(conversationID string, data []byte, sequence int64, done bool) error {
-	stream := s.findAgentStream()
+	stream := s.findStreamForConversation(conversationID)
 	if stream == nil {
-		return fmt.Errorf("no active agent stream available")
+		return fmt.Errorf("no active agent stream available for conversation: %s", conversationID)
 	}
 	return stream.stream.Send(&pb.AgentResponse{
 		ConversationId: conversationID,
@@ -387,12 +387,23 @@ func (s *Server) SendAudioChunk(conversationID string, data []byte, sequence int
 	})
 }
 
-func (s *Server) findAgentStream() *conversationStream {
+// findStreamForConversation looks up an agent stream by conversation ID.
+// Falls back to a generic "agent-stream" if no conversation-specific stream exists,
+// matching the behavior of HandleIncomingMessage.
+func (s *Server) findStreamForConversation(conversationID string) *conversationStream {
 	s.streamsMu.RLock()
 	defer s.streamsMu.RUnlock()
-	for _, cs := range s.streams {
+
+	// Try conversation-specific stream first
+	if cs, ok := s.streams[conversationID]; ok {
 		return cs
 	}
+
+	// Fall back to the generic agent stream
+	if cs, ok := s.streams["agent-stream"]; ok {
+		return cs
+	}
+
 	return nil
 }
 
