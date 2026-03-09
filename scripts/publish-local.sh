@@ -11,7 +11,7 @@ PASS="local"
 TOKEN=$(curl -sf -XPUT \
   -H "Content-type: application/json" \
   -d "{\"name\":\"$USER\",\"password\":\"$PASS\"}" \
-  "$REGISTRY/-/user/org.couchdb.user:$USER" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+  "$REGISTRY/-/user/org.couchdb.user:$USER" | jq -r '.token')
 
 if [ -z "$TOKEN" ]; then
   echo "Error: could not get auth token from Verdaccio at $REGISTRY" >&2
