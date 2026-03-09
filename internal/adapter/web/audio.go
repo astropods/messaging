@@ -27,7 +27,13 @@ type AudioControl struct {
 // data is the accumulated audio bytes for this segment. Called in a goroutine.
 type AudioHandler func(conversationID string, config AudioConfig, data []byte)
 
+// maxAudioMessageSize limits individual WebSocket frames to 1MB to prevent
+// memory exhaustion from oversized binary frames.
+const maxAudioMessageSize = 1 * 1024 * 1024
+
 var wsUpgrader = websocket.Upgrader{
+	ReadBufferSize:  64 * 1024, // 64KB read buffer
+	WriteBufferSize: 4 * 1024,  // 4KB write buffer (ingest-only, minimal writes)
 	CheckOrigin: func(r *http.Request) bool {
 		return true // CORS handled by middleware
 	},
@@ -70,6 +76,8 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = ws.Close() }()
+
+	ws.SetReadLimit(maxAudioMessageSize)
 
 	log.Printf("[Web] Audio WebSocket opened: conversation=%s, user=%s", conversationID, session.UserID) //nolint:gosec // conversationID and UserID are internal identifiers, not user-controlled input
 
