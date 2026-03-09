@@ -29,15 +29,16 @@ var encodingToMIME = map[string]string{
 
 // handleAudioSegmentStart sends the audio message metadata to the agent.
 // Called on audio.config before any audio chunks are streamed.
+// Returns the generated message ID.
 func (h *Handlers) handleAudioSegmentStart(
 	ctx context.Context,
 	conversationID string,
 	session *Session,
 	config *AudioConfig,
-) {
+) string {
 	if h.msgHandler == nil {
 		log.Printf("[Web] No message handler registered, dropping audio segment start")
-		return
+		return ""
 	}
 
 	messageID := uuid.NewString()
@@ -83,6 +84,8 @@ func (h *Handlers) handleAudioSegmentStart(
 		log.Printf("[Web] Error forwarding audio message: %v", err)
 		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process audio")
 	}
+
+	return messageID
 }
 
 // audioConfigToProto converts a WebSocket AudioConfig to a proto AudioStreamConfig.
@@ -163,7 +166,7 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[Web] Error sending upload audio config: %v", err)
 		}
 	}
-	h.handleAudioSegmentStart(ctx, conversationID, session, &config)
+	messageID := h.handleAudioSegmentStart(ctx, conversationID, session, &config)
 	if h.audioForwarder != nil {
 		if err := h.audioForwarder.SendAudioChunk(conversationID, audioData, 1, true); err != nil {
 			log.Printf("[Web] Error sending upload audio data: %v", err)
@@ -171,7 +174,7 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]string{
-		"message_id": uuid.NewString(),
+		"message_id": messageID,
 		"status":     "accepted",
 		"size_bytes": fmt.Sprintf("%d", len(audioData)),
 	}
