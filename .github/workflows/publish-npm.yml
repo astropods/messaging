@@ -13,10 +13,17 @@ jobs:
       id-token: write
 
     steps:
+      - name: Generate app token
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -47,15 +54,28 @@ jobs:
         run: bun test
         working-directory: sdk/node
 
+      - name: Check if version is already published
+        id: check-published
+        run: |
+          if npm view "@astropods/messaging@${{ env.VERSION }}" version 2>/dev/null; then
+            echo "published=true" >> $GITHUB_OUTPUT
+            echo "::notice::v${{ env.VERSION }} is already published on npm"
+          else
+            echo "published=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Publish
+        if: steps.check-published.outputs.published == 'false'
         run: npm publish --access public
         working-directory: sdk/node
 
       - name: Commit and tag release
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "astro-ci-bot[bot]"
+          git config user.email "${{ secrets.CI_APP_ID }}+astro-ci-bot[bot]@users.noreply.github.com"
           git add sdk/node/package.json
           git diff --staged --quiet || git commit -m "chore: release v${{ env.VERSION }}"
-          git tag "v${{ env.VERSION }}" --force
+          if ! git rev-parse "v${{ env.VERSION }}" >/dev/null 2>&1; then
+            git tag "v${{ env.VERSION }}"
+          fi
           git push origin HEAD --tags --force-with-lease
