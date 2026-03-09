@@ -33,9 +33,27 @@ type Adapter interface {
 // It should forward the message to the gRPC server which sends it to the agent.
 type MessageHandler func(ctx context.Context, msg *pb.Message) error
 
-// AudioForwarder streams audio data to the agent via the gRPC stream.
+// AudioForwarder streams audio data to the agent via the gRPC bidirectional stream.
+//
+// This interface decouples the WebSocket audio ingestion (web adapter) from the
+// gRPC transport layer. The web adapter calls these methods as audio arrives;
+// the gRPC server implements them by wrapping the data in AgentResponse protos
+// and sending them on the active agent stream.
+//
+// Data flow:
+//
+//	WebSocket (audio.go) → AudioForwarder → gRPC stream → Agent SDK (Node)
+//
+// The agent SDK receives these as 'audioConfig' and 'audioChunk' events on
+// the ConversationStream, and can pipe them to Mastra's voice.listen().
 type AudioForwarder interface {
+	// SendAudioConfig sends the audio format configuration at the start of a segment.
+	// Must be called before SendAudioChunk so the agent knows how to decode the bytes.
 	SendAudioConfig(conversationID string, config *pb.AudioStreamConfig) error
+
+	// SendAudioChunk sends a chunk of raw audio bytes to the agent.
+	// sequence is a monotonically increasing counter for ordering.
+	// done=true signals end of the current audio segment (agent should run STT).
 	SendAudioChunk(conversationID string, data []byte, sequence int64, done bool) error
 }
 

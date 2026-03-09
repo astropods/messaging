@@ -1,45 +1,71 @@
+// Audio streaming types for the messaging system.
+//
+// These types enable raw audio input from any frontend (browser, phone, mobile app)
+// to be streamed through the messaging server to an agent. The messaging system is
+// a pass-through — it does NOT perform speech-to-text, transcoding, or voice activity
+// detection. The agent handles STT via Mastra's voice provider abstraction.
+//
+// Data flow:
+//   Client (mic) → WebSocket → Server → gRPC (these types) → Agent → Mastra voice.listen()
+//
+// Two ways audio enters the system:
+//   1. ProcessAudioStream RPC: dedicated audio-only streaming (AudioStreamRequest)
+//   2. ProcessConversation RPC: audio mixed into the bidi stream (ConversationRequest.audio_config/audio)
+//
+// Both converge on the same types: AudioStreamConfig describes the format,
+// AudioChunk carries the bytes, and done=true signals end of an utterance.
+
 syntax = "proto3";
 
 package astro.messaging.v1;
 
 option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
 
-// Audio encoding format — covers browser, telephony, and mobile sources
+// Audio encoding format — covers browser, telephony, and mobile sources.
+// The agent uses this to configure the STT provider (e.g. Whisper, Deepgram).
 enum AudioEncoding {
   AUDIO_ENCODING_UNSPECIFIED = 0;
-  LINEAR16 = 1;          // PCM signed 16-bit little-endian (universal baseline)
-  MULAW = 2;             // G.711 mu-law
-  OPUS = 3;              // Raw Opus frames
-  MP3 = 4;               // MP3 (batch uploads)
-  WEBM_OPUS = 5;         // WebM container with Opus (browser MediaRecorder default)
-  OGG_OPUS = 6;          // OGG container with Opus
-  FLAC = 7;              // FLAC lossless
-  AAC = 8;               // AAC (iOS native recording)
+  LINEAR16 = 1;          // PCM signed 16-bit little-endian — universal baseline, any platform
+  MULAW = 2;             // G.711 mu-law — Twilio and traditional telephony (8kHz)
+  OPUS = 3;              // Raw Opus frames — low-latency codec
+  MP3 = 4;               // MP3 — batch uploads, pre-recorded audio
+  WEBM_OPUS = 5;         // WebM container with Opus — browser MediaRecorder default
+  OGG_OPUS = 6;          // OGG container with Opus — Firefox MediaRecorder
+  FLAC = 7;              // FLAC lossless — high-quality uploads
+  AAC = 8;               // AAC — iOS native recording
 }
 
-// Sent once at the start of an audio stream to configure the session
+// Sent once at the start of an audio segment to tell the agent what format
+// the subsequent AudioChunk bytes are in. Without this, the agent can't
+// decode the raw bytes.
 message AudioStreamConfig {
-  AudioEncoding encoding = 1;
-  int32 sample_rate = 2;        // Hz: 8000, 16000, 24000, 44100, 48000
-  int32 channels = 3;           // 1 = mono (speech default), 2 = stereo
-  string language = 4;          // BCP-47 hint, e.g. "en-US" (optional)
-  string conversation_id = 5;   // Links audio to an existing conversation
+  AudioEncoding encoding = 1;     // What codec the audio bytes use
+  int32 sample_rate = 2;          // Hz: 8000 (telephony), 16000 (speech), 48000 (browser)
+  int32 channels = 3;             // 1 = mono (speech default), 2 = stereo
+  string language = 4;            // BCP-47 hint for STT, e.g. "en-US" (optional)
+  string conversation_id = 5;     // Links this audio to an existing conversation
 
-  // Source metadata — helps the agent pick the right STT config
-  string source = 6;            // "browser"
+  // Source metadata — helps the agent pick the right STT config.
+  // Examples: "browser", "twilio", "vonage", "mobile", "upload"
+  string source = 6;
 }
 
-// A chunk of raw audio bytes
+// A chunk of raw audio bytes in the encoding specified by AudioStreamConfig.
+//
+// Chunks arrive in order during a segment. When done=true, the segment is
+// complete and the agent should run STT on all accumulated chunks.
+// The data field may be empty on the final done=true chunk.
 message AudioChunk {
-  bytes data = 1;               // Raw audio bytes
-  int64 sequence = 2;           // Monotonic sequence number for ordering
-  bool done = 3;                // Signals end of current audio segment
+  bytes data = 1;                 // Raw audio bytes (pass-through, no transcoding)
+  int64 sequence = 2;             // Monotonic sequence number for ordering
+  bool done = 3;                  // true = end of segment, process accumulated audio
 }
 
-// Wrapper for the audio streaming RPC
+// Wrapper for the ProcessAudioStream RPC (dedicated audio streaming).
+// The first message MUST be config, all subsequent messages are audio chunks.
 message AudioStreamRequest {
   oneof request {
-    AudioStreamConfig config = 1;    // First message: session setup
-    AudioChunk audio = 2;            // Subsequent: audio data
+    AudioStreamConfig config = 1;    // First message: tells agent the audio format
+    AudioChunk audio = 2;            // Subsequent: raw audio bytes
   }
 }

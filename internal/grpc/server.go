@@ -354,8 +354,17 @@ func (s *Server) HandleIncomingMessage(ctx context.Context, msg *pb.Message) err
 	return nil
 }
 
-// SendAudioConfig sends an AudioStreamConfig to the agent via the gRPC stream.
-// Must be called after HandleIncomingMessage so the agent has message context.
+// SendAudioConfig sends an AudioStreamConfig to the agent via the gRPC bidirectional stream.
+//
+// This implements the adapter.AudioForwarder interface. It wraps the config in an
+// AgentResponse proto (using the audio_config oneof field) and sends it on the
+// active agent stream for this conversation.
+//
+// Note: AgentResponse is used for both directions on the bidi stream — it carries
+// agent→platform responses AND server→agent forwarded data (incoming messages,
+// audio). The name is a historical artifact; the proto comment documents this.
+//
+// Must be called before SendAudioChunk so the agent knows the encoding format.
 func (s *Server) SendAudioConfig(conversationID string, config *pb.AudioStreamConfig) error {
 	stream := s.findStreamForConversation(conversationID)
 	if stream == nil {
@@ -369,7 +378,19 @@ func (s *Server) SendAudioConfig(conversationID string, config *pb.AudioStreamCo
 	})
 }
 
-// SendAudioChunk sends a chunk of audio data to the agent via the gRPC stream.
+// SendAudioChunk sends a chunk of raw audio bytes to the agent via the gRPC stream.
+//
+// Each chunk carries a monotonic sequence number for ordering and a done flag.
+// When done=true, the agent should treat this as end-of-segment and run STT
+// on all accumulated audio. The data field may be nil/empty for the final chunk.
+//
+// Typical call pattern from the WebSocket handler:
+//
+//	SendAudioConfig(...)           // encoding, sample rate, etc.
+//	SendAudioChunk(data, 1, false) // first audio frame
+//	SendAudioChunk(data, 2, false) // second audio frame
+//	...
+//	SendAudioChunk(nil, N, true)   // end of segment — agent runs STT
 func (s *Server) SendAudioChunk(conversationID string, data []byte, sequence int64, done bool) error {
 	stream := s.findStreamForConversation(conversationID)
 	if stream == nil {
@@ -387,9 +408,15 @@ func (s *Server) SendAudioChunk(conversationID string, data []byte, sequence int
 	})
 }
 
-// findStreamForConversation looks up an agent stream by conversation ID.
-// Falls back to a generic "agent-stream" if no conversation-specific stream exists,
-// matching the behavior of HandleIncomingMessage.
+// findStreamForConversation looks up the gRPC agent stream for a given conversation.
+//
+// Stream lookup strategy:
+//  1. Try exact match by conversation ID (for agents that register per-conversation streams)
+//  2. Fall back to the generic "agent-stream" key (for single-agent deployments where
+//     one agent handles all conversations)
+//
+// This matches the same lookup pattern used by HandleIncomingMessage for text messages,
+// ensuring audio and text are routed to the same agent.
 func (s *Server) findStreamForConversation(conversationID string) *conversationStream {
 	s.streamsMu.RLock()
 	defer s.streamsMu.RUnlock()
@@ -399,7 +426,7 @@ func (s *Server) findStreamForConversation(conversationID string) *conversationS
 		return cs
 	}
 
-	// Fall back to the generic agent stream
+	// Fall back to the generic agent stream (single-agent mode)
 	if cs, ok := s.streams["agent-stream"]; ok {
 		return cs
 	}

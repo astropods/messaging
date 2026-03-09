@@ -1,3 +1,15 @@
+// This file contains the audio message construction and batch upload handler.
+//
+// When audio arrives (via WebSocket or file upload), we need to:
+//   1. Create a Message proto with "[audio]" content and audio metadata (encoding, etc.)
+//   2. Forward it to the agent via the message handler (same path as text messages)
+//   3. Stream the actual audio bytes via the AudioForwarder (gRPC)
+//
+// The "[audio]" message serves as a placeholder that the agent can later update
+// with the actual transcript text once STT completes.
+//
+// This file also contains encoding conversion utilities (string ↔ proto ↔ MIME).
+
 package web
 
 import (
@@ -15,7 +27,9 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// encodingToMIME maps AudioConfig.Encoding to MIME types
+// encodingToMIME maps the short encoding names used in AudioConfig.Encoding
+// to standard MIME types. Used when constructing the Attachment proto so the
+// agent knows what content-type the audio data is.
 var encodingToMIME = map[string]string{
 	"linear16":  "audio/L16",
 	"mulaw":     "audio/basic",
@@ -27,9 +41,19 @@ var encodingToMIME = map[string]string{
 	"aac":       "audio/aac",
 }
 
-// handleAudioSegmentStart sends the audio message metadata to the agent.
-// Called on audio.config before any audio chunks are streamed.
-// Returns the generated message ID.
+// handleAudioSegmentStart creates and sends a placeholder "[audio]" message to the agent.
+//
+// This is called when a new audio segment begins (on audio.config for WebSocket,
+// or before sending audio data for uploads). The message carries:
+//   - User identity (who is speaking)
+//   - Audio metadata in PlatformData (encoding, sample rate, channels, language, source)
+//   - An AUDIO attachment with the correct MIME type
+//
+// The agent receives this as a normal incoming message. It can use the platform_data
+// to configure its STT provider, and later send a Transcript response to replace
+// the "[audio]" placeholder with the actual transcribed text.
+//
+// Returns the generated message ID so callers can include it in HTTP responses.
 func (h *Handlers) handleAudioSegmentStart(
 	ctx context.Context,
 	conversationID string,
@@ -49,6 +73,9 @@ func (h *Handlers) handleAudioSegmentStart(
 		mimeType = "application/octet-stream"
 	}
 
+	// Build a Message proto that looks like a regular user message but with
+	// "[audio]" as content and audio metadata attached. This flows through
+	// the same HandleIncomingMessage path as text messages.
 	msg := &pb.Message{
 		Id:        messageID,
 		Timestamp: timestamppb.New(now),
@@ -56,6 +83,8 @@ func (h *Handlers) handleAudioSegmentStart(
 		PlatformContext: &pb.PlatformContext{
 			MessageId: messageID,
 			ChannelId: conversationID,
+			// Audio metadata stored in platform_data so the agent can read it
+			// without needing to understand the Attachment proto
 			PlatformData: map[string]string{
 				"audio_encoding":    config.Encoding,
 				"audio_sample_rate": fmt.Sprintf("%d", config.SampleRate),
@@ -69,7 +98,7 @@ func (h *Handlers) handleAudioSegmentStart(
 			Username: session.Username,
 			Email:    session.Email,
 		},
-		Content:        "[audio]",
+		Content:        "[audio]", // Placeholder — agent can update via Transcript response
 		ConversationId: conversationID,
 		Attachments: []*pb.Attachment{
 			{
@@ -88,7 +117,8 @@ func (h *Handlers) handleAudioSegmentStart(
 	return messageID
 }
 
-// audioConfigToProto converts a WebSocket AudioConfig to a proto AudioStreamConfig.
+// audioConfigToProto converts a WebSocket-layer AudioConfig (JSON-based) to a
+// protobuf AudioStreamConfig that can be sent over the gRPC stream to the agent.
 func audioConfigToProto(config *AudioConfig, conversationID string) *pb.AudioStreamConfig {
 	return &pb.AudioStreamConfig{
 		Encoding:       encodingToProto(config.Encoding),
@@ -100,12 +130,26 @@ func audioConfigToProto(config *AudioConfig, conversationID string) *pb.AudioStr
 	}
 }
 
-// HandleAudioUpload handles POST /api/conversations/{id}/audio
-// Accepts multipart form with a single audio file for batch (non-streaming) use cases.
+// HandleAudioUpload handles POST /api/conversations/{id}/audio.
+//
+// This is the batch (non-streaming) audio upload endpoint for use cases where
+// the client has a complete audio file rather than a live microphone stream:
+//   - Pre-recorded voice messages
+//   - File uploads (drag-and-drop audio files)
+//   - Alexa-style single-request voice interactions
+//
+// The request is a multipart form with:
+//   - "audio" file field: the audio data
+//   - "encoding" (optional): override encoding detection (e.g. "webm_opus")
+//   - "language" (optional): BCP-47 language hint (e.g. "en-US")
+//   - "source" (optional): origin identifier (defaults to "upload")
+//
+// The handler sends the audio through the same pipeline as WebSocket audio:
+// AudioStreamConfig → "[audio]" message → AudioChunk(done=true). The only
+// difference is all audio arrives in one shot rather than being streamed.
 func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Validate session
 	session, err := h.sessionManager.ValidateRequest(ctx, r)
 	if err != nil {
 		http.Error(w, "Authentication error", http.StatusInternalServerError)
@@ -122,7 +166,7 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Limit request body size to prevent memory exhaustion (25MB)
+	// Cap request body at 25MB to prevent memory exhaustion from large uploads
 	r.Body = http.MaxBytesReader(w, r.Body, 25<<20)
 	if err := r.ParseMultipartForm(25 << 20); err != nil {
 		http.Error(w, "Invalid multipart form", http.StatusBadRequest)
@@ -142,24 +186,27 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build config from form fields or content-type
+	// Build config from explicit form fields, falling back to content-type detection
 	config := AudioConfig{
 		Encoding:   r.FormValue("encoding"),
-		SampleRate: 16000,
-		Channels:   1,
+		SampleRate: 16000, // Default to 16kHz — common for speech STT models
+		Channels:   1,     // Mono — standard for voice
 		Language:   r.FormValue("language"),
 		Source:     r.FormValue("source"),
 	}
 
-	// Infer encoding from content-type if not provided
 	if config.Encoding == "" {
+		// Infer encoding from the file's Content-Type header in the multipart form
 		config.Encoding = mimeToEncoding(header.Header.Get("Content-Type"))
 	}
 	if config.Source == "" {
 		config.Source = "upload"
 	}
 
-	// Send audio config first, then message metadata, then audio data
+	// Send through the same pipeline as WebSocket audio, in the correct order:
+	//   1. AudioStreamConfig → tells agent the format
+	//   2. "[audio]" message → gives agent user context
+	//   3. AudioChunk(done=true) → the complete audio data in one chunk
 	if h.audioForwarder != nil {
 		protoConfig := audioConfigToProto(&config, conversationID)
 		if err := h.audioForwarder.SendAudioConfig(conversationID, protoConfig); err != nil {
@@ -168,11 +215,14 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	messageID := h.handleAudioSegmentStart(ctx, conversationID, session, &config)
 	if h.audioForwarder != nil {
+		// Send as a single chunk with done=true since all data is available at once
 		if err := h.audioForwarder.SendAudioChunk(conversationID, audioData, 1, true); err != nil {
 			log.Printf("[Web] Error sending upload audio data: %v", err)
 		}
 	}
 
+	// Return the same message ID that the agent received, so the client can
+	// correlate the upload with the agent's transcript response
 	resp := map[string]string{
 		"message_id": messageID,
 		"status":     "accepted",
@@ -185,9 +235,24 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[Web] Encode error on audio upload response: %v", err)
 	}
 
-	log.Printf("[Web] Audio upload accepted: conversation=%s, file=%s, size=%d",		conversationID, header.Filename, len(audioData))
+	log.Printf("[Web] Audio upload accepted: conversation=%s, file=%s, size=%d",
+		conversationID, header.Filename, len(audioData))
 }
 
+// --- Encoding conversion utilities ---
+//
+// Audio can arrive in many formats depending on the source:
+//   - Browser MediaRecorder → webm_opus (default) or ogg_opus
+//   - Twilio Media Streams  → mulaw (G.711 mu-law, 8kHz)
+//   - Mobile apps           → aac (iOS) or opus (Android)
+//   - File uploads          → mp3, flac, wav, etc.
+//
+// These utilities convert between three representations:
+//   - String names ("webm_opus") — used in WebSocket JSON and config
+//   - Proto enums (AudioEncoding_WEBM_OPUS) — used on the gRPC wire
+//   - MIME types ("audio/webm;codecs=opus") — used in HTTP headers and Attachments
+
+// encodingToExtension maps encoding names to file extensions for the Attachment filename.
 func encodingToExtension(encoding string) string {
 	switch encoding {
 	case "webm_opus":
@@ -211,6 +276,7 @@ func encodingToExtension(encoding string) string {
 	}
 }
 
+// encodingToProto converts a string encoding name to the protobuf AudioEncoding enum.
 func encodingToProto(encoding string) pb.AudioEncoding {
 	switch strings.ToLower(encoding) {
 	case "linear16":
@@ -234,6 +300,9 @@ func encodingToProto(encoding string) pb.AudioEncoding {
 	}
 }
 
+// mimeToEncoding infers the encoding name from a MIME type. Used by the upload
+// handler when the client doesn't explicitly set the "encoding" form field.
+// Defaults to "webm_opus" as that's the most common browser recording format.
 func mimeToEncoding(mime string) string {
 	switch mime {
 	case "audio/webm", "audio/webm;codecs=opus":

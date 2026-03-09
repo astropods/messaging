@@ -158,7 +158,28 @@ export interface AgentConfig {
   tools: AgentToolConfig[];
 }
 
-// Audio types
+// --- Audio types ---
+//
+// These types support raw audio streaming between the messaging server and agent.
+// Audio flows: Client mic → WebSocket → Server → gRPC → Agent SDK (here)
+//
+// The agent receives audio as events on ConversationStream:
+//   stream.on('audioConfig', config => { ... })  // encoding, sample rate, etc.
+//   stream.on('audioChunk', chunk => { ... })     // raw audio bytes
+//
+// The agent can convert these into a ReadableStream for Mastra's STT:
+//   const audioStream = conversation.audioAsReadable();
+//   const transcript = await agent.voice.listen(audioStream, { filetype: 'webm' });
+
+/**
+ * Supported audio encoding formats. Matches the AudioEncoding protobuf enum.
+ *
+ * Common sources:
+ * - LINEAR16: Universal PCM baseline (any platform)
+ * - MULAW: Twilio / telephony (G.711 mu-law, 8kHz)
+ * - WEBM_OPUS: Browser MediaRecorder default
+ * - AAC: iOS native recording
+ */
 export type AudioEncoding =
   | 'LINEAR16'
   | 'MULAW'
@@ -169,22 +190,38 @@ export type AudioEncoding =
   | 'FLAC'
   | 'AAC';
 
+/**
+ * Configuration sent at the start of an audio segment to describe the format.
+ * Maps to the AudioStreamConfig protobuf message.
+ */
 export interface AudioStreamConfig {
-  encoding: AudioEncoding;
-  sampleRate: number;
-  channels: number;
-  language?: string;
-  conversationId: string;
-  source?: string;
+  encoding: AudioEncoding;    // Audio codec (e.g. 'WEBM_OPUS')
+  sampleRate: number;         // Hz (e.g. 48000 for browser, 8000 for Twilio)
+  channels: number;           // 1 = mono (speech), 2 = stereo
+  language?: string;          // BCP-47 hint for STT (e.g. 'en-US')
+  conversationId: string;     // Links audio to the conversation
+  source?: string;            // Origin: 'browser', 'twilio', 'mobile', etc.
 }
 
+/**
+ * A chunk of raw audio bytes. Maps to the AudioChunk protobuf message.
+ *
+ * Chunks arrive sequentially during a segment. When done=true, the segment
+ * is complete and the agent should run STT on the accumulated audio.
+ */
 export interface AudioChunk {
-  data: Buffer | Uint8Array;
-  sequence?: number;
-  done?: boolean;
+  data: Buffer | Uint8Array;  // Raw audio bytes (empty when done=true)
+  sequence?: number;          // Monotonic ordering counter
+  done?: boolean;             // true = end of segment, run STT now
 }
 
-/** Map AudioEncoding to the filetype string expected by Mastra's voice.listen() */
+/**
+ * Maps an AudioEncoding to the filetype string expected by Mastra's voice.listen().
+ *
+ * Usage:
+ *   const filetype = audioEncodingToFiletype(config.encoding);
+ *   const transcript = await agent.voice.listen(audioStream, { filetype });
+ */
 export function audioEncodingToFiletype(encoding: AudioEncoding): string {
   const map: Record<AudioEncoding, string> = {
     LINEAR16: 'wav',
@@ -448,7 +485,11 @@ export class ConversationStream extends EventEmitter {
     stream.on('data', (response: any) => {
       this.retryCount = 0;
 
-      // Emit audio-specific events if present
+      // Emit audio-specific events if present.
+      // The server sends audio data through the bidi stream as AgentResponse
+      // messages with audioConfig or audioChunk payloads. We emit dedicated
+      // events for these so the agent can handle audio separately from text,
+      // while still emitting the generic 'response' event for observability.
       if (response.audioConfig) {
         this.emit('audioConfig', response.audioConfig as AudioStreamConfig);
       } else if (response.audioChunk) {
@@ -577,8 +618,16 @@ export class ConversationStream extends EventEmitter {
   }
 
   /**
-   * Send a transcript of the user's audio input.
-   * The platform uses this to update the placeholder message with actual text.
+   * Send a transcript of the user's audio input back to the platform.
+   *
+   * After the agent runs STT on the audio, it calls this to send the transcribed
+   * text back to the platform (web adapter). The platform uses it to replace the
+   * "[audio]" placeholder message with the actual spoken text in the chat UI.
+   *
+   * @param conversationId - The conversation this transcript belongs to
+   * @param text - The transcribed text from STT
+   * @param messageId - Optional: the original "[audio]" message ID to update
+   * @param language - Optional: BCP-47 language detected by STT (e.g. "en-US")
    */
   sendTranscript(conversationId: string, text: string, messageId?: string, language?: string): void {
     this.sendAgentResponse({
@@ -588,39 +637,70 @@ export class ConversationStream extends EventEmitter {
   }
 
   // --- Audio support ---
+  //
+  // These methods handle sending audio data through the gRPC bidi stream.
+  // Two directions:
+  //   - Agent → Server (sendAudioConfig/sendAudioChunk/endAudio): used when the
+  //     agent needs to forward audio upstream (less common)
+  //   - Server → Agent (audioConfig/audioChunk events + audioAsReadable): the main
+  //     path where the server forwards client mic audio to the agent for STT
 
   /**
-   * Send an audio stream config (must be sent before audio chunks)
+   * Send an audio stream config through the bidi stream.
+   * Must be called before sendAudioChunk() so the receiver knows the encoding.
    */
   sendAudioConfig(config: AudioStreamConfig): void {
     this.write({ audioConfig: config });
   }
 
   /**
-   * Send a raw audio chunk through the stream
+   * Send a raw audio chunk through the bidi stream.
+   * The chunk's sequence number should increase monotonically.
    */
   sendAudioChunk(chunk: AudioChunk): void {
     this.write({ audio: chunk });
   }
 
   /**
-   * Signal end of the current audio segment.
-   * After this, more audio can follow (new config or more chunks).
+   * Signal end of the current audio segment by sending an empty chunk with done=true.
+   * The receiver should process all accumulated audio (e.g. run STT).
+   * After this, more audio can follow — either new config or more chunks.
    */
   endAudio(): void {
     this.write({ audio: { data: Buffer.alloc(0), done: true } });
   }
 
   /**
-   * Returns a ReadableStream of audio bytes received from the remote client.
-   * Listens for 'audioChunk' events and pipes them into the stream.
-   * The stream closes when an AudioChunk with done=true arrives, or on 'end'/'error'.
+   * Converts incoming audioChunk events into a Web Streams API ReadableStream.
    *
-   * Usage with Mastra:
+   * This is the primary integration point with Mastra's voice system. The agent
+   * listens for the 'audioConfig' event to know the format, then calls this
+   * method to get a stream it can pass directly to voice.listen():
+   *
+   * ```typescript
+   * conversation.on('audioConfig', async (config) => {
    *   const audioStream = conversation.audioAsReadable();
-   *   const transcript = await agent.voice.listen(audioStream, { filetype: 'webm' });
+   *   const filetype = audioEncodingToFiletype(config.encoding);
+   *   const transcript = await agent.voice.listen(audioStream, { filetype });
+   *   // ... process transcript
+   * });
+   * ```
+   *
+   * The ReadableStream:
+   * - Yields Uint8Array chunks as audioChunk events arrive
+   * - Closes when an AudioChunk with done=true arrives (end of segment)
+   * - Closes when the ConversationStream emits 'end' (intentional close)
+   * - Errors when the ConversationStream emits 'error'
+   * - Properly cleans up all event listeners on close, error, or cancel
+   *
+   * @returns A ReadableStream<Uint8Array> suitable for Mastra voice.listen()
    */
   audioAsReadable(): ReadableStream<Uint8Array> {
+    // Centralized cleanup to prevent listener leaks. Called on:
+    // - done=true chunk (normal completion)
+    // - stream 'end' event (intentional close)
+    // - stream 'error' event
+    // - ReadableStream cancel() (consumer gave up, e.g. reader.cancel())
     const cleanup = () => {
       this.removeListener('audioChunk', onChunk);
       this.removeListener('end', onEnd);
@@ -656,6 +736,8 @@ export class ConversationStream extends EventEmitter {
         this.once('error', onError);
       },
       cancel: () => {
+        // Consumer cancelled (e.g. reader.cancel()) — remove all listeners
+        // to prevent memory leaks
         cleanup();
       },
     });
