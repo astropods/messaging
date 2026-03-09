@@ -101,7 +101,8 @@ func (h *Handlers) HandleCreateConversation(w http.ResponseWriter, r *http.Reque
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("[Web] Encode error on create conversation: %v", err)
 	}
-	log.Printf("[Web] Conversation created: id=%s, user=%s", conversationID, session.UserID)}
+	log.Printf("[Web] Conversation created: id=%q, user=%q", conversationID, session.UserID) //nolint:gosec // G706 false positive: %q escapes control characters
+}
 
 // HandleSendMessage handles POST /api/conversations/{id}/messages
 func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +195,8 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("[Web] Encode error on send message: %v", err)
 	}
-	log.Printf("[Web] Message sent: id=%s, conversation=%s, user=%s", messageID, conversationID, session.UserID)}
+	log.Printf("[Web] Message sent: id=%q, conversation=%q, user=%q", messageID, conversationID, session.UserID) //nolint:gosec // G706 false positive: %q escapes control characters
+}
 
 // HandleStream handles GET /api/conversations/{id}/stream (SSE)
 func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
@@ -252,7 +254,7 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprint(w, connectedEvent.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
 	flusher.Flush()
 
-	log.Printf("[Web] SSE stream started: connection=%s, conversation=%s, user=%s", connID, conversationID, session.UserID)
+	log.Printf("[Web] SSE stream started: connection=%q, conversation=%q, user=%q", connID, conversationID, session.UserID) //nolint:gosec // G706 false positive: %q escapes control characters
 	// Event loop
 	for {
 		select {

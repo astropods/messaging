@@ -235,7 +235,7 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[Web] Encode error on audio upload response: %v", err)
 	}
 
-	log.Printf("[Web] Audio upload accepted: conversation=%s, file=%s, size=%d",
+	log.Printf("[Web] Audio upload accepted: conversation=%q, file=%q, size=%d", //nolint:gosec // G706 false positive: %q escapes control characters
 		conversationID, header.Filename, len(audioData))
 }
 
