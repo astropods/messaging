@@ -538,3 +538,291 @@ func TestEncodingToMIME(t *testing.T) {
 	}
 }
 
+// --- mockAudioForwarder captures SendAudioConfig/SendAudioChunk calls ---
+
+type audioForwarderCall struct {
+	method         string // "config" or "chunk"
+	conversationID string
+	config         *pb.AudioStreamConfig
+	data           []byte
+	sequence       int64
+	done           bool
+}
+
+type mockAudioForwarder struct {
+	mu    sync.Mutex
+	calls []audioForwarderCall
+}
+
+func (m *mockAudioForwarder) SendAudioConfig(conversationID string, config *pb.AudioStreamConfig) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, audioForwarderCall{
+		method:         "config",
+		conversationID: conversationID,
+		config:         config,
+	})
+	return nil
+}
+
+func (m *mockAudioForwarder) SendAudioChunk(conversationID string, data []byte, sequence int64, done bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, audioForwarderCall{
+		method:         "chunk",
+		conversationID: conversationID,
+		data:           data,
+		sequence:       sequence,
+		done:           done,
+	})
+	return nil
+}
+
+func (m *mockAudioForwarder) getCalls() []audioForwarderCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := make([]audioForwarderCall, len(m.calls))
+	copy(cp, m.calls)
+	return cp
+}
+
+func TestHandleAudioUpload_ConsistentMessageID(t *testing.T) {
+	var receivedMsg *pb.Message
+	var mu sync.Mutex
+
+	fwd := &mockAudioForwarder{}
+	handler := newTestHandlers(func(ctx context.Context, msg *pb.Message) error {
+		mu.Lock()
+		receivedMsg = msg
+		mu.Unlock()
+		return nil
+	})
+	handler.audioForwarder = fwd
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	part, _ := writer.CreateFormFile("audio", "recording.webm")
+	part.Write([]byte("fake-audio"))
+	writer.WriteField("encoding", "webm_opus")
+	writer.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/conversations/{id}/audio", handler.HandleAudioUpload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/conversations/conv-id-test/audio", &buf)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Get the message ID the agent received
+	mu.Lock()
+	agentMessageID := receivedMsg.Id
+	mu.Unlock()
+
+	// Get the message ID from the HTTP response
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	clientMessageID := resp["message_id"]
+
+	if agentMessageID == "" {
+		t.Fatal("agent message ID should not be empty")
+	}
+	if clientMessageID == "" {
+		t.Fatal("client message ID should not be empty")
+	}
+	if agentMessageID != clientMessageID {
+		t.Errorf("message ID mismatch: agent got %q, client got %q", agentMessageID, clientMessageID)
+	}
+}
+
+func TestHandleAudioUpload_ConfigBeforeMessage(t *testing.T) {
+	// Track the order of operations: audio config should be sent before message metadata
+	var callOrder []string
+	var mu sync.Mutex
+
+	fwd := &mockAudioForwarder{}
+
+	handler := newTestHandlers(func(ctx context.Context, msg *pb.Message) error {
+		mu.Lock()
+		callOrder = append(callOrder, "message")
+		mu.Unlock()
+		return nil
+	})
+	handler.audioForwarder = fwd
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	part, _ := writer.CreateFormFile("audio", "recording.webm")
+	part.Write([]byte("audio-data"))
+	writer.WriteField("encoding", "webm_opus")
+	writer.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/conversations/{id}/audio", handler.HandleAudioUpload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/conversations/conv-order/audio", &buf)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", w.Code)
+	}
+
+	// Check the forwarder calls: config should come first
+	calls := fwd.getCalls()
+	if len(calls) < 2 {
+		t.Fatalf("expected at least 2 forwarder calls, got %d", len(calls))
+	}
+	if calls[0].method != "config" {
+		t.Errorf("first forwarder call should be 'config', got %q", calls[0].method)
+	}
+
+	// Message handler should be called after the config
+	mu.Lock()
+	order := callOrder
+	mu.Unlock()
+
+	if len(order) != 1 || order[0] != "message" {
+		t.Errorf("expected message handler to be called once, got: %v", order)
+	}
+
+	// The audio chunk (done=true) should come after message
+	if calls[1].method != "chunk" || !calls[1].done {
+		t.Errorf("second forwarder call should be chunk with done=true, got method=%q done=%v",
+			calls[1].method, calls[1].done)
+	}
+}
+
+func TestHandleAudioStream_ConfigBeforeMessage(t *testing.T) {
+	// Track ordering: for WebSocket streaming, audio config should be sent before message metadata
+	var messageReceived bool
+	var mu sync.Mutex
+
+	fwd := &mockAudioForwarder{}
+
+	handler := newTestHandlers(func(ctx context.Context, msg *pb.Message) error {
+		mu.Lock()
+		messageReceived = true
+		mu.Unlock()
+		return nil
+	})
+	handler.audioForwarder = fwd
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/conversations/{id}/audio", handler.HandleAudioStream)
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/conversations/conv-ws-order/audio"
+	ws, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
+	if err != nil {
+		t.Fatalf("WebSocket dial failed: %v", err)
+	}
+	defer ws.Close()
+
+	// Send config
+	config := AudioConfig{
+		Type:       "audio.config",
+		Encoding:   "linear16",
+		SampleRate: 16000,
+		Channels:   1,
+		Source:     "browser",
+	}
+	configJSON, _ := json.Marshal(config)
+	ws.WriteMessage(websocket.TextMessage, configJSON)
+
+	// Give handler time to process
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify: audio config was sent to forwarder BEFORE message handler was called
+	calls := fwd.getCalls()
+	if len(calls) < 1 {
+		t.Fatal("expected at least 1 forwarder call for audio config")
+	}
+	if calls[0].method != "config" {
+		t.Errorf("first forwarder call should be 'config', got %q", calls[0].method)
+	}
+	if calls[0].config.Encoding != pb.AudioEncoding_LINEAR16 {
+		t.Errorf("expected LINEAR16 encoding, got %v", calls[0].config.Encoding)
+	}
+
+	mu.Lock()
+	gotMessage := messageReceived
+	mu.Unlock()
+
+	if !gotMessage {
+		t.Error("expected message handler to be called after audio config")
+	}
+}
+
+func TestHandleAudioStream_ForwardsChunksToAgent(t *testing.T) {
+	fwd := &mockAudioForwarder{}
+
+	handler := newTestHandlers(func(ctx context.Context, msg *pb.Message) error {
+		return nil
+	})
+	handler.audioForwarder = fwd
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/conversations/{id}/audio", handler.HandleAudioStream)
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/conversations/conv-fwd/audio"
+	ws, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
+	if err != nil {
+		t.Fatalf("WebSocket dial failed: %v", err)
+	}
+	defer ws.Close()
+
+	// Send config
+	config := AudioConfig{Type: "audio.config", Encoding: "webm_opus", SampleRate: 48000, Channels: 1}
+	configJSON, _ := json.Marshal(config)
+	ws.WriteMessage(websocket.TextMessage, configJSON)
+
+	// Send binary audio chunks
+	ws.WriteMessage(websocket.BinaryMessage, []byte{0xAA, 0xBB})
+	ws.WriteMessage(websocket.BinaryMessage, []byte{0xCC, 0xDD})
+
+	// End segment
+	endMsg, _ := json.Marshal(AudioControl{Type: "audio.end"})
+	ws.WriteMessage(websocket.TextMessage, endMsg)
+
+	time.Sleep(100 * time.Millisecond)
+
+	calls := fwd.getCalls()
+
+	// Expect: config, chunk(seq=1), chunk(seq=2), chunk(done=true)
+	if len(calls) < 4 {
+		t.Fatalf("expected at least 4 forwarder calls, got %d", len(calls))
+	}
+
+	if calls[0].method != "config" {
+		t.Errorf("call[0] should be config, got %q", calls[0].method)
+	}
+	if calls[1].method != "chunk" || calls[1].sequence != 1 {
+		t.Errorf("call[1] should be chunk seq=1, got method=%q seq=%d", calls[1].method, calls[1].sequence)
+	}
+	if calls[2].method != "chunk" || calls[2].sequence != 2 {
+		t.Errorf("call[2] should be chunk seq=2, got method=%q seq=%d", calls[2].method, calls[2].sequence)
+	}
+	if calls[3].method != "chunk" || !calls[3].done {
+		t.Errorf("call[3] should be chunk done=true, got method=%q done=%v", calls[3].method, calls[3].done)
+	}
+}
+

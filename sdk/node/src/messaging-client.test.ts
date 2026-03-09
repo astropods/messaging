@@ -1338,6 +1338,32 @@ describe('ConversationStream.audioAsReadable', () => {
     expect(final.done).toBe(true);
   });
 
+  it('should clean up listeners when ReadableStream is cancelled', async () => {
+    const mockGrpc = new MockGrpcStream();
+    const stream = new ConversationStream(() => mockGrpc);
+    stream.on('error', () => {}); // suppress unhandled
+
+    const readable = stream.audioAsReadable();
+    const reader = readable.getReader();
+
+    // Send one chunk so the stream is active
+    mockGrpc.emit('data', {
+      audioChunk: { data: Buffer.from([0x01]), done: false },
+    });
+
+    await reader.read();
+
+    // Count listeners before cancel
+    const chunkListenersBefore = stream.listenerCount('audioChunk');
+    expect(chunkListenersBefore).toBeGreaterThan(0);
+
+    // Cancel the reader — should trigger cleanup
+    await reader.cancel();
+
+    // All audio listeners should be removed
+    expect(stream.listenerCount('audioChunk')).toBe(0);
+  });
+
   it('should close on stream end event', async () => {
     const mockGrpc = new MockGrpcStream();
     const stream = new ConversationStream(() => mockGrpc);

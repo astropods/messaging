@@ -1,6 +1,7 @@
 package grpc
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -1325,6 +1326,190 @@ func TestUpdateConversationCache_SecondMessageIncrements(t *testing.T) {
 	conv, _ := convStore.Get(ctx, "conv-inc")
 	if conv.MessageCount != 2 {
 		t.Errorf("expected messageCount 2 after second message, got %d", conv.MessageCount)
+	}
+}
+
+// --- Tests for findStreamForConversation (audio routing) ---
+
+func TestFindStreamForConversation_MatchesExactConversation(t *testing.T) {
+	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
+	convStore := store.NewMemoryStore()
+	server := NewServer(":0", threadStore, convStore, nil)
+
+	stream1 := &captureStream{}
+	stream2 := &captureStream{}
+
+	server.streamsMu.Lock()
+	server.streams["agent-stream"] = &conversationStream{
+		stream:         stream1,
+		conversationID: "agent-stream",
+	}
+	server.streams["conv-audio-1"] = &conversationStream{
+		stream:         stream2,
+		conversationID: "conv-audio-1",
+	}
+	server.streamsMu.Unlock()
+
+	found := server.findStreamForConversation("conv-audio-1")
+	if found == nil {
+		t.Fatal("expected to find stream for conv-audio-1")
+	}
+	if found.stream != stream2 {
+		t.Error("expected conversation-specific stream, got a different one")
+	}
+}
+
+func TestFindStreamForConversation_FallsBackToAgentStream(t *testing.T) {
+	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
+	convStore := store.NewMemoryStore()
+	server := NewServer(":0", threadStore, convStore, nil)
+
+	agentStream := &captureStream{}
+
+	server.streamsMu.Lock()
+	server.streams["agent-stream"] = &conversationStream{
+		stream:         agentStream,
+		conversationID: "agent-stream",
+	}
+	server.streamsMu.Unlock()
+
+	// Look up a conversation that has no specific stream
+	found := server.findStreamForConversation("conv-unknown")
+	if found == nil {
+		t.Fatal("expected fallback to agent-stream")
+	}
+	if found.stream != agentStream {
+		t.Error("expected the agent-stream fallback")
+	}
+}
+
+func TestFindStreamForConversation_ReturnsNilWhenEmpty(t *testing.T) {
+	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
+	convStore := store.NewMemoryStore()
+	server := NewServer(":0", threadStore, convStore, nil)
+
+	found := server.findStreamForConversation("anything")
+	if found != nil {
+		t.Error("expected nil when no streams registered")
+	}
+}
+
+func TestSendAudioConfig_RoutesToCorrectStream(t *testing.T) {
+	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
+	convStore := store.NewMemoryStore()
+	server := NewServer(":0", threadStore, convStore, nil)
+
+	var stream1Responses []*pb.AgentResponse
+	var stream2Responses []*pb.AgentResponse
+
+	mock1 := &captureStream{sendFunc: func(resp *pb.AgentResponse) error {
+		stream1Responses = append(stream1Responses, resp)
+		return nil
+	}}
+	mock2 := &captureStream{sendFunc: func(resp *pb.AgentResponse) error {
+		stream2Responses = append(stream2Responses, resp)
+		return nil
+	}}
+
+	server.streamsMu.Lock()
+	server.streams["conv-A"] = &conversationStream{stream: mock1, conversationID: "conv-A"}
+	server.streams["conv-B"] = &conversationStream{stream: mock2, conversationID: "conv-B"}
+	server.streamsMu.Unlock()
+
+	config := &pb.AudioStreamConfig{
+		Encoding:       pb.AudioEncoding_WEBM_OPUS,
+		SampleRate:     48000,
+		Channels:       1,
+		ConversationId: "conv-B",
+	}
+
+	err := server.SendAudioConfig("conv-B", config)
+	if err != nil {
+		t.Fatalf("SendAudioConfig failed: %v", err)
+	}
+
+	if len(stream1Responses) != 0 {
+		t.Error("conv-A stream should not receive audio config meant for conv-B")
+	}
+	if len(stream2Responses) != 1 {
+		t.Fatalf("expected conv-B stream to receive 1 response, got %d", len(stream2Responses))
+	}
+
+	got := stream2Responses[0].GetAudioConfig()
+	if got == nil {
+		t.Fatal("expected AudioConfig payload")
+	}
+	if got.Encoding != pb.AudioEncoding_WEBM_OPUS {
+		t.Errorf("expected WEBM_OPUS, got %v", got.Encoding)
+	}
+}
+
+func TestSendAudioChunk_RoutesToCorrectStream(t *testing.T) {
+	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
+	convStore := store.NewMemoryStore()
+	server := NewServer(":0", threadStore, convStore, nil)
+
+	var received []*pb.AgentResponse
+	mock := &captureStream{sendFunc: func(resp *pb.AgentResponse) error {
+		received = append(received, resp)
+		return nil
+	}}
+
+	server.streamsMu.Lock()
+	server.streams["conv-audio"] = &conversationStream{stream: mock, conversationID: "conv-audio"}
+	server.streamsMu.Unlock()
+
+	audioData := []byte{0x01, 0x02, 0x03, 0x04}
+	err := server.SendAudioChunk("conv-audio", audioData, 1, false)
+	if err != nil {
+		t.Fatalf("SendAudioChunk failed: %v", err)
+	}
+
+	err = server.SendAudioChunk("conv-audio", nil, 2, true)
+	if err != nil {
+		t.Fatalf("SendAudioChunk (done) failed: %v", err)
+	}
+
+	if len(received) != 2 {
+		t.Fatalf("expected 2 responses, got %d", len(received))
+	}
+
+	chunk1 := received[0].GetAudioChunk()
+	if chunk1 == nil || chunk1.Sequence != 1 || chunk1.Done {
+		t.Errorf("chunk1: expected seq=1 done=false, got seq=%d done=%v", chunk1.GetSequence(), chunk1.GetDone())
+	}
+	if !bytes.Equal(chunk1.Data, audioData) {
+		t.Error("chunk1 data mismatch")
+	}
+
+	chunk2 := received[1].GetAudioChunk()
+	if chunk2 == nil || chunk2.Sequence != 2 || !chunk2.Done {
+		t.Errorf("chunk2: expected seq=2 done=true, got seq=%d done=%v", chunk2.GetSequence(), chunk2.GetDone())
+	}
+}
+
+func TestSendAudioConfig_NoStream(t *testing.T) {
+	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
+	convStore := store.NewMemoryStore()
+	server := NewServer(":0", threadStore, convStore, nil)
+
+	err := server.SendAudioConfig("nonexistent", &pb.AudioStreamConfig{})
+	if err == nil {
+		t.Fatal("expected error when no stream available")
+	}
+	if !strings.Contains(err.Error(), "nonexistent") {
+		t.Errorf("expected error to mention conversation ID, got: %v", err)
+	}
+}
+
+func TestSendAudioChunk_NoStream(t *testing.T) {
+	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
+	convStore := store.NewMemoryStore()
+	server := NewServer(":0", threadStore, convStore, nil)
+
+	err := server.SendAudioChunk("nonexistent", []byte{0x01}, 1, false)
+	if err == nil {
+		t.Fatal("expected error when no stream available")
 	}
 }
 
