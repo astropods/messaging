@@ -334,7 +334,7 @@ func (s *Server) HandleIncomingMessage(ctx context.Context, msg *pb.Message) err
 	s.streamsMu.RUnlock()
 
 	if stream == nil {
-		return fmt.Errorf("no active agent stream available")
+		return adapter.ErrNoAgentStream
 	}
 
 	// Send message to agent via stream wrapped in AgentResponse with incoming_message payload
@@ -368,7 +368,7 @@ func (s *Server) HandleIncomingMessage(ctx context.Context, msg *pb.Message) err
 func (s *Server) SendAudioConfig(conversationID string, config *pb.AudioStreamConfig) error {
 	stream := s.findStreamForConversation(conversationID)
 	if stream == nil {
-		return fmt.Errorf("no active agent stream available for conversation: %s", conversationID)
+		return fmt.Errorf("%w for conversation: %s", adapter.ErrNoAgentStream, conversationID)
 	}
 	log.Printf("[gRPC] Sending audio config to agent: conversation=%s, encoding=%s, sampleRate=%d",
 		conversationID, config.Encoding.String(), config.SampleRate)
@@ -394,7 +394,7 @@ func (s *Server) SendAudioConfig(conversationID string, config *pb.AudioStreamCo
 func (s *Server) SendAudioChunk(conversationID string, data []byte, sequence int64, done bool) error {
 	stream := s.findStreamForConversation(conversationID)
 	if stream == nil {
-		return fmt.Errorf("no active agent stream available for conversation: %s", conversationID)
+		return fmt.Errorf("%w for conversation: %s", adapter.ErrNoAgentStream, conversationID)
 	}
 	return stream.stream.Send(&pb.AgentResponse{
 		ConversationId: conversationID,

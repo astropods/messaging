@@ -2,10 +2,16 @@ package adapter
 
 import (
 	"context"
+	"errors"
 
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
+
+// ErrNoAgentStream is returned when a message cannot be delivered because
+// no agent has connected to the gRPC stream. Adapters should log this
+// rather than surfacing it to end users.
+var ErrNoAgentStream = errors.New("no active agent stream available")
 
 // Adapter is the interface that all platform adapters must implement
 type Adapter interface {
@@ -59,12 +65,13 @@ type AudioForwarder interface {
 
 // Config holds adapter configuration
 type Config struct {
-	BotToken   string
-	AppToken   string // For Slack Socket Mode
-	SocketMode bool
-	WebhookURL string
-	AutoThread bool
-	RateLimit  RateLimitConfig
+	BotToken            string
+	AppToken            string // For Slack Socket Mode
+	SocketMode          bool
+	WebhookURL          string
+	AutoThread          bool
+	RateLimit           RateLimitConfig
+	ActionableReactions []string // Emoji names forwarded to the agent; empty means no reactions
 }
 
 // RateLimitConfig configures rate limiting

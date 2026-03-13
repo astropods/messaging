@@ -2,10 +2,16 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
+	"github.com/astropods/messaging/internal/adapter"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
+	slacklib "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 )
 
@@ -38,9 +44,18 @@ func (h *mockMessageHandler) last() *pb.Message {
 }
 
 func newTestAdapter() (*SlackAdapter, *mockMessageHandler) {
+	return newTestAdapterWithReactions(nil)
+}
+
+func newTestAdapterWithReactions(reactions []string) (*SlackAdapter, *mockMessageHandler) {
 	handler := &mockMessageHandler{}
+	reactionMap := make(map[string]bool, len(reactions))
+	for _, r := range reactions {
+		reactionMap[r] = true
+	}
 	a := &SlackAdapter{
-		contentBuffers: make(map[string]string),
+		contentBuffers:      make(map[string]string),
+		actionableReactions: reactionMap,
 	}
 	a.msgHandler = handler.handle
 	return a, handler
@@ -216,4 +231,158 @@ func TestHandleMessage_PlatformContext(t *testing.T) {
 	if msg.User.Id != "U789" {
 		t.Errorf("expected user ID 'U789', got %q", msg.User.Id)
 	}
+}
+
+func TestHandleReactionAdded_ActionableReactionForwarded(t *testing.T) {
+	a, handler := newTestAdapterWithReactions([]string{"ticket"})
+	srv := newFakeSlackServer(t, "original message text")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	ev := &slackevents.ReactionAddedEvent{
+		Reaction: "ticket",
+		User:     "U123",
+		Item: slackevents.Item{
+			Channel:   "C123456",
+			Timestamp: "1234567890.000001",
+		},
+	}
+
+	a.handleReactionAdded(t.Context(), ev)
+
+	if handler.count() != 1 {
+		t.Fatalf("expected actionable reaction to be forwarded, got %d messages", handler.count())
+	}
+	msg := handler.last()
+	if msg.PlatformContext.ChannelId != "C123456" {
+		t.Errorf("expected channel 'C123456', got %q", msg.PlatformContext.ChannelId)
+	}
+}
+
+func TestHandleReactionAdded_NonActionableReactionDropped(t *testing.T) {
+	a, handler := newTestAdapterWithReactions([]string{"ticket"})
+
+	ev := &slackevents.ReactionAddedEvent{
+		Reaction: "thumbsup",
+		User:     "U123",
+		Item: slackevents.Item{
+			Channel:   "C123456",
+			Timestamp: "1234567890.000001",
+		},
+	}
+
+	a.handleReactionAdded(t.Context(), ev)
+
+	if handler.count() != 0 {
+		t.Errorf("expected non-actionable reaction to be dropped, got %d messages", handler.count())
+	}
+}
+
+func TestHandleReactionAdded_EmptyMapDropsAll(t *testing.T) {
+	a, handler := newTestAdapterWithReactions(nil)
+
+	ev := &slackevents.ReactionAddedEvent{
+		Reaction: "ticket",
+		User:     "U123",
+		Item: slackevents.Item{
+			Channel:   "C123456",
+			Timestamp: "1234567890.000001",
+		},
+	}
+
+	a.handleReactionAdded(t.Context(), ev)
+
+	if handler.count() != 0 {
+		t.Errorf("expected all reactions dropped when no actionable reactions configured, got %d", handler.count())
+	}
+}
+
+func TestSendErrorMessage_SuppressesInfraError(t *testing.T) {
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a := &SlackAdapter{
+		client:         slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/")),
+		contentBuffers: make(map[string]string),
+	}
+
+	a.sendErrorMessage(t.Context(), "C123", "1234.0001", adapter.ErrNoAgentStream)
+
+	if srv.postCount > 0 {
+		t.Error("expected ErrNoAgentStream to be suppressed, but a message was posted")
+	}
+}
+
+func TestSendErrorMessage_SuppressesWrappedInfraError(t *testing.T) {
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a := &SlackAdapter{
+		client:         slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/")),
+		contentBuffers: make(map[string]string),
+	}
+
+	wrapped := fmt.Errorf("%w for conversation: conv-123", adapter.ErrNoAgentStream)
+	a.sendErrorMessage(t.Context(), "C123", "1234.0001", wrapped)
+
+	if srv.postCount > 0 {
+		t.Error("expected wrapped ErrNoAgentStream to be suppressed, but a message was posted")
+	}
+}
+
+func TestSendErrorMessage_PostsUserFacingError(t *testing.T) {
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a := &SlackAdapter{
+		client:         slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/")),
+		contentBuffers: make(map[string]string),
+	}
+
+	a.sendErrorMessage(t.Context(), "C123", "1234.0001", fmt.Errorf("tool execution failed"))
+
+	if srv.postCount != 1 {
+		t.Errorf("expected user-facing error to be posted, got %d messages", srv.postCount)
+	}
+}
+
+// fakeSlackServer is an httptest server that stubs the Slack API endpoints
+// needed by tests. It records calls to chat.postMessage.
+type fakeSlackServer struct {
+	*httptest.Server
+	postCount int
+}
+
+func newFakeSlackServer(t *testing.T, replyText string) *fakeSlackServer {
+	t.Helper()
+	fs := &fakeSlackServer{}
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"ok": true,
+			"messages": []map[string]interface{}{
+				{"ts": r.FormValue("ts"), "text": replyText, "user": "U999"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	mux.HandleFunc("/chat.postMessage", func(w http.ResponseWriter, r *http.Request) {
+		fs.postCount++
+		resp := map[string]interface{}{
+			"ok":      true,
+			"channel": r.FormValue("channel"),
+			"ts":      "1234567890.000099",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	})
+
+	fs.Server = httptest.NewServer(mux)
+	return fs
 }

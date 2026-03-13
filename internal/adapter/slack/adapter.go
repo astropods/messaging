@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -26,11 +27,15 @@ type SlackAdapter struct {
 	msgHandler   adapter.MessageHandler
 	rateLimiter  *RateLimiter
 	stopChan     chan struct{}
-	aiClient     *SlackAIClient // Client for Slack AI APIs
+	aiClient     *SlackAIClient
 
 	// contentBuffers accumulates DELTA chunks per conversation so the adapter
 	// can send a single complete message to Slack on END.
 	contentBuffers map[string]string
+
+	// actionableReactions is the set of emoji names forwarded to the agent.
+	// Built from config at initialization; empty map means no reactions are forwarded.
+	actionableReactions map[string]bool
 }
 
 // New creates a new Slack adapter
@@ -65,10 +70,15 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 		config.RateLimit.BurstSize,
 	)
 
-	// Initialize AI client for Slack AI features
 	a.aiClient = NewSlackAIClient(config.BotToken)
 
-	log.Printf("[Slack] Adapter initialized (Socket Mode: %v)", config.SocketMode)
+	a.actionableReactions = make(map[string]bool, len(config.ActionableReactions))
+	for _, r := range config.ActionableReactions {
+		a.actionableReactions[r] = true
+	}
+
+	log.Printf("[Slack] Adapter initialized (Socket Mode: %v, actionable reactions: %v)",
+		config.SocketMode, config.ActionableReactions)
 	return nil
 }
 
@@ -167,6 +177,9 @@ func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackeve
 
 	case *slackevents.AppMentionEvent:
 		a.handleAppMention(ctx, ev)
+
+	case *slackevents.ReactionAddedEvent:
+		a.handleReactionAdded(ctx, ev)
 
 	default:
 		log.Printf("[Slack] Unhandled inner event type: %s", innerEvent.Type)
@@ -335,8 +348,82 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 	}
 }
 
-// sendErrorMessage sends an error message to Slack
+// handleReactionAdded processes reaction_added events. Only reactions in the
+// configured actionableReactions set are forwarded to the agent. If the set
+// is empty (no reactions configured), all reactions are dropped.
+func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.ReactionAddedEvent) {
+	log.Printf("[Slack] Reaction added: emoji=%s, user=%s, channel=%s, item_ts=%s",
+		ev.Reaction, ev.User, ev.Item.Channel, ev.Item.Timestamp)
+
+	if !a.actionableReactions[ev.Reaction] {
+		log.Printf("[Slack] Ignoring non-actionable reaction :%s:", ev.Reaction)
+		return
+	}
+
+	originalText := a.fetchMessageText(ctx, ev.Item.Channel, ev.Item.Timestamp)
+	if originalText == "" {
+		log.Printf("[Slack] Could not fetch original message for reaction, skipping")
+		return
+	}
+
+	threadID := ev.Item.Timestamp
+	conversationID := fmt.Sprintf("%s-%s", ev.Item.Channel, threadID)
+
+	content := fmt.Sprintf("[reaction :%s: added by <@%s> on message]\n%s",
+		ev.Reaction, ev.User, originalText)
+
+	msg := &pb.Message{
+		Id:             uuid.NewString(),
+		Timestamp:      timestamppb.New(time.Now()),
+		Platform:       "slack",
+		Content:        content,
+		ConversationId: conversationID,
+		PlatformContext: &pb.PlatformContext{
+			MessageId: ev.Item.Timestamp,
+			ChannelId: ev.Item.Channel,
+			ThreadId:  threadID,
+		},
+		User: &pb.User{
+			Id: ev.User,
+		},
+	}
+
+	if a.msgHandler != nil {
+		if err := a.msgHandler(ctx, msg); err != nil {
+			log.Printf("[Slack] Error handling reaction: %v", err)
+			a.sendErrorMessage(ctx, ev.Item.Channel, threadID, err)
+		}
+	}
+}
+
+// fetchMessageText retrieves the text of a single message by channel + timestamp.
+func (a *SlackAdapter) fetchMessageText(ctx context.Context, channelID, timestamp string) string {
+	msgs, _, _, err := a.client.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
+		ChannelID: channelID,
+		Timestamp: timestamp,
+		Limit:     1,
+		Inclusive:  true,
+	})
+	if err != nil {
+		log.Printf("[Slack] Failed to fetch message %s in %s: %v", timestamp, channelID, err)
+		return ""
+	}
+	for _, m := range msgs {
+		if m.Timestamp == timestamp {
+			return m.Text
+		}
+	}
+	return ""
+}
+
+// sendErrorMessage posts user-facing errors to Slack. Infrastructure errors
+// (e.g. agent not connected) are kept in logs only to avoid channel spam.
 func (a *SlackAdapter) sendErrorMessage(ctx context.Context, channelID, threadTS string, err error) {
+	if errors.Is(err, adapter.ErrNoAgentStream) {
+		log.Printf("[Slack] Suppressed infrastructure error (not posting to channel): %v", err)
+		return
+	}
+
 	content := fmt.Sprintf(":x: Error: %s", err.Error())
 	_, _, postErr := a.client.PostMessageContext(ctx, channelID,
 		slack.MsgOptionText(content, false),

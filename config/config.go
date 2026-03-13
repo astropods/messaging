@@ -46,12 +46,13 @@ type ThreadHistoryConfig struct {
 
 // SlackConfig holds Slack-specific configuration
 type SlackConfig struct {
-	Enabled    bool
-	BotToken   string
-	AppToken   string
-	SocketMode bool
-	AutoThread bool
-	Config     adapter.Config
+	Enabled             bool
+	BotToken            string
+	AppToken            string
+	SocketMode          bool
+	AutoThread          bool
+	ActionableReactions []string
+	Config              adapter.Config
 }
 
 // WebConfig holds web adapter configuration
@@ -90,11 +91,12 @@ func Load() (*Config, error) {
 
 	// Slack configuration
 	cfg.Slack = SlackConfig{
-		Enabled:    getEnvBool("SLACK_ENABLED", false),
-		BotToken:   getEnv("SLACK_BOT_TOKEN", ""),
-		AppToken:   getEnv("SLACK_APP_TOKEN", ""),
-		SocketMode: getEnvBool("SLACK_SOCKET_MODE", true),
-		AutoThread: getEnvBool("SLACK_AUTO_THREAD", true),
+		Enabled:             getEnvBool("SLACK_ENABLED", false),
+		BotToken:            getEnv("SLACK_BOT_TOKEN", ""),
+		AppToken:            getEnv("SLACK_APP_TOKEN", ""),
+		SocketMode:          getEnvBool("SLACK_SOCKET_MODE", true),
+		AutoThread:          getEnvBool("SLACK_AUTO_THREAD", true),
+		ActionableReactions: getEnvList("SLACK_ACTIONABLE_REACTIONS", nil),
 	}
 
 	// Validate Slack configuration if enabled
@@ -107,12 +109,12 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// Set adapter config
 	cfg.Slack.Config = adapter.Config{
-		BotToken:   cfg.Slack.BotToken,
-		AppToken:   cfg.Slack.AppToken,
-		SocketMode: cfg.Slack.SocketMode,
-		AutoThread: cfg.Slack.AutoThread,
+		BotToken:            cfg.Slack.BotToken,
+		AppToken:            cfg.Slack.AppToken,
+		SocketMode:          cfg.Slack.SocketMode,
+		AutoThread:          cfg.Slack.AutoThread,
+		ActionableReactions: cfg.Slack.ActionableReactions,
 		RateLimit: adapter.RateLimitConfig{
 			RequestsPerSecond: getEnvFloat("SLACK_RATE_LIMIT_RPS", 3.0),
 			BurstSize:         getEnvInt("SLACK_RATE_LIMIT_BURST", 10),
