@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "astropods-messaging"
+version = "0.0.4"
+description = "Generated gRPC stubs for the Astro messaging service"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = [
+  "grpcio>=1.62",
+  "protobuf>=4.25",
+]
+
+[project.urls]
+Repository = "https://github.com/postman-eng/astro"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/astropods_messaging"]
