@@ -1,0 +1,29 @@
+name: Check Python gRPC stubs
+
+on:
+  pull_request:
+    paths:
+      - "proto/**"
+      - "sdk/python/scripts/gen_proto.sh"
+
+jobs:
+  check-stubs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install grpcio-tools
+        run: pip install grpcio-tools
+
+      - name: Regenerate stubs
+        run: bash sdk/python/scripts/gen_proto.sh
+
+      - name: Check for uncommitted changes
+        run: |
+          git diff --exit-code sdk/python/src/astropods_messaging/ || \
+            (echo "Python gRPC stubs are out of sync. Run sdk/python/scripts/gen_proto.sh and commit the result." && exit 1)
