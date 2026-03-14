@@ -343,6 +343,116 @@ func TestSendErrorMessage_PostsUserFacingError(t *testing.T) {
 	}
 }
 
+func TestInitialize_ActionableReactionsFromConfig(t *testing.T) {
+	a := &SlackAdapter{contentBuffers: make(map[string]string)}
+	cfg := adapter.Config{
+		BotToken:            "xoxb-test",
+		AppToken:            "xapp-test",
+		SocketMode:          false,
+		AutoThread:          true,
+		ActionableReactions: []string{"ticket", "bug"},
+		RateLimit:           adapter.RateLimitConfig{RequestsPerSecond: 1, BurstSize: 1},
+	}
+
+	err := a.Initialize(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	if len(a.actionableReactions) != 2 {
+		t.Fatalf("actionableReactions len = %d, want 2", len(a.actionableReactions))
+	}
+	if !a.actionableReactions["ticket"] {
+		t.Error("expected 'ticket' in actionableReactions")
+	}
+	if !a.actionableReactions["bug"] {
+		t.Error("expected 'bug' in actionableReactions")
+	}
+}
+
+func TestInitialize_EmptyReactionsDropsAll(t *testing.T) {
+	a := &SlackAdapter{contentBuffers: make(map[string]string)}
+	cfg := adapter.Config{
+		BotToken:   "xoxb-test",
+		AppToken:   "xapp-test",
+		SocketMode: false,
+		RateLimit:  adapter.RateLimitConfig{RequestsPerSecond: 1, BurstSize: 1},
+	}
+
+	err := a.Initialize(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	if len(a.actionableReactions) != 0 {
+		t.Errorf("actionableReactions should be empty, got %v", a.actionableReactions)
+	}
+}
+
+func TestInitialize_SocketModeConfig(t *testing.T) {
+	a := &SlackAdapter{contentBuffers: make(map[string]string)}
+	cfg := adapter.Config{
+		BotToken:   "xoxb-test",
+		AppToken:   "xapp-test",
+		SocketMode: true,
+		RateLimit:  adapter.RateLimitConfig{RequestsPerSecond: 1, BurstSize: 1},
+	}
+
+	err := a.Initialize(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	if !a.config.SocketMode {
+		t.Error("expected SocketMode=true in stored config")
+	}
+	if a.socketClient == nil {
+		t.Error("expected socketClient to be initialized when SocketMode=true")
+	}
+}
+
+func TestInitialize_SocketModeDisabled(t *testing.T) {
+	a := &SlackAdapter{contentBuffers: make(map[string]string)}
+	cfg := adapter.Config{
+		BotToken:   "xoxb-test",
+		AppToken:   "xapp-test",
+		SocketMode: false,
+		RateLimit:  adapter.RateLimitConfig{RequestsPerSecond: 1, BurstSize: 1},
+	}
+
+	err := a.Initialize(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	if a.config.SocketMode {
+		t.Error("expected SocketMode=false in stored config")
+	}
+	if a.socketClient != nil {
+		t.Error("expected socketClient to be nil when SocketMode=false")
+	}
+}
+
+func TestInitialize_AutoThreadConfig(t *testing.T) {
+	a := &SlackAdapter{contentBuffers: make(map[string]string)}
+	cfg := adapter.Config{
+		BotToken:   "xoxb-test",
+		AppToken:   "xapp-test",
+		SocketMode: false,
+		AutoThread: true,
+		RateLimit:  adapter.RateLimitConfig{RequestsPerSecond: 1, BurstSize: 1},
+	}
+
+	err := a.Initialize(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	if !a.config.AutoThread {
+		t.Error("expected AutoThread=true in stored config")
+	}
+}
+
 // fakeSlackServer is an httptest server that stubs the Slack API endpoints
 // needed by tests. It records calls to chat.postMessage.
 type fakeSlackServer struct {
