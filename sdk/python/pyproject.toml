@@ -13,8 +13,5 @@ dependencies = [
   "protobuf>=4.25",
 ]
 
-[project.urls]
-Repository = "https://github.com/postman-eng/astro"
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/astropods_messaging"]
