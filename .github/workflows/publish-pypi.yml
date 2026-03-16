@@ -1,0 +1,80 @@
+name: Publish PyPI package
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Generate app token
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sync version from VERSION file
+        run: |
+          VERSION=$(cat VERSION)
+          sed -i "s/^version = .*/version = \"$VERSION\"/" sdk/python/pyproject.toml
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Install build dependencies
+        run: pip install build
+
+      - name: Build
+        run: python -m build
+        working-directory: sdk/python
+
+      - name: Install test dependencies
+        run: pip install pytest pytest-asyncio ".[dev]"
+        working-directory: sdk/python
+
+      - name: Test
+        run: pytest
+        working-directory: sdk/python
+
+      - name: Check if version is already published
+        id: check-published
+        run: |
+          if pip index versions astropods-messaging 2>/dev/null | grep -q "${{ env.VERSION }}"; then
+            echo "published=true" >> $GITHUB_OUTPUT
+            echo "::notice::v${{ env.VERSION }} is already published on PyPI"
+          else
+            echo "published=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish
+        if: steps.check-published.outputs.published == 'false'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: sdk/python/dist/
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Commit and tag release
+        run: |
+          git config user.name "astro-ci-bot[bot]"
+          git config user.email "${{ secrets.CI_APP_ID }}+astro-ci-bot[bot]@users.noreply.github.com"
+          git add sdk/python/pyproject.toml
+          git diff --staged --quiet || git commit -m "chore: release v${{ env.VERSION }}"
+          if ! git rev-parse "v${{ env.VERSION }}" >/dev/null 2>&1; then
+            git tag "v${{ env.VERSION }}"
+          fi
+          git push origin HEAD --tags --force-with-lease
