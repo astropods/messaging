@@ -8,6 +8,8 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment:
+      name: pypi
     permissions:
       contents: write
       id-token: write
@@ -66,7 +68,6 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: sdk/python/dist/
-          password: ${{ secrets.PYPI_API_TOKEN }}
 
       - name: Commit and tag release
         run: |
