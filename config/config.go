@@ -124,12 +124,6 @@ func Load() (*Config, error) {
 		if cfg.Slack.AdapterConfig.AutoThread == nil {
 			cfg.Slack.AdapterConfig.AutoThread = boolPtr(true)
 		}
-		if len(cfg.Slack.AdapterConfig.AllowedChannels) == 0 {
-			cfg.Slack.AdapterConfig.AllowedChannels = getEnvList("SLACK_ALLOWED_CHANNELS", []string{})
-		}
-		if len(cfg.Slack.AdapterConfig.AllowedUsers) == 0 {
-			cfg.Slack.AdapterConfig.AllowedUsers = getEnvList("SLACK_ALLOWED_USERS", []string{})
-		}
 	}
 	if len(cfg.Slack.AdapterConfig.ActionableReactions) == 0 {
 		cfg.Slack.AdapterConfig.ActionableReactions = getEnvList("SLACK_ACTIONABLE_REACTIONS", nil)
