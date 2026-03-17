@@ -8,7 +8,7 @@ func TestLoad_SlackConfigJSON_FullConfig(t *testing.T) {
 	t.Setenv("SLACK_ENABLED", "true")
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
 	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
-	t.Setenv("SLACK_CONFIG", `{"actionable_reactions":["ticket","bug"],"socket_mode":false,"auto_thread":false}`)
+	t.Setenv("SLACK_CONFIG", `{"actionable_reactions":["ticket","bug"],"socket_mode":false,"auto_thread":false,"allowed_channel_ids":["ch1","ch2"],"allowed_user_ids":["user1","user2"]}`)
 
 	cfg, err := Load()
 	if err != nil {
@@ -25,6 +25,12 @@ func TestLoad_SlackConfigJSON_FullConfig(t *testing.T) {
 	if ac.AutoThread == nil || *ac.AutoThread != false {
 		t.Errorf("AutoThread = %v, want false", ac.AutoThread)
 	}
+	if len(ac.AllowedChannelIDs) != 2 || ac.AllowedChannelIDs[0] != "ch1" || ac.AllowedChannelIDs[1] != "ch2" {
+		t.Errorf("AllowedChannelIDs = %v, want [ch1 ch2]", ac.AllowedChannelIDs)
+	}
+	if len(ac.AllowedUserIDs) != 2 || ac.AllowedUserIDs[0] != "user1" || ac.AllowedUserIDs[1] != "user2" {
+		t.Errorf("AllowedUserIDs = %v, want [user1 user2]", ac.AllowedUserIDs)
+	}
 
 	if cfg.Slack.Config.SocketMode != false {
 		t.Errorf("adapter.Config.SocketMode = %v, want false", cfg.Slack.Config.SocketMode)
@@ -34,6 +40,12 @@ func TestLoad_SlackConfigJSON_FullConfig(t *testing.T) {
 	}
 	if len(cfg.Slack.Config.ActionableReactions) != 2 {
 		t.Errorf("adapter.Config.ActionableReactions len = %d, want 2", len(cfg.Slack.Config.ActionableReactions))
+	}
+	if len(cfg.Slack.Config.AllowedChannelIDs) != 2 {
+		t.Errorf("AllowedChannelIDs len = %d, want 2", len(cfg.Slack.Config.AllowedChannelIDs))
+	}
+	if len(cfg.Slack.Config.AllowedUserIDs) != 2 {
+		t.Errorf("AllowedUserIDs len = %d, want 2", len(cfg.Slack.Config.AllowedUserIDs))
 	}
 }
 
@@ -57,6 +69,12 @@ func TestLoad_SlackConfigJSON_DefaultsWhenAbsent(t *testing.T) {
 	if len(ac.ActionableReactions) != 0 {
 		t.Errorf("ActionableReactions default = %v, want empty", ac.ActionableReactions)
 	}
+	if len(ac.AllowedChannelIDs) != 0 {
+		t.Errorf("AllowedChannelIDs default = %v, want empty", ac.AllowedChannelIDs)
+	}
+	if len(ac.AllowedUserIDs) != 0 {
+		t.Errorf("AllowedUserIDs default = %v, want empty", ac.AllowedUserIDs)
+	}
 
 	if cfg.Slack.Config.SocketMode != true {
 		t.Errorf("adapter.Config.SocketMode default = %v, want true", cfg.Slack.Config.SocketMode)
@@ -64,13 +82,19 @@ func TestLoad_SlackConfigJSON_DefaultsWhenAbsent(t *testing.T) {
 	if cfg.Slack.Config.AutoThread != true {
 		t.Errorf("adapter.Config.AutoThread default = %v, want true", cfg.Slack.Config.AutoThread)
 	}
+	if len(cfg.Slack.Config.AllowedChannelIDs) != 0 {
+		t.Errorf("AllowedChannelIDs default = %v, want empty", cfg.Slack.Config.AllowedChannelIDs)
+	}
+	if len(cfg.Slack.Config.AllowedUserIDs) != 0 {
+		t.Errorf("AllowedUserIDs default = %v, want empty", cfg.Slack.Config.AllowedUserIDs)
+	}
 }
 
 func TestLoad_SlackConfigJSON_PartialJSON(t *testing.T) {
 	t.Setenv("SLACK_ENABLED", "true")
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
 	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
-	t.Setenv("SLACK_CONFIG", `{"actionable_reactions":["ticket"]}`)
+	t.Setenv("SLACK_CONFIG", `{"actionable_reactions":["ticket"],"allowed_channel_ids":["ch1"]}`)
 
 	cfg, err := Load()
 	if err != nil {
@@ -86,6 +110,12 @@ func TestLoad_SlackConfigJSON_PartialJSON(t *testing.T) {
 	}
 	if ac.AutoThread == nil || *ac.AutoThread != true {
 		t.Errorf("AutoThread should default to true when omitted from JSON, got %v", ac.AutoThread)
+	}
+	if len(ac.AllowedChannelIDs) != 1 || ac.AllowedChannelIDs[0] != "ch1" {
+		t.Errorf("AllowedChannelIDs = %v, want [ch1]", ac.AllowedChannelIDs)
+	}
+	if len(ac.AllowedUserIDs) != 0 {
+		t.Errorf("AllowedUserIDs default = %v, want empty", ac.AllowedUserIDs)
 	}
 }
 

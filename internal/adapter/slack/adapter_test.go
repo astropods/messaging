@@ -233,6 +233,142 @@ func TestHandleMessage_PlatformContext(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_AllowedChannelIDs_DisallowedDoesNotInvokeHandler(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}}
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	ev := &slackevents.MessageEvent{
+		Channel:         "C123456",
+		User:            "U123",
+		Text:            "hello",
+		TimeStamp:       "1234567891.000001",
+		ThreadTimeStamp: "1234567890.000001",
+	}
+
+	a.handleMessage(t.Context(), ev)
+
+	if handler.count() != 0 {
+		t.Errorf("disallowed event must not invoke msgHandler, got %d messages", handler.count())
+	}
+}
+
+func TestHandleMessage_AllowedChannelIDs_AllowedInvokesHandler(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.config = adapter.Config{AllowedChannelIDs: []string{"C123456"}}
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	ev := &slackevents.MessageEvent{
+		Channel:         "C123456",
+		User:            "U123",
+		Text:            "hello",
+		TimeStamp:       "1234567891.000001",
+		ThreadTimeStamp: "1234567890.000001",
+	}
+
+	a.handleMessage(t.Context(), ev)
+
+	if handler.count() != 1 {
+		t.Fatalf("allowed event must invoke msgHandler, got %d messages", handler.count())
+	}
+}
+
+func TestHandleMessage_AllowedUserIDs_DisallowedDoesNotInvokeHandler(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.config = adapter.Config{AllowedUserIDs: []string{"U999"}}
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "D123456",
+		User:      "U123",
+		Text:      "hello dm",
+		TimeStamp: "1234567890.000001",
+	}
+
+	a.handleMessage(t.Context(), ev)
+
+	if handler.count() != 0 {
+		t.Errorf("disallowed event must not invoke msgHandler, got %d messages", handler.count())
+	}
+}
+
+func TestHandleMessage_AllowedUserIDs_AllowedInvokesHandle(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.config = adapter.Config{AllowedUserIDs: []string{"U123"}}
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "D123456",
+		User:      "U123",
+		Text:      "hello dm",
+		TimeStamp: "1234567890.000001",
+	}
+
+	a.handleMessage(t.Context(), ev)
+
+	if handler.count() != 1 {
+		t.Fatalf("allowed event must invoke msgHandler, got %d messages", handler.count())
+	}
+}
+
+func TestHandleAppMention_AllowedChannelIDs_DisallowedDoesNotInvokeHandlerAndPostsNotEnabled(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}}
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	ev := &slackevents.AppMentionEvent{
+		Channel:         "C123456",
+		User:            "U123",
+		Text:            "<@BOT> hello",
+		TimeStamp:       "1234567890.000001",
+		ThreadTimeStamp: "",
+	}
+
+	a.handleAppMention(t.Context(), ev)
+
+	if handler.count() != 0 {
+		t.Errorf("disallowed app_mention must not invoke msgHandler, got %d messages", handler.count())
+	}
+}
+
+func TestHandleAppMention_AllowedChannelIDs_AllowedInvokesHandlerAndDoesNotPostNotEnabled(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.config = adapter.Config{AllowedChannelIDs: []string{"C123456"}}
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	// aiClient is used for SetThreadStatus when allowed; point at fake server so it doesn't panic
+	a.aiClient = &SlackAIClient{
+		botToken:   "xoxb-fake",
+		httpClient: srv.Client(),
+		baseURL:    srv.URL,
+	}
+
+	ev := &slackevents.AppMentionEvent{
+		Channel:         "C123456",
+		User:            "U123",
+		Text:            "<@BOT> hello",
+		TimeStamp:       "1234567890.000001",
+		ThreadTimeStamp: "",
+	}
+
+	a.handleAppMention(t.Context(), ev)
+
+	if handler.count() != 1 {
+		t.Fatalf("allowed app_mention must invoke msgHandler, got %d messages", handler.count())
+	}
+}
+
 func TestHandleReactionAdded_ActionableReactionForwarded(t *testing.T) {
 	a, handler := newTestAdapterWithReactions([]string{"ticket"})
 	srv := newFakeSlackServer(t, "original message text")

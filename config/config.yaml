@@ -11,8 +11,13 @@ deployment_mode: "all"
 # Slack configuration
 slack:
   enabled: true
+  # Adapter behavior config
+  actionable_reactions: []
   socket_mode: true
   auto_thread: true
+  # Allowlists: restrict which channels/users can use the app. Empty = allow all.
+  allowed_channel_ids: []
+  allowed_user_ids: []
   rate_limit:
     requests_per_second: 3
     burst_size: 10

@@ -72,6 +72,8 @@ type Config struct {
 	AutoThread          bool
 	RateLimit           RateLimitConfig
 	ActionableReactions []string // Emoji names forwarded to the agent; empty means no reactions
+	AllowedChannelIDs   []string // Channel IDs that may use the app (empty = allow all)
+	AllowedUserIDs      []string // User IDs that may use the app (empty = allow all)
 }
 
 // RateLimitConfig configures rate limiting

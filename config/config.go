@@ -56,6 +56,8 @@ type SlackAdapterConfig struct {
 	ActionableReactions []string `json:"actionable_reactions,omitempty"`
 	SocketMode          *bool    `json:"socket_mode,omitempty"`
 	AutoThread          *bool    `json:"auto_thread,omitempty"`
+	AllowedChannelIDs   []string `json:"allowed_channel_ids,omitempty"`
+	AllowedUserIDs      []string `json:"allowed_user_ids,omitempty"`
 }
 
 // SlackConfig holds Slack-specific configuration
@@ -126,6 +128,12 @@ func Load() (*Config, error) {
 	if len(cfg.Slack.AdapterConfig.ActionableReactions) == 0 {
 		cfg.Slack.AdapterConfig.ActionableReactions = getEnvList("SLACK_ACTIONABLE_REACTIONS", nil)
 	}
+	if len(cfg.Slack.AdapterConfig.AllowedChannelIDs) == 0 {
+		cfg.Slack.AdapterConfig.AllowedChannelIDs = getEnvList("SLACK_ALLOWED_CHANNEL_IDS", []string{})
+	}
+	if len(cfg.Slack.AdapterConfig.AllowedUserIDs) == 0 {
+		cfg.Slack.AdapterConfig.AllowedUserIDs = getEnvList("SLACK_ALLOWED_USER_IDS", []string{})
+	}
 
 	socketMode := derefBool(cfg.Slack.AdapterConfig.SocketMode, true)
 	autoThread := derefBool(cfg.Slack.AdapterConfig.AutoThread, true)
@@ -145,6 +153,8 @@ func Load() (*Config, error) {
 		SocketMode:          socketMode,
 		AutoThread:          autoThread,
 		ActionableReactions: cfg.Slack.AdapterConfig.ActionableReactions,
+		AllowedChannelIDs:   cfg.Slack.AdapterConfig.AllowedChannelIDs,
+		AllowedUserIDs:      cfg.Slack.AdapterConfig.AllowedUserIDs,
 		RateLimit: adapter.RateLimitConfig{
 			RequestsPerSecond: getEnvFloat("SLACK_RATE_LIMIT_RPS", 3.0),
 			BurstSize:         getEnvInt("SLACK_RATE_LIMIT_BURST", 10),
