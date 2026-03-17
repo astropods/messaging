@@ -56,8 +56,8 @@ type SlackAdapterConfig struct {
 	ActionableReactions []string `json:"actionable_reactions,omitempty"`
 	SocketMode          *bool    `json:"socket_mode,omitempty"`
 	AutoThread          *bool    `json:"auto_thread,omitempty"`
-	AllowedChannels 	[]string `json:"allowed_channels,omitempty"`
-	AllowedUsers    	[]string `json:"allowed_users,omitempty"`
+	AllowedChannels     []string `json:"allowed_channels,omitempty"`
+	AllowedUsers        []string `json:"allowed_users,omitempty"`
 }
 
 // SlackConfig holds Slack-specific configuration
@@ -102,13 +102,6 @@ func Load() (*Config, error) {
 		TTL:         getEnvInt("THREAD_HISTORY_TTL_HOURS", 24),
 	}
 
-	// Slack configuration
-	cfg.Slack = SlackConfig{
-		Enabled:         getEnvBool("SLACK_ENABLED", false),
-		BotToken:        getEnv("SLACK_BOT_TOKEN", ""),
-		AppToken:        getEnv("SLACK_APP_TOKEN", ""),
-		SocketMode:      getEnvBool("SLACK_SOCKET_MODE", true),
-		AutoThread:      getEnvBool("SLACK_AUTO_THREAD", true),
 	// Slack configuration: credentials from individual env vars, behavioral
 	// settings from SLACK_CONFIG JSON. Defaults match the previous hardcoded values.
 	cfg.Slack.Enabled = getEnvBool("SLACK_ENABLED", false)
@@ -120,8 +113,6 @@ func Load() (*Config, error) {
 	cfg.Slack.AdapterConfig = SlackAdapterConfig{
 		SocketMode: boolPtr(true),
 		AutoThread: boolPtr(true),
-		AllowedChannels: getEnvList("SLACK_ALLOWED_CHANNELS", []string{}),
-		AllowedUsers: getEnvList("SLACK_ALLOWED_USERS", []string{}),
 	}
 	if raw := os.Getenv("SLACK_CONFIG"); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &cfg.Slack.AdapterConfig); err != nil {
@@ -133,9 +124,21 @@ func Load() (*Config, error) {
 		if cfg.Slack.AdapterConfig.AutoThread == nil {
 			cfg.Slack.AdapterConfig.AutoThread = boolPtr(true)
 		}
+		if len(cfg.Slack.AdapterConfig.AllowedChannels) == 0 {
+			cfg.Slack.AdapterConfig.AllowedChannels = getEnvList("SLACK_ALLOWED_CHANNELS", []string{})
+		}
+		if len(cfg.Slack.AdapterConfig.AllowedUsers) == 0 {
+			cfg.Slack.AdapterConfig.AllowedUsers = getEnvList("SLACK_ALLOWED_USERS", []string{})
+		}
 	}
 	if len(cfg.Slack.AdapterConfig.ActionableReactions) == 0 {
 		cfg.Slack.AdapterConfig.ActionableReactions = getEnvList("SLACK_ACTIONABLE_REACTIONS", nil)
+	}
+	if len(cfg.Slack.AdapterConfig.AllowedChannels) == 0 {
+		cfg.Slack.AdapterConfig.AllowedChannels = getEnvList("SLACK_ALLOWED_CHANNELS", []string{})
+	}
+	if len(cfg.Slack.AdapterConfig.AllowedUsers) == 0 {
+		cfg.Slack.AdapterConfig.AllowedUsers = getEnvList("SLACK_ALLOWED_USERS", []string{})
 	}
 
 	socketMode := derefBool(cfg.Slack.AdapterConfig.SocketMode, true)

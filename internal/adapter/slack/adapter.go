@@ -78,8 +78,8 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 		a.actionableReactions[r] = true
 	}
 
-	log.Printf("[Slack] Adapter initialized (Socket Mode: %v, actionable reactions: %v)",
-		config.SocketMode, config.ActionableReactions)
+	log.Printf("[Slack] Adapter initialized (Socket Mode: %v, actionable reactions: %v, allowed channels: %v, allowed user IDs: %v)",
+		config.SocketMode, config.ActionableReactions, config.AllowedChannelIDs, config.AllowedUserIDs)
 	return nil
 }
 
