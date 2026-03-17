@@ -13,5 +13,14 @@ dependencies = [
   "protobuf>=4.25",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/astropods_messaging"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
