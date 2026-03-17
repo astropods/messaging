@@ -11,31 +11,20 @@ jobs:
     environment:
       name: pypi
     permissions:
-      contents: write
       id-token: write
 
     steps:
-      - name: Generate app token
-        uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: ${{ secrets.CI_APP_ID }}
-          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
-
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          token: ${{ steps.app-token.outputs.token }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Sync version from VERSION file
+      - name: Read version
         run: |
-          VERSION=$(cat VERSION)
-          sed -i "s/^version = .*/version = \"$VERSION\"/" sdk/python/pyproject.toml
+          VERSION=$(grep '^version' sdk/python/pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Install build dependencies
@@ -69,13 +58,3 @@ jobs:
         with:
           packages-dir: sdk/python/dist/
 
-      - name: Commit and tag release
-        run: |
-          git config user.name "astro-ci-bot[bot]"
-          git config user.email "${{ secrets.CI_APP_ID }}+astro-ci-bot[bot]@users.noreply.github.com"
-          git add sdk/python/pyproject.toml
-          git diff --staged --quiet || git commit -m "chore: release v${{ env.VERSION }}"
-          if ! git rev-parse "v${{ env.VERSION }}" >/dev/null 2>&1; then
-            git tag "v${{ env.VERSION }}"
-          fi
-          git push origin HEAD --tags --force-with-lease
