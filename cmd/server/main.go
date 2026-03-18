@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 	"github.com/astropods/messaging/internal/grpc"
 	"github.com/astropods/messaging/internal/store"
 	"github.com/astropods/messaging/internal/version"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -97,6 +99,18 @@ func main() {
 				log.Printf("Registered audio forwarder for %s adapter", name)
 			}
 		}
+	}
+
+	// Start metrics server
+	if cfg.Metrics.Enabled {
+		go func() {
+			mux := http.NewServeMux()
+			mux.Handle("/metrics", promhttp.Handler())
+			log.Printf("Starting metrics server on %s", cfg.Metrics.ListenAddr)
+			if err := http.ListenAndServe(cfg.Metrics.ListenAddr, mux); err != nil {
+				log.Printf("Metrics server error: %v", err)
+			}
+		}()
 	}
 
 	// Start gRPC server

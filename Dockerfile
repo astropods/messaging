@@ -55,14 +55,13 @@ WORKDIR /app
 COPY --from=builder /app/messaging .
 
 # Copy config (optional - can be overridden by env vars)
-COPY config/config.yaml ./config/
 
 # Set ownership and switch to non-root user
 RUN chown -R astro:astro /app
 USER astro
 
-# Expose ports: 8080 (HTTP/SSE), 9090 (gRPC)
-EXPOSE 8080 9090
+# Expose ports: 8080 (HTTP/SSE), 9090 (gRPC), 9091 (Prometheus metrics)
+EXPOSE 8080 9090 9091
 
 # Run the binary
 CMD ["./messaging"]

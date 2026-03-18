@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/metrics"
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/google/uuid"
@@ -191,6 +192,7 @@ func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackeve
 func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.MessageEvent) {
 	// Filter out bot messages
 	if ev.BotID != "" {
+		metrics.MessagesDropped.WithLabelValues("slack", "bot_filtered").Inc()
 		return
 	}
 
@@ -212,9 +214,16 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	// Allowlist: if configured, only allow messages from allowed channels or users
 	if !a.isAllowed(ev.Channel, ev.User) {
 		log.Printf("[Slack] Message from disallowed channel=%s or user=%s", ev.Channel, ev.User)
+		metrics.MessagesDropped.WithLabelValues("slack", "allowlist").Inc()
 		a.sendNotEnabledMessage(ctx, ev.Channel, ev.ThreadTimeStamp)
 		return
 	}
+
+	eventType := "thread_reply"
+	if ev.Channel != "" && ev.Channel[0] == 'D' {
+		eventType = "dm"
+	}
+	metrics.SlackEvents.WithLabelValues(eventType).Inc()
 
 	log.Printf("[Slack] Message received: channel=%s, user=%s, text=%s", ev.Channel, ev.User, ev.Text)
 
@@ -316,6 +325,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 	// Allowlist: if configured, only allow mentions from allowed channels or users
 	if !a.isAllowed(ev.Channel, ev.User) {
 		log.Printf("[Slack] App mention from disallowed channel=%s or user=%s", ev.Channel, ev.User)
+		metrics.MessagesDropped.WithLabelValues("slack", "allowlist").Inc()
 		threadID := ev.ThreadTimeStamp
 		if threadID == "" {
 			threadID = ev.TimeStamp
@@ -323,6 +333,8 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 		a.sendNotEnabledMessage(ctx, ev.Channel, threadID)
 		return
 	}
+
+	metrics.SlackEvents.WithLabelValues("mention").Inc()
 
 	// Use ThreadTimeStamp if already in a thread, otherwise use the message's
 	// own TimeStamp so the response creates a new thread under the mention.
@@ -378,6 +390,8 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 		log.Printf("[Slack] Ignoring non-actionable reaction :%s:", ev.Reaction)
 		return
 	}
+
+	metrics.SlackEvents.WithLabelValues("reaction").Inc()
 
 	originalText := a.fetchMessageText(ctx, ev.Item.Channel, ev.Item.Timestamp)
 	if originalText == "" {

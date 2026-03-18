@@ -16,7 +16,7 @@ Go messaging service that connects AI agents to messaging platforms via gRPC bid
 ```
 messaging/
 ├── cmd/server/                  # Server entrypoint
-├── config/                      # Configuration (config.go + config.yaml)
+├── config/                      # Configuration (env-var driven, see config.go)
 ├── internal/
 │   ├── adapter/                 # Platform adapter interface
 │   │   ├── slack/               # Slack Socket Mode adapter
@@ -56,6 +56,7 @@ go run cmd/server/main.go
 The server starts:
 - gRPC on `:9090` (agents connect here)
 - HTTP/SSE on `:8080` (web adapter)
+- Prometheus metrics on `:9091`
 
 ### Run with Docker
 
@@ -71,7 +72,7 @@ docker run \
 
 ## Configuration
 
-All config via environment variables (see `config/config.yaml` for defaults):
+All config via environment variables:
 
 ```bash
 # Slack
@@ -96,6 +97,81 @@ THREAD_HISTORY_TTL_HOURS=24
 
 # Logging: debug, info, warn, error
 LOG_LEVEL=info
+```
+
+## Metrics
+
+Prometheus metrics are exposed on a dedicated port (default `:9091`):
+
+```bash
+METRICS_LISTEN_ADDR=:9091  # default, override if needed
+
+# To disable:
+METRICS_ENABLED=false
+```
+
+Scrape endpoint: `http://<host>:9091/metrics`
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `messaging_messages_received_total` | Counter | `platform` | Messages that passed adapter filtering and reached the gRPC layer |
+| `messaging_messages_forwarded_total` | Counter | `platform` | Messages successfully sent to an agent stream |
+| `messaging_messages_dropped_total` | Counter | `platform`, `reason` | Messages dropped before reaching an agent (`no_agent`, `allowlist`, `bot_filtered`) |
+| `messaging_slack_events_total` | Counter | `event_type` | Slack events by type: `dm`, `thread_reply`, `mention`, `reaction` |
+| `messaging_agent_responses_total` | Counter | `type` | Agent responses routed back to platform adapters |
+| `messaging_routing_errors_total` | Counter | `adapter` | Errors delivering agent responses to adapters |
+| `messaging_active_streams` | Gauge | — | Currently open bidirectional gRPC agent streams |
+| `messaging_web_active_connections` | Gauge | — | Currently open SSE client connections |
+| `messaging_message_latency_seconds` | Histogram | `platform` | Time from message receipt to successful agent forwarding |
+
+### Grafana Alloy
+
+Add a scrape job to your Alloy config (`config.alloy`):
+
+```hcl
+prometheus.scrape "astro_messaging" {
+  targets = [{
+    __address__ = "localhost:9091",
+  }]
+  forward_to = [prometheus.remote_write.default.receiver]
+}
+```
+
+If the container and Alloy are on the same Docker network, use the container name instead of `localhost`:
+
+```hcl
+targets = [{
+  __address__ = "messaging:9091",
+}]
+```
+
+To override the scrape interval or attach labels:
+
+```hcl
+prometheus.scrape "astro_messaging" {
+  targets = [{
+    __address__ = "messaging:9091",
+    service     = "astro-messaging",
+  }]
+  scrape_interval = "30s"
+  forward_to      = [prometheus.remote_write.default.receiver]
+}
+```
+
+### Useful queries
+
+```promql
+# Messages dropped because no agent is connected
+rate(messaging_messages_dropped_total{reason="no_agent"}[5m])
+
+# Forwarded message throughput by platform
+rate(messaging_messages_forwarded_total[5m])
+
+# p95 end-to-end latency
+histogram_quantile(0.95, rate(messaging_message_latency_seconds_bucket[5m]))
+
+# Slack event breakdown
+rate(messaging_slack_events_total[5m])
 ```
 
 ## Agent SDKs
