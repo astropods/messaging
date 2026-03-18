@@ -18,6 +18,18 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// freePort returns a free TCP port on localhost.
+func freePort(t *testing.T) string {
+	t.Helper()
+	lis, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatalf("freePort: %v", err)
+	}
+	addr := lis.Addr().String()
+	lis.Close()
+	return addr
+}
+
 type integrationServer struct {
 	srv        *grpcserver.Server
 	grpcAddr   string
@@ -28,35 +40,33 @@ type integrationServer struct {
 func startIntegrationServer(t *testing.T) *integrationServer {
 	t.Helper()
 
-	grpcLis, err := net.Listen("tcp", ":0")
-	if err != nil {
-		t.Fatalf("gRPC listen: %v", err)
-	}
-	metricsLis, err := net.Listen("tcp", ":0")
-	if err != nil {
-		t.Fatalf("metrics listen: %v", err)
-	}
+	grpcAddr := freePort(t)
+	metricsAddr := freePort(t)
 
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	srv := grpcserver.NewServer(grpcLis.Addr().String(), threadStore, convStore, nil)
+	srv := grpcserver.NewServer(grpcAddr, threadStore, convStore, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go srv.StartOnListener(ctx, grpcLis) //nolint:errcheck
+	go srv.Start(ctx) //nolint:errcheck
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	metricsSrv := &http.Server{
+		Addr:        metricsAddr,
 		Handler:     mux,
 		ReadTimeout: 5 * time.Second,
 		IdleTimeout: 60 * time.Second,
 	}
-	go metricsSrv.Serve(metricsLis) //nolint:errcheck
+	go metricsSrv.ListenAndServe() //nolint:errcheck
+
+	// Wait for both servers to be ready.
+	time.Sleep(50 * time.Millisecond)
 
 	return &integrationServer{
 		srv:        srv,
-		grpcAddr:   grpcLis.Addr().String(),
-		metricsURL: "http://" + metricsLis.Addr().String() + "/metrics",
+		grpcAddr:   grpcAddr,
+		metricsURL: "http://" + metricsAddr + "/metrics",
 		shutdown: func() {
 			cancel()
 			srv.Stop()
