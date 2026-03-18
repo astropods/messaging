@@ -106,8 +106,14 @@ func main() {
 		go func() {
 			mux := http.NewServeMux()
 			mux.Handle("/metrics", promhttp.Handler())
+			srv := &http.Server{
+				Addr:        cfg.Metrics.ListenAddr,
+				Handler:     mux,
+				ReadTimeout: 5 * time.Second,
+				IdleTimeout: 60 * time.Second,
+			}
 			log.Printf("Starting metrics server on %s", cfg.Metrics.ListenAddr)
-			if err := http.ListenAndServe(cfg.Metrics.ListenAddr, mux); err != nil {
+			if err := srv.ListenAndServe(); err != nil {
 				log.Printf("Metrics server error: %v", err)
 			}
 		}()
