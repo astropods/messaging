@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/metrics"
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/astropods/messaging/pkg/types"
@@ -117,6 +118,8 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 	streamID := fmt.Sprintf("stream-%p", stream)
 
 	log.Printf("[gRPC] New bidirectional stream: %s", streamID)
+	metrics.ActiveStreams.Inc()
+	defer metrics.ActiveStreams.Dec()
 
 	// Wait for initial registration message from agent
 	req, err := stream.Recv()
@@ -318,6 +321,8 @@ func (s *Server) HealthCheck(ctx context.Context, req *pb.HealthCheckRequest) (*
 // This routes the message to the agent via gRPC stream.
 func (s *Server) HandleIncomingMessage(ctx context.Context, msg *pb.Message) error {
 	log.Printf("[gRPC] Incoming platform message: %s from %s", msg.Id, msg.Platform)
+	metrics.MessagesReceived.WithLabelValues(msg.Platform).Inc()
+	start := time.Now()
 
 	// Update conversation cache
 	if err := s.updateConversationCache(ctx, msg); err != nil {
@@ -334,6 +339,7 @@ func (s *Server) HandleIncomingMessage(ctx context.Context, msg *pb.Message) err
 	s.streamsMu.RUnlock()
 
 	if stream == nil {
+		metrics.MessagesDropped.WithLabelValues(msg.Platform, "no_agent").Inc()
 		return adapter.ErrNoAgentStream
 	}
 
@@ -350,6 +356,8 @@ func (s *Server) HandleIncomingMessage(ctx context.Context, msg *pb.Message) err
 		return fmt.Errorf("failed to send to agent: %w", err)
 	}
 
+	metrics.MessagesForwarded.WithLabelValues(msg.Platform).Inc()
+	metrics.MessageLatency.WithLabelValues(msg.Platform).Observe(time.Since(start).Seconds())
 	log.Printf("[gRPC] Message forwarded to agent via stream")
 	return nil
 }
@@ -438,6 +446,9 @@ func (s *Server) findStreamForConversation(conversationID string) *conversationS
 func (s *Server) routeAgentResponse(ctx context.Context, response *pb.AgentResponse) error {
 	conversationID := response.ConversationId
 
+	responseType := agentResponseType(response)
+	metrics.AgentResponses.WithLabelValues(responseType).Inc()
+
 	// Try to find the platform from conversation cache
 	conv, err := s.conversationCache.Get(ctx, conversationID)
 	if err == nil {
@@ -447,7 +458,11 @@ func (s *Server) routeAgentResponse(ctx context.Context, response *pb.AgentRespo
 		s.mu.RUnlock()
 
 		if exists {
-			return adpt.HandleAgentResponse(ctx, response)
+			if err := adpt.HandleAgentResponse(ctx, response); err != nil {
+				metrics.RoutingErrors.WithLabelValues(conv.Platform).Inc()
+				return err
+			}
+			return nil
 		}
 	}
 
@@ -459,10 +474,35 @@ func (s *Server) routeAgentResponse(ctx context.Context, response *pb.AgentRespo
 	for name, adpt := range s.adapters {
 		if err := adpt.HandleAgentResponse(ctx, response); err != nil {
 			log.Printf("[gRPC] Error routing agent response to %s: %v", name, err)
+			metrics.RoutingErrors.WithLabelValues(name).Inc()
 		}
 	}
 
 	return nil
+}
+
+// agentResponseType returns a label string for the payload type of an AgentResponse.
+func agentResponseType(r *pb.AgentResponse) string {
+	switch r.Payload.(type) {
+	case *pb.AgentResponse_IncomingMessage:
+		return "incoming_message"
+	case *pb.AgentResponse_Content:
+		return "content"
+	case *pb.AgentResponse_Status:
+		return "status"
+	case *pb.AgentResponse_Prompts:
+		return "prompts"
+	case *pb.AgentResponse_ThreadMetadata:
+		return "thread_metadata"
+	case *pb.AgentResponse_Error:
+		return "error"
+	case *pb.AgentResponse_AudioConfig:
+		return "audio_config"
+	case *pb.AgentResponse_AudioChunk:
+		return "audio_chunk"
+	default:
+		return "unknown"
+	}
 }
 
 // updateConversationCache updates the conversation metadata cache

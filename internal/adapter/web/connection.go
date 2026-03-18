@@ -5,6 +5,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/astropods/messaging/internal/metrics"
 )
 
 // SSEConnection represents an active SSE connection
@@ -54,6 +56,7 @@ func (cm *ConnectionManager) Add(conn *SSEConnection) {
 		cm.connections[conn.ConversationID] = make(map[string]*SSEConnection)
 	}
 	cm.connections[conn.ConversationID][conn.ID] = conn
+	metrics.WebActiveConnections.Inc()
 
 	log.Printf("[Web] SSE connection added: id=%s, conversation=%s", conn.ID, conn.ConversationID)
 }
@@ -67,6 +70,7 @@ func (cm *ConnectionManager) Remove(conversationID, connID string) {
 		if conn, exists := conns[connID]; exists {
 			close(conn.Done)
 			delete(conns, connID)
+			metrics.WebActiveConnections.Dec()
 			log.Printf("[Web] SSE connection removed: id=%q, conversation=%q", connID, conversationID) //nolint:gosec // G706 false positive: %q escapes control characters
 		}
 		if len(conns) == 0 {
@@ -169,6 +173,7 @@ func (cm *ConnectionManager) CloseAll() {
 		}
 		delete(cm.connections, convID)
 	}
+	metrics.WebActiveConnections.Set(0)
 
 	log.Println("[Web] All SSE connections closed")
 }

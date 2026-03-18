@@ -27,8 +27,17 @@ type Config struct {
 	// Thread history configuration
 	ThreadHistory ThreadHistoryConfig
 
+	// Metrics configuration
+	Metrics MetricsConfig
+
 	// Logging
 	LogLevel string
+}
+
+// MetricsConfig holds Prometheus metrics server configuration
+type MetricsConfig struct {
+	Enabled    bool
+	ListenAddr string
 }
 
 // GRPCConfig holds gRPC server configuration
@@ -166,6 +175,12 @@ func Load() (*Config, error) {
 		Enabled:        getEnvBool("WEB_ENABLED", false),
 		ListenAddr:     getEnv("WEB_LISTEN_ADDR", ":8080"),
 		AllowedOrigins: getEnvList("WEB_ALLOWED_ORIGINS", []string{"*"}),
+	}
+
+	// Metrics configuration
+	cfg.Metrics = MetricsConfig{
+		Enabled:    getEnvBool("METRICS_ENABLED", true),
+		ListenAddr: getEnv("METRICS_LISTEN_ADDR", ":9091"),
 	}
 
 	// Storage configuration
