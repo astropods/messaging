@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/metrics"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	slacklib "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 )
@@ -71,6 +73,8 @@ func TestHandleMessage_DMProcessed(t *testing.T) {
 		TimeStamp: "1234567890.000001",
 	}
 
+	beforeEvent := testutil.ToFloat64(metrics.SlackEvents.WithLabelValues("dm"))
+
 	a.handleMessage(t.Context(), ev)
 
 	if handler.count() != 1 {
@@ -79,6 +83,9 @@ func TestHandleMessage_DMProcessed(t *testing.T) {
 	msg := handler.last()
 	if msg.ConversationId != "D123456" {
 		t.Errorf("expected conversation ID 'D123456', got %q", msg.ConversationId)
+	}
+	if got := testutil.ToFloat64(metrics.SlackEvents.WithLabelValues("dm")) - beforeEvent; got != 1 {
+		t.Errorf("SlackEvents{dm}: expected +1, got +%v", got)
 	}
 }
 
@@ -158,10 +165,15 @@ func TestHandleMessage_BotMessageIgnored(t *testing.T) {
 		TimeStamp: "1234567890.000001",
 	}
 
+	beforeDropped := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "bot_filtered"))
+
 	a.handleMessage(t.Context(), ev)
 
 	if handler.count() != 0 {
 		t.Errorf("expected bot message to be ignored, got %d messages", handler.count())
+	}
+	if got := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "bot_filtered")) - beforeDropped; got != 1 {
+		t.Errorf("MessagesDropped{bot_filtered}: expected +1, got +%v", got)
 	}
 }
 

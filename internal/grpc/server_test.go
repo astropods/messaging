@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/metrics"
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/astropods/messaging/pkg/types"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -115,9 +117,19 @@ func TestHandleIncomingMessage_ForwardsToStream(t *testing.T) {
 		},
 	}
 
+	beforeReceived := testutil.ToFloat64(metrics.MessagesReceived.WithLabelValues("slack"))
+	beforeForwarded := testutil.ToFloat64(metrics.MessagesForwarded.WithLabelValues("slack"))
+
 	err := server.HandleIncomingMessage(context.Background(), msg)
 	if err != nil {
 		t.Fatalf("HandleIncomingMessage failed: %v", err)
+	}
+
+	if got := testutil.ToFloat64(metrics.MessagesReceived.WithLabelValues("slack")) - beforeReceived; got != 1 {
+		t.Errorf("MessagesReceived: expected +1, got +%v", got)
+	}
+	if got := testutil.ToFloat64(metrics.MessagesForwarded.WithLabelValues("slack")) - beforeForwarded; got != 1 {
+		t.Errorf("MessagesForwarded: expected +1, got +%v", got)
 	}
 
 	if capturedResponse == nil {
@@ -163,9 +175,15 @@ func TestHandleIncomingMessage_NoActiveStream(t *testing.T) {
 		Content:  "Hello",
 	}
 
+	beforeDropped := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("web", "no_agent"))
+
 	err := server.HandleIncomingMessage(context.Background(), msg)
 	if err == nil {
 		t.Fatal("expected error when no active stream")
+	}
+
+	if got := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("web", "no_agent")) - beforeDropped; got != 1 {
+		t.Errorf("MessagesDropped{no_agent}: expected +1, got +%v", got)
 	}
 }
 

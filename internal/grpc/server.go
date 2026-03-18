@@ -71,13 +71,18 @@ func (s *Server) RegisterAdapter(name string, adpt adapter.Adapter) {
 	log.Printf("[gRPC] Registered adapter: %s", name)
 }
 
-// Start starts the gRPC server
+// Start starts the gRPC server, binding to s.listenAddr.
 func (s *Server) Start(ctx context.Context) error {
 	lis, err := net.Listen("tcp", s.listenAddr)
 	if err != nil {
 		return fmt.Errorf("failed to listen: %w", err)
 	}
+	return s.StartOnListener(ctx, lis)
+}
 
+// StartOnListener starts the gRPC server on an already-bound listener.
+// Useful in tests where the caller needs to know the bound address before starting.
+func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 	s.grpcServer = grpc.NewServer(
 		grpc.MaxConcurrentStreams(100),
 		grpc.MaxRecvMsgSize(4*1024*1024), // 4MB
@@ -86,7 +91,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	pb.RegisterAgentMessagingServer(s.grpcServer, s)
 
-	log.Printf("[gRPC] Server listening on %s", s.listenAddr)
+	log.Printf("[gRPC] Server listening on %s", lis.Addr())
 
 	// Start server in goroutine
 	go func() {
