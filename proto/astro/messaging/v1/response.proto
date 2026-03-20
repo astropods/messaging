@@ -26,6 +26,7 @@ message AgentResponse {
     Transcript transcript = 10;           // Audio transcript (agent → platform)
     AudioStreamConfig audio_config = 11;  // Audio session config (server → agent)
     AudioChunk audio_chunk = 12;          // Audio data (server → agent)
+    ActionRequest action = 13;            // Agent-triggered client-side action (e.g. scaffold)
   }
 }
 
@@ -207,4 +208,11 @@ message ThreadMessage {
 
   // Platform-specific data
   map<string, string> platform_data = 11;
+}
+
+// Client-side action triggered by an agent tool call.
+// Flows through the pipeline as a structured event rather than embedded in text.
+message ActionRequest {
+  string action_name = 1;                 // Tool name that triggered this action (e.g. "scaffold_project")
+  string payload_json = 2;               // JSON-encoded action payload
 }
