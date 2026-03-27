@@ -253,6 +253,11 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		// Thread metadata
 		log.Printf("[Web] Thread metadata received: %+v", payload.ThreadMetadata)
 
+	case *pb.AgentResponse_Action:
+		log.Printf("[Web] Action received: conversation=%s, action=%s", conversationID, payload.Action.ActionName)
+		event := NewActionEvent(payload.Action, response.ResponseId)
+		a.connManager.Broadcast(conversationID, event)
+
 	default:
 		log.Printf("[Web] Unhandled response payload type: %T", response.Payload)
 	}

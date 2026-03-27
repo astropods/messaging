@@ -56,6 +56,12 @@ export interface AgentResponse {
   transcript?: Transcript;
   audioConfig?: AudioStreamConfig;
   audioChunk?: AudioChunk;
+  action?: ActionRequest;
+}
+
+export interface ActionRequest {
+  actionName: string;
+  payloadJson: string;
 }
 
 export interface StatusUpdate {
