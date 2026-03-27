@@ -4,8 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "astropods-messaging"
-version = "0.0.4"
+version = "0.0.5"
 description = "Generated gRPC stubs for the Astropods messaging service"
+readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 dependencies = [
