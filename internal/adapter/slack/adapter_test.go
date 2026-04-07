@@ -58,6 +58,7 @@ func newTestAdapterWithReactions(reactions []string) (*SlackAdapter, *mockMessag
 	a := &SlackAdapter{
 		contentBuffers:      make(map[string]string),
 		actionableReactions: reactionMap,
+		allowList:           newAllowList(nil, nil, nil), // unrestricted
 	}
 	a.msgHandler = handler.handle
 	return a, handler
@@ -247,7 +248,7 @@ func TestHandleMessage_PlatformContext(t *testing.T) {
 
 func TestHandleMessage_AllowedChannelIDs_DisallowedDoesNotInvokeHandler(t *testing.T) {
 	a, handler := newTestAdapter()
-	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}}
+	a.allowList = newAllowList(nil, []string{"C999"}, nil) // only C999 is allowed
 	srv := newFakeSlackServer(t, "")
 	defer srv.Close()
 	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
@@ -269,7 +270,7 @@ func TestHandleMessage_AllowedChannelIDs_DisallowedDoesNotInvokeHandler(t *testi
 
 func TestHandleMessage_AllowedChannelIDs_AllowedInvokesHandler(t *testing.T) {
 	a, handler := newTestAdapter()
-	a.config = adapter.Config{AllowedChannelIDs: []string{"C123456"}}
+	a.allowList = newAllowList(nil, []string{"C123456"}, nil) // C123456 is allowed
 	srv := newFakeSlackServer(t, "")
 	defer srv.Close()
 	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
@@ -289,16 +290,16 @@ func TestHandleMessage_AllowedChannelIDs_AllowedInvokesHandler(t *testing.T) {
 	}
 }
 
-func TestHandleMessage_AllowedUserIDs_DisallowedDoesNotInvokeHandler(t *testing.T) {
+func TestHandleMessage_AdminUserIDs_DisallowedDoesNotInvokeHandler(t *testing.T) {
 	a, handler := newTestAdapter()
-	a.config = adapter.Config{AllowedUserIDs: []string{"U999"}}
+	a.allowList = newAllowList([]string{"U999"}, nil, nil) // only U999 is admin
 	srv := newFakeSlackServer(t, "")
 	defer srv.Close()
 	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
 
 	ev := &slackevents.MessageEvent{
 		Channel:   "D123456",
-		User:      "U123",
+		User:      "U123", // not in admin list and no dynamic grants
 		Text:      "hello dm",
 		TimeStamp: "1234567890.000001",
 	}
@@ -310,9 +311,9 @@ func TestHandleMessage_AllowedUserIDs_DisallowedDoesNotInvokeHandler(t *testing.
 	}
 }
 
-func TestHandleMessage_AllowedUserIDs_AllowedInvokesHandle(t *testing.T) {
+func TestHandleMessage_AdminUserIDs_AllowedInvokesHandle(t *testing.T) {
 	a, handler := newTestAdapter()
-	a.config = adapter.Config{AllowedUserIDs: []string{"U123"}}
+	a.allowList = newAllowList([]string{"U123"}, nil, nil) // U123 is admin
 	srv := newFakeSlackServer(t, "")
 	defer srv.Close()
 	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
@@ -331,9 +332,34 @@ func TestHandleMessage_AllowedUserIDs_AllowedInvokesHandle(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_DynamicAllowlist_GrantedUserInvokesHandle(t *testing.T) {
+	a, handler := newTestAdapter()
+	// U999 is admin; U123 is granted dynamic access
+	a.allowList = newAllowList([]string{"U999"}, nil, nil)
+	if err := a.allowList.addUser(t.Context(), "U123"); err != nil {
+		t.Fatalf("addUser: %v", err)
+	}
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "D123456",
+		User:      "U123",
+		Text:      "hello dm",
+		TimeStamp: "1234567890.000001",
+	}
+
+	a.handleMessage(t.Context(), ev)
+
+	if handler.count() != 1 {
+		t.Fatalf("dynamically granted user must invoke msgHandler, got %d messages", handler.count())
+	}
+}
+
 func TestHandleAppMention_AllowedChannelIDs_DisallowedDoesNotInvokeHandlerAndPostsNotEnabled(t *testing.T) {
 	a, handler := newTestAdapter()
-	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}}
+	a.allowList = newAllowList(nil, []string{"C999"}, nil) // only C999 is allowed
 	srv := newFakeSlackServer(t, "")
 	defer srv.Close()
 	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
@@ -355,7 +381,7 @@ func TestHandleAppMention_AllowedChannelIDs_DisallowedDoesNotInvokeHandlerAndPos
 
 func TestHandleAppMention_AllowedChannelIDs_AllowedInvokesHandlerAndDoesNotPostNotEnabled(t *testing.T) {
 	a, handler := newTestAdapter()
-	a.config = adapter.Config{AllowedChannelIDs: []string{"C123456"}}
+	a.allowList = newAllowList(nil, []string{"C123456"}, nil) // C123456 is allowed
 	srv := newFakeSlackServer(t, "")
 	defer srv.Close()
 	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))

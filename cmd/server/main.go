@@ -178,6 +178,14 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 	if cfg.Slack.Enabled {
 		log.Println("Initializing Slack adapter...")
 		slackAdapter := slack.New()
+		if cfg.Storage.Type == "redis" {
+			allowListStore, err := slack.NewRedisAllowListStore(cfg.Storage.RedisURL)
+			if err != nil {
+				log.Printf("Warning: failed to create Redis allowlist store, dynamic list will not persist: %v", err)
+			} else {
+				slackAdapter.SetAllowListStore(allowListStore)
+			}
+		}
 		if err := slackAdapter.Initialize(ctx, cfg.Slack.Config); err != nil {
 			log.Printf("Error initializing Slack adapter: %v", err)
 		} else {

@@ -2,11 +2,11 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 
@@ -38,6 +38,9 @@ type SlackAdapter struct {
 	// actionableReactions is the set of emoji names forwarded to the agent.
 	// Built from config at initialization; empty map means no reactions are forwarded.
 	actionableReactions map[string]bool
+
+	// allowList manages the two-tier access control: static admins + dynamic users/channels.
+	allowList *allowList
 }
 
 // New creates a new Slack adapter
@@ -45,6 +48,7 @@ func New() *SlackAdapter {
 	return &SlackAdapter{
 		stopChan:       make(chan struct{}),
 		contentBuffers: make(map[string]string),
+		allowList:      newAllowList(nil, nil, nil), // unrestricted until Initialize sets admin IDs
 	}
 }
 
@@ -79,9 +83,31 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 		a.actionableReactions[r] = true
 	}
 
-	log.Printf("[Slack] Adapter initialized (Socket Mode: %v, actionable reactions: %v, allowed channels: %v, allowed user IDs: %v)",
-		config.SocketMode, config.ActionableReactions, config.AllowedChannelIDs, config.AllowedUserIDs)
+	// Build allowList from static admin IDs; dynamic list loaded from store below.
+	// SetAllowListStore must be called before Initialize if persistence is desired,
+	// or it may be called after — load is deferred to first use if store is set post-init.
+	if a.allowList == nil {
+		a.allowList = newAllowList(config.AdminUserIDs, config.AllowedChannelIDs, nil)
+	} else {
+		// Store was pre-injected via SetAllowListStore; rebuild with static IDs.
+		a.allowList = newAllowList(config.AdminUserIDs, config.AllowedChannelIDs, a.allowList.store)
+	}
+	a.allowList.load(ctx)
+
+	log.Printf("[Slack] Adapter initialized (Socket Mode: %v, actionable reactions: %v, allowed channels: %v, admin user IDs: %d, enterprise ID: %q)",
+		config.SocketMode, config.ActionableReactions, config.AllowedChannelIDs, len(config.AdminUserIDs), config.EnterpriseID)
 	return nil
+}
+
+// SetAllowListStore injects a persistence backend for the dynamic allowlist.
+// Must be called before Initialize so that the store is available when the
+// adapter loads the persisted list on startup.
+func (a *SlackAdapter) SetAllowListStore(store AllowListStore) {
+	if a.allowList == nil {
+		a.allowList = newAllowList(nil, nil, store)
+	} else {
+		a.allowList.store = store
+	}
 }
 
 // Start begins listening for Slack events
@@ -139,6 +165,19 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 		if !ok {
 			log.Printf("[Slack] Could not type cast event to EventsAPIEvent")
 			return
+		}
+
+		// Enterprise Grid: filter events to the configured org
+		if a.config.EnterpriseID != "" && evt.Request != nil {
+			var envelope struct {
+				EnterpriseID string `json:"enterprise_id"`
+			}
+			if err := json.Unmarshal(evt.Request.Payload, &envelope); err == nil &&
+				envelope.EnterpriseID != "" &&
+				envelope.EnterpriseID != a.config.EnterpriseID {
+				log.Printf("[Slack] Dropping event from enterprise %q (expected %q)", envelope.EnterpriseID, a.config.EnterpriseID)
+				return
+			}
 		}
 
 		a.handleInnerEvent(ctx, eventsAPIEvent.InnerEvent)
@@ -343,6 +382,14 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 		threadID = ev.TimeStamp
 	}
 
+	// Admin commands are intercepted before the message reaches the agent.
+	// Only active when the bot is restricted (admin list non-empty).
+	if a.allowList.isRestricted() && a.allowList.isAdmin(ev.User) {
+		if a.handleAdminCommand(ctx, ev.Channel, threadID, ev.User, ev.Text) {
+			return
+		}
+	}
+
 	conversationID := fmt.Sprintf("%s-%s", ev.Channel, threadID)
 	text := stripMentions(ev.Text)
 
@@ -479,13 +526,11 @@ func (a *SlackAdapter) sendNotEnabledMessage(ctx context.Context, channelID, thr
 	}
 }
 
-// isAllowed returns true if the message should be dispatched (no allowlist, or channel/user allowed)
+// isAllowed returns true if the message should be dispatched.
+// Delegates to the allowList which handles both the static admin set and the
+// dynamic user/channel grants. O(1) map lookups; concurrent-read safe.
 func (a *SlackAdapter) isAllowed(channelID, userID string) bool {
-	allowedChannels := a.config.AllowedChannelIDs
-	allowedUsers := a.config.AllowedUserIDs
-	return (len(allowedChannels) == 0 && len(allowedUsers) == 0) ||
-		slices.Contains(allowedChannels, channelID) ||
-		slices.Contains(allowedUsers, userID)
+	return a.allowList.isAllowed(channelID, userID)
 }
 
 // SetMessageHandler sets the handler for incoming messages from the platform
