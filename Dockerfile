@@ -50,7 +50,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -o messaging \
     ./cmd/server
 
-# Stage 2: Runtime
+# Stage 3: Runtime
 FROM debian:bookworm-slim
 
 # Install CA certificates for HTTPS
