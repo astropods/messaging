@@ -233,6 +233,39 @@ npm install @astropods/messaging
 
 SDK source lives in `sdk/node/`. See its `src/messaging-client.ts` for the full API.
 
+### Python
+
+```bash
+pip install astropods-messaging
+```
+
+Requires Python 3.10+. This is a low-level package — if you're building an agent, use a higher-level adapter (e.g. `astropods-adapter-langchain`) which depends on this automatically.
+
+Use it directly when implementing a custom adapter:
+
+```python
+import grpc
+from astropods_messaging import (
+    AgentMessagingStub,
+    AgentResponse,
+    ContentChunk,
+)
+
+channel = grpc.insecure_channel("localhost:9090")
+stub = AgentMessagingStub(channel)
+
+def process(requests):
+    for request in requests:
+        yield AgentResponse(
+            conversation_id=request.conversation_id,
+            content=ContentChunk(content="hello", type=ContentChunk.END),
+        )
+
+stub.ProcessConversation(process(stub.ProcessConversation(...)))
+```
+
+SDK source lives in `sdk/python/`. Published to PyPI as `astropods-messaging`.
+
 ## Development
 
 ### Playground submodule
@@ -330,6 +363,14 @@ The workflow:
 4. Commits the version bump and tags the release
 
 > **Note:** A brand new package must be published manually once before the GitHub Action can take over.
+
+### PyPI (`astropods-messaging`)
+
+The Python SDK is published to PyPI via `.github/workflows/publish-pypi.yml`.
+
+Triggered automatically when a GitHub release is published, or manually via **Actions → Publish PyPI package → Run workflow**.
+
+Uses PyPA trusted publishing — no token storage required.
 
 ## Slack App Setup
 
