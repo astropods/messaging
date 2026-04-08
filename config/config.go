@@ -79,9 +79,10 @@ type SlackConfig struct {
 
 // WebConfig holds web adapter configuration
 type WebConfig struct {
-	Enabled        bool
-	ListenAddr     string
-	AllowedOrigins []string
+	Enabled         bool
+	ListenAddr      string
+	AllowedOrigins  []string
+	ServePlayground bool
 }
 
 // StorageConfig holds storage configuration
@@ -172,9 +173,10 @@ func Load() (*Config, error) {
 
 	// Web configuration
 	cfg.Web = WebConfig{
-		Enabled:        getEnvBool("WEB_ENABLED", false),
-		ListenAddr:     getEnv("WEB_LISTEN_ADDR", ":8080"),
-		AllowedOrigins: getEnvList("WEB_ALLOWED_ORIGINS", []string{"*"}),
+		Enabled:         getEnvBool("WEB_ENABLED", false),
+		ListenAddr:      getEnv("WEB_LISTEN_ADDR", ":8080"),
+		AllowedOrigins:  getEnvList("WEB_ALLOWED_ORIGINS", []string{"*"}),
+		ServePlayground: getEnvBool("WEB_SERVE_PLAYGROUND", false),
 	}
 
 	// Metrics configuration
