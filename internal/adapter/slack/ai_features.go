@@ -146,6 +146,16 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 		}
 
 		log.Printf("[Slack] Sent content to %s (%d chars)", conversationID, len(fullContent))
+
+		// Post any card attachments that came with the END chunk.
+		for _, att := range content.Attachments {
+			if card := att.GetCard(); card != nil {
+				if cardErr := a.handleCardAttachment(ctx, channelID, threadTS, card); cardErr != nil {
+					log.Printf("[Slack] Error posting card attachment to %s: %v", conversationID, cardErr)
+				}
+			}
+		}
+
 		return nil
 
 	case pb.ContentChunk_REPLACE:
@@ -216,6 +226,30 @@ func (a *SlackAdapter) handleError(ctx context.Context, conversationID string, e
 	}
 
 	log.Printf("[Slack] Sent error message to %s: %s", conversationID, errorResponse.Message)
+	return nil
+}
+
+// handleCardAttachment posts a rich card (Slack Block Kit JSON) as a follow-up
+// message in the same thread. The card is sent as a separate message so it
+// appears below the main text content.
+//
+// platform_card_json must be a JSON array of Slack block objects, e.g.:
+//
+//	[{"type":"header","text":{"type":"plain_text","text":"..."}}, ...]
+func (a *SlackAdapter) handleCardAttachment(ctx context.Context, channelID, threadTS string, card *pb.CardAttachment) error {
+	if card.GetPlatformCardJson() == "" {
+		return fmt.Errorf("empty platform_card_json")
+	}
+
+	if err := a.rateLimiter.Wait(ctx); err != nil {
+		return fmt.Errorf("rate limit wait failed: %w", err)
+	}
+
+	if err := a.aiClient.PostBlocks(ctx, channelID, threadTS, card.GetPlatformCardJson()); err != nil {
+		return fmt.Errorf("failed to post card: %w", err)
+	}
+
+	log.Printf("[Slack] Posted card attachment to %s/%s", channelID, threadTS)
 	return nil
 }
 

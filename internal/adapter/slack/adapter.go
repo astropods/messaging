@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -156,9 +157,14 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 		}
 
 	case socketmode.EventTypeSlashCommand:
-		// Acknowledge slash commands
+		// Acknowledge slash commands before any processing (3-second window).
 		a.socketClient.Ack(*evt.Request)
-		log.Println("[Slack] Slash command received (not yet handled)")
+		cmd, ok := evt.Data.(slack.SlashCommand)
+		if !ok {
+			log.Println("[Slack] Slash command: could not parse payload")
+			return
+		}
+		a.handleSlashCommand(ctx, cmd)
 
 	case socketmode.EventTypeHello:
 		// Hello event is just a connection acknowledgment, no action needed
@@ -184,7 +190,11 @@ func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackeve
 		a.handleReactionAdded(ctx, ev)
 
 	default:
-		log.Printf("[Slack] Unhandled inner event type: %s", innerEvent.Type)
+		if innerEvent.Type == "assistant_thread_started" {
+			a.handleAssistantThreadStarted(ctx, innerEvent)
+		} else {
+			log.Printf("[Slack] Unhandled inner event type: %s", innerEvent.Type)
+		}
 	}
 }
 
@@ -266,7 +276,8 @@ func (a *SlackAdapter) handleBlockActions(ctx context.Context, callback *slack.I
 	for _, action := range callback.ActionCallback.BlockActions {
 		log.Printf("[Slack] Action: id=%s, value=%s", action.ActionID, action.Value)
 
-		// Handle feedback button clicks (Slack AI context_actions/feedback_buttons)
+		// feedback_buttons: built-in Slack AI thumbs up/down widget — handled locally.
+		// All other block actions are agent-sent interactive buttons forwarded to the agent.
 		if action.ActionID == "feedback_buttons" {
 			feedbackType := action.Value // "positive_feedback" or "negative_feedback"
 			log.Printf("[Slack] Feedback received: %s from user %s on message %s",
@@ -314,6 +325,168 @@ func (a *SlackAdapter) handleBlockActions(ctx context.Context, callback *slack.I
 			} else {
 				log.Printf("[Slack] Feedback acknowledged with :%s: reaction", emojiName)
 			}
+		} else {
+			// Agent-sent interactive button: forward to agent as an incoming message.
+			a.routeButtonClickToAgent(ctx, callback, action)
+		}
+	}
+}
+
+// routeButtonClickToAgent forwards a Slack block-action button click to the agent
+// by sending it as an incoming message with a JSON-encoded button_click payload.
+// The agent identifies button-click messages by the "type":"button_click" field.
+func (a *SlackAdapter) routeButtonClickToAgent(ctx context.Context, callback *slack.InteractionCallback, action *slack.BlockAction) {
+	channelID := callback.Channel.ID
+
+	// Prefer the thread root over the individual message timestamp so the
+	// conversation ID matches the one used when the card was first sent.
+	threadTS := callback.Container.ThreadTs
+	if threadTS == "" {
+		threadTS = callback.Message.ThreadTimestamp
+	}
+	if threadTS == "" {
+		threadTS = callback.Message.Timestamp
+	}
+	if channelID == "" || threadTS == "" {
+		log.Printf("[Slack] button click: missing channel or thread TS, dropping (channel=%q)", channelID)
+		return
+	}
+
+	metrics.SlackEvents.WithLabelValues("button_click").Inc()
+
+	content, _ := json.Marshal(map[string]string{
+		"type":      "button_click",
+		"button_id": action.ActionID,
+		"value":     action.Value,
+		"action":    action.ActionID,
+	})
+
+	msg := &pb.Message{
+		Id:             uuid.NewString(),
+		Timestamp:      timestamppb.New(time.Now()),
+		Platform:       "slack",
+		Content:        string(content),
+		ConversationId: fmt.Sprintf("%s-%s", channelID, threadTS),
+		PlatformContext: &pb.PlatformContext{
+			ChannelId: channelID,
+			ThreadId:  threadTS,
+		},
+		User: &pb.User{Id: callback.User.ID},
+	}
+
+	log.Printf("[Slack] Routing button click to agent: action_id=%s, user=%s", action.ActionID, callback.User.ID)
+	if a.msgHandler != nil {
+		if err := a.msgHandler(ctx, msg); err != nil {
+			log.Printf("[Slack] Error routing button click: %v", err)
+		}
+	}
+}
+
+// handleSlashCommand routes a Slack slash command to the agent as an incoming message.
+// The command text (without the /command prefix) is used as message content.
+func (a *SlackAdapter) handleSlashCommand(ctx context.Context, cmd slack.SlashCommand) {
+	log.Printf("[Slack] Slash command: %s %q from user=%s in channel=%s",
+		cmd.Command, cmd.Text, cmd.UserID, cmd.ChannelID)
+
+	if !a.isAllowed(cmd.ChannelID, cmd.UserID) {
+		log.Printf("[Slack] Slash command from disallowed channel=%s or user=%s", cmd.ChannelID, cmd.UserID)
+		metrics.MessagesDropped.WithLabelValues("slack", "allowlist").Inc()
+		return
+	}
+
+	metrics.SlackEvents.WithLabelValues("slash_command").Inc()
+
+	// Use the command arguments as message text; fall back to the bare command
+	// name so the agent can still route on it.
+	text := strings.TrimSpace(cmd.Text)
+	if text == "" {
+		text = strings.TrimPrefix(cmd.Command, "/")
+	}
+
+	msg := &pb.Message{
+		Id:             uuid.NewString(),
+		Timestamp:      timestamppb.New(time.Now()),
+		Platform:       "slack",
+		Content:        text,
+		ConversationId: cmd.ChannelID,
+		PlatformContext: &pb.PlatformContext{
+			ChannelId: cmd.ChannelID,
+		},
+		User: &pb.User{
+			Id:       cmd.UserID,
+			Username: cmd.UserName,
+		},
+	}
+
+	if a.msgHandler != nil {
+		if err := a.msgHandler(ctx, msg); err != nil {
+			log.Printf("[Slack] Error handling slash command: %v", err)
+		}
+	}
+}
+
+// handleAssistantThreadStarted handles the Slack AI assistant_thread_started event,
+// which fires when a user opens a new assistant thread. The event is forwarded to
+// the agent as an incoming message so the agent can respond with SuggestedPrompts.
+//
+// Note: slack-go v0.12.3 does not have a typed struct for this event; the raw
+// JSON is extracted from the InnerEvent.Data field via json.RawMessage. Upgrading
+// to slack-go ≥0.13 will allow using the typed slackevents.AssistantThreadStartedEvent
+// instead and this fallback can be removed.
+func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEvent slackevents.EventsAPIInnerEvent) {
+	type payload struct {
+		AssistantThread struct {
+			UserID    string `json:"user_id"`
+			ChannelID string `json:"channel_id"`
+			ThreadTs  string `json:"thread_ts"`
+		} `json:"assistant_thread"`
+	}
+
+	rawData, ok := innerEvent.Data.(json.RawMessage)
+	if !ok {
+		log.Printf("[Slack] assistant_thread_started: event data unavailable; upgrade slack-go to ≥0.13 for typed support")
+		return
+	}
+
+	var ev payload
+	if err := json.Unmarshal(rawData, &ev); err != nil {
+		log.Printf("[Slack] assistant_thread_started: parse error: %v", err)
+		return
+	}
+
+	channelID := ev.AssistantThread.ChannelID
+	threadTS := ev.AssistantThread.ThreadTs
+	userID := ev.AssistantThread.UserID
+	if channelID == "" || threadTS == "" {
+		log.Printf("[Slack] assistant_thread_started: missing channel (%q) or thread TS (%q)", channelID, threadTS)
+		return
+	}
+
+	metrics.SlackEvents.WithLabelValues("thread_started").Inc()
+
+	content, _ := json.Marshal(map[string]string{
+		"type":    "assistant_thread_started",
+		"channel": channelID,
+		"thread":  threadTS,
+	})
+
+	msg := &pb.Message{
+		Id:             uuid.NewString(),
+		Timestamp:      timestamppb.New(time.Now()),
+		Platform:       "slack",
+		Content:        string(content),
+		ConversationId: fmt.Sprintf("%s-%s", channelID, threadTS),
+		PlatformContext: &pb.PlatformContext{
+			ChannelId: channelID,
+			ThreadId:  threadTS,
+		},
+		User: &pb.User{Id: userID},
+	}
+
+	log.Printf("[Slack] Forwarding assistant_thread_started to agent: channel=%s thread=%s user=%s", channelID, threadTS, userID)
+	if a.msgHandler != nil {
+		if err := a.msgHandler(ctx, msg); err != nil {
+			log.Printf("[Slack] Error forwarding assistant_thread_started: %v", err)
 		}
 	}
 }
