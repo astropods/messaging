@@ -192,6 +192,7 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 		webAdapter := web.New(
 			web.WithListenAddr(cfg.Web.ListenAddr),
 			web.WithAllowedOrigins(cfg.Web.AllowedOrigins),
+			web.WithServePlayground(cfg.Web.ServePlayground),
 		)
 		if err := webAdapter.Initialize(ctx, adapter.Config{}); err != nil {
 			log.Printf("Error initializing Web adapter: %v", err)

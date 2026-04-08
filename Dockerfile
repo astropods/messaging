@@ -3,7 +3,15 @@
 # Multi-stage build for Go messaging service
 # Supports multi-platform builds (linux/amd64, linux/arm64)
 
-# Stage 1: Build
+# Stage 1: Build playground UI
+FROM oven/bun:1 AS playground-builder
+WORKDIR /playground
+COPY playground/package.json playground/bun.lock* ./
+RUN bun install --frozen-lockfile
+COPY playground/ .
+RUN bun run build
+
+# Stage 2: Build Go binary
 FROM --platform=$BUILDPLATFORM golang:1.24 AS builder
 
 WORKDIR /app
@@ -20,6 +28,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # Copy source code
 COPY . .
+
+# Overwrite the dist placeholder with the real playground build output
+COPY --from=playground-builder /playground/dist ./internal/adapter/web/dist/
 
 # Build arguments for version information and target platform
 ARG VERSION=dev
