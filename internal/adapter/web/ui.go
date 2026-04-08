@@ -32,7 +32,7 @@ func registerPlaygroundRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /env-config.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
 		w.Header().Set("Cache-Control", "no-store")
-		fmt.Fprint(w, `window.__ENV__ = { API_URL: "" };`)
+		_, _ = fmt.Fprint(w, `window.__ENV__ = { API_URL: "" };`)
 	})
 
 	// Catch-all SPA handler — serves static assets directly, falls back to index.html
