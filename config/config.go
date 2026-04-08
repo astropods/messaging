@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -66,7 +67,14 @@ type SlackAdapterConfig struct {
 	SocketMode          *bool    `json:"socket_mode,omitempty"`
 	AutoThread          *bool    `json:"auto_thread,omitempty"`
 	AllowedChannelIDs   []string `json:"allowed_channel_ids,omitempty"`
-	AllowedUserIDs      []string `json:"allowed_user_ids,omitempty"`
+	// AdminUserIDs is the static list of Slack user IDs that are admins. Admins can
+	// interact with the bot and run admin commands to grant/revoke access for others.
+	// When empty the bot is open to everyone and admin commands are disabled.
+	AdminUserIDs []string `json:"admin_user_ids,omitempty"`
+	// AllowedUserIDs is deprecated. Use AdminUserIDs / SLACK_ADMIN_USER_IDS instead.
+	AllowedUserIDs []string `json:"allowed_user_ids,omitempty"`
+	// EnterpriseID restricts event processing to a specific Slack Enterprise Grid org.
+	EnterpriseID string `json:"enterprise_id,omitempty"`
 }
 
 // SlackConfig holds Slack-specific configuration
@@ -141,8 +149,22 @@ func Load() (*Config, error) {
 	if len(cfg.Slack.AdapterConfig.AllowedChannelIDs) == 0 {
 		cfg.Slack.AdapterConfig.AllowedChannelIDs = getEnvList("SLACK_ALLOWED_CHANNEL_IDS", []string{})
 	}
-	if len(cfg.Slack.AdapterConfig.AllowedUserIDs) == 0 {
-		cfg.Slack.AdapterConfig.AllowedUserIDs = getEnvList("SLACK_ALLOWED_USER_IDS", []string{})
+
+	// Resolve admin user IDs: SLACK_ADMIN_USER_IDS is canonical; SLACK_ALLOWED_USER_IDS is
+	// the deprecated predecessor. JSON config keys follow the same precedence.
+	if len(cfg.Slack.AdapterConfig.AdminUserIDs) == 0 {
+		if len(cfg.Slack.AdapterConfig.AllowedUserIDs) > 0 {
+			log.Println("[Config] DEPRECATED: allowed_user_ids in SLACK_CONFIG is deprecated; use admin_user_ids instead")
+			cfg.Slack.AdapterConfig.AdminUserIDs = cfg.Slack.AdapterConfig.AllowedUserIDs
+		} else if adminIDs := getEnvList("SLACK_ADMIN_USER_IDS", nil); len(adminIDs) > 0 {
+			cfg.Slack.AdapterConfig.AdminUserIDs = adminIDs
+		} else if legacyIDs := getEnvList("SLACK_ALLOWED_USER_IDS", nil); len(legacyIDs) > 0 {
+			log.Println("[Config] DEPRECATED: SLACK_ALLOWED_USER_IDS is deprecated; use SLACK_ADMIN_USER_IDS instead")
+			cfg.Slack.AdapterConfig.AdminUserIDs = legacyIDs
+		}
+	}
+	if cfg.Slack.AdapterConfig.EnterpriseID == "" {
+		cfg.Slack.AdapterConfig.EnterpriseID = getEnv("SLACK_ENTERPRISE_ID", "")
 	}
 
 	socketMode := derefBool(cfg.Slack.AdapterConfig.SocketMode, true)
@@ -164,7 +186,8 @@ func Load() (*Config, error) {
 		AutoThread:          autoThread,
 		ActionableReactions: cfg.Slack.AdapterConfig.ActionableReactions,
 		AllowedChannelIDs:   cfg.Slack.AdapterConfig.AllowedChannelIDs,
-		AllowedUserIDs:      cfg.Slack.AdapterConfig.AllowedUserIDs,
+		AdminUserIDs:        cfg.Slack.AdapterConfig.AdminUserIDs,
+		EnterpriseID:        cfg.Slack.AdapterConfig.EnterpriseID,
 		RateLimit: adapter.RateLimitConfig{
 			RequestsPerSecond: getEnvFloat("SLACK_RATE_LIMIT_RPS", 3.0),
 			BurstSize:         getEnvInt("SLACK_RATE_LIMIT_BURST", 10),

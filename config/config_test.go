@@ -8,7 +8,7 @@ func TestLoad_SlackConfigJSON_FullConfig(t *testing.T) {
 	t.Setenv("SLACK_ENABLED", "true")
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
 	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
-	t.Setenv("SLACK_CONFIG", `{"actionable_reactions":["ticket","bug"],"socket_mode":false,"auto_thread":false,"allowed_channel_ids":["ch1","ch2"],"allowed_user_ids":["user1","user2"]}`)
+	t.Setenv("SLACK_CONFIG", `{"actionable_reactions":["ticket","bug"],"socket_mode":false,"auto_thread":false,"allowed_channel_ids":["ch1","ch2"],"admin_user_ids":["user1","user2"]}`)
 
 	cfg, err := Load()
 	if err != nil {
@@ -28,8 +28,8 @@ func TestLoad_SlackConfigJSON_FullConfig(t *testing.T) {
 	if len(ac.AllowedChannelIDs) != 2 || ac.AllowedChannelIDs[0] != "ch1" || ac.AllowedChannelIDs[1] != "ch2" {
 		t.Errorf("AllowedChannelIDs = %v, want [ch1 ch2]", ac.AllowedChannelIDs)
 	}
-	if len(ac.AllowedUserIDs) != 2 || ac.AllowedUserIDs[0] != "user1" || ac.AllowedUserIDs[1] != "user2" {
-		t.Errorf("AllowedUserIDs = %v, want [user1 user2]", ac.AllowedUserIDs)
+	if len(ac.AdminUserIDs) != 2 || ac.AdminUserIDs[0] != "user1" || ac.AdminUserIDs[1] != "user2" {
+		t.Errorf("AdminUserIDs = %v, want [user1 user2]", ac.AdminUserIDs)
 	}
 
 	if cfg.Slack.Config.SocketMode != false {
@@ -44,8 +44,58 @@ func TestLoad_SlackConfigJSON_FullConfig(t *testing.T) {
 	if len(cfg.Slack.Config.AllowedChannelIDs) != 2 {
 		t.Errorf("AllowedChannelIDs len = %d, want 2", len(cfg.Slack.Config.AllowedChannelIDs))
 	}
-	if len(cfg.Slack.Config.AllowedUserIDs) != 2 {
-		t.Errorf("AllowedUserIDs len = %d, want 2", len(cfg.Slack.Config.AllowedUserIDs))
+	if len(cfg.Slack.Config.AdminUserIDs) != 2 {
+		t.Errorf("AdminUserIDs len = %d, want 2", len(cfg.Slack.Config.AdminUserIDs))
+	}
+}
+
+func TestLoad_SlackConfigJSON_DeprecatedAllowedUserIDs(t *testing.T) {
+	t.Setenv("SLACK_ENABLED", "true")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
+	// Use deprecated allowed_user_ids key — should be accepted and mapped to AdminUserIDs
+	t.Setenv("SLACK_CONFIG", `{"allowed_user_ids":["user1","user2"]}`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if len(cfg.Slack.Config.AdminUserIDs) != 2 {
+		t.Errorf("AdminUserIDs len = %d, want 2 (via deprecated allowed_user_ids)", len(cfg.Slack.Config.AdminUserIDs))
+	}
+}
+
+func TestLoad_SlackConfigJSON_DeprecatedAllowedUserIDsEnvVar(t *testing.T) {
+	t.Setenv("SLACK_ENABLED", "true")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
+	// Use deprecated SLACK_ALLOWED_USER_IDS env var — should be accepted and mapped to AdminUserIDs
+	t.Setenv("SLACK_ALLOWED_USER_IDS", "user1,user2")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if len(cfg.Slack.Config.AdminUserIDs) != 2 {
+		t.Errorf("AdminUserIDs len = %d, want 2 (via deprecated SLACK_ALLOWED_USER_IDS)", len(cfg.Slack.Config.AdminUserIDs))
+	}
+}
+
+func TestLoad_SlackConfigJSON_AdminUserIDsTakePrecedenceOverDeprecated(t *testing.T) {
+	t.Setenv("SLACK_ENABLED", "true")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
+	t.Setenv("SLACK_CONFIG", `{"admin_user_ids":["admin1"],"allowed_user_ids":["old1","old2"]}`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if len(cfg.Slack.Config.AdminUserIDs) != 1 || cfg.Slack.Config.AdminUserIDs[0] != "admin1" {
+		t.Errorf("AdminUserIDs = %v, want [admin1] (admin_user_ids should take precedence)", cfg.Slack.Config.AdminUserIDs)
 	}
 }
 
@@ -72,8 +122,8 @@ func TestLoad_SlackConfigJSON_DefaultsWhenAbsent(t *testing.T) {
 	if len(ac.AllowedChannelIDs) != 0 {
 		t.Errorf("AllowedChannelIDs default = %v, want empty", ac.AllowedChannelIDs)
 	}
-	if len(ac.AllowedUserIDs) != 0 {
-		t.Errorf("AllowedUserIDs default = %v, want empty", ac.AllowedUserIDs)
+	if len(ac.AdminUserIDs) != 0 {
+		t.Errorf("AdminUserIDs default = %v, want empty", ac.AdminUserIDs)
 	}
 
 	if cfg.Slack.Config.SocketMode != true {
@@ -85,8 +135,8 @@ func TestLoad_SlackConfigJSON_DefaultsWhenAbsent(t *testing.T) {
 	if len(cfg.Slack.Config.AllowedChannelIDs) != 0 {
 		t.Errorf("AllowedChannelIDs default = %v, want empty", cfg.Slack.Config.AllowedChannelIDs)
 	}
-	if len(cfg.Slack.Config.AllowedUserIDs) != 0 {
-		t.Errorf("AllowedUserIDs default = %v, want empty", cfg.Slack.Config.AllowedUserIDs)
+	if len(cfg.Slack.Config.AdminUserIDs) != 0 {
+		t.Errorf("AdminUserIDs default = %v, want empty", cfg.Slack.Config.AdminUserIDs)
 	}
 }
 
@@ -114,8 +164,8 @@ func TestLoad_SlackConfigJSON_PartialJSON(t *testing.T) {
 	if len(ac.AllowedChannelIDs) != 1 || ac.AllowedChannelIDs[0] != "ch1" {
 		t.Errorf("AllowedChannelIDs = %v, want [ch1]", ac.AllowedChannelIDs)
 	}
-	if len(ac.AllowedUserIDs) != 0 {
-		t.Errorf("AllowedUserIDs default = %v, want empty", ac.AllowedUserIDs)
+	if len(ac.AdminUserIDs) != 0 {
+		t.Errorf("AdminUserIDs default = %v, want empty", ac.AdminUserIDs)
 	}
 }
 

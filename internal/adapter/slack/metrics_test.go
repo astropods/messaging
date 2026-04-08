@@ -58,7 +58,7 @@ func TestMetrics_AllowlistDropped_Message(t *testing.T) {
 	defer slackCleanup()
 
 	a, _ := newTestAdapter()
-	a.config.AllowedChannelIDs = []string{"C_ALLOWED"}
+	a.allowList = newAllowList(nil, []string{"C_ALLOWED"}, nil)
 	a.client = slackClient
 
 	before := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "allowlist"))
@@ -83,7 +83,7 @@ func TestMetrics_AllowlistDropped_Mention(t *testing.T) {
 	defer slackCleanup()
 
 	a, _ := newTestAdapter()
-	a.config.AllowedChannelIDs = []string{"C_ALLOWED"}
+	a.allowList = newAllowList(nil, []string{"C_ALLOWED"}, nil)
 	a.client = slackClient
 
 	before := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "allowlist"))
