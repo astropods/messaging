@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"google.golang.org/grpc"
@@ -303,7 +302,3 @@ func NewErrorResponse(conversationID string, code pb.ErrorResponse_ErrorCode, me
 // })
 // ```
 
-func init() {
-	// Suppress unused import warnings in example code
-	_ = log.Println
-}

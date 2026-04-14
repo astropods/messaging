@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -20,13 +20,15 @@ import (
 )
 
 func main() {
-	log.Println("Starting Astro Messaging Service...")
-	log.Println(version.Info())
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.Info("Starting Astro Messaging Service...")
+	slog.Info(version.Info())
 
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		slog.Error("Failed to load configuration", "err", err)
+		os.Exit(1)
 	}
 
 	ctx := context.Background()
@@ -34,20 +36,21 @@ func main() {
 	// Initialize conversation store
 	var conversationStore store.ConversationStore
 	if cfg.Storage.Type == "redis" {
-		log.Printf("Initializing Redis store: %s", cfg.Storage.RedisURL)
+		slog.Info("Initializing Redis store", "url", cfg.Storage.RedisURL)
 		redisStore, err := store.NewRedisStore(cfg.Storage.RedisURL, cfg.Storage.TTL)
 		if err != nil {
-			log.Fatalf("Failed to initialize Redis store: %v", err)
+			slog.Error("Failed to initialize Redis store", "err", err)
+			os.Exit(1)
 		}
 		conversationStore = redisStore
 		defer func() {
 			if err := redisStore.Close(); err != nil {
-				log.Printf("Error closing Redis store: %v", err)
+				slog.Error("Error closing Redis store", "err", err)
 			}
 		}()
-		log.Println("Redis store initialized")
+		slog.Info("Redis store initialized")
 	} else {
-		log.Println("Using in-memory conversation store (data will not persist)")
+		slog.Info("Using in-memory conversation store (data will not persist)")
 		conversationStore = store.NewMemoryStore()
 	}
 
@@ -57,8 +60,10 @@ func main() {
 		cfg.ThreadHistory.MaxMessages,
 		time.Duration(cfg.ThreadHistory.TTL)*time.Hour,
 	)
-	log.Printf("Thread history store initialized (max_size=%d, max_messages=%d, ttl=%dh)",
-		cfg.ThreadHistory.MaxSize, cfg.ThreadHistory.MaxMessages, cfg.ThreadHistory.TTL)
+	slog.Info("Thread history store initialized",
+		"max_size", cfg.ThreadHistory.MaxSize,
+		"max_messages", cfg.ThreadHistory.MaxMessages,
+		"ttl", cfg.ThreadHistory.TTL)
 
 	// Initialize agent config store
 	agentConfigStore := store.NewAgentConfigStore()
@@ -66,37 +71,38 @@ func main() {
 	// Initialize gRPC server (if enabled)
 	var grpcServer *grpc.Server
 	if cfg.GRPC.Enabled {
-		log.Println("Initializing gRPC server...")
+		slog.Info("Initializing gRPC server...")
 		grpcServer = grpc.NewServer(cfg.GRPC.ListenAddr, threadStore, conversationStore, agentConfigStore)
-		log.Printf("gRPC server initialized on %s", cfg.GRPC.ListenAddr)
+		slog.Info("gRPC server initialized", "addr", cfg.GRPC.ListenAddr)
 	}
 
 	// Initialize adapters
 	adapters := initializeAdapters(ctx, cfg, threadStore, agentConfigStore)
 	if len(adapters) == 0 && !cfg.GRPC.Enabled {
-		log.Fatal("No adapters enabled or configured and gRPC is disabled")
+		slog.Error("No adapters enabled or configured and gRPC is disabled")
+		os.Exit(1)
 	}
 	if len(adapters) == 0 {
-		log.Println("No platform adapters configured - running in gRPC-only mode")
+		slog.Info("No platform adapters configured - running in gRPC-only mode")
 	}
 
 	// Register adapters with gRPC server
 	if grpcServer != nil && len(adapters) > 0 {
 		for name, adpt := range adapters {
-			log.Printf("Registering %s adapter with gRPC server...", name)
+			slog.Info("Registering adapter with gRPC server", "adapter", name)
 			grpcServer.RegisterAdapter(name, adpt)
 		}
 
 		// Register gRPC message handler with adapters
 		// When messages arrive from platforms, route them to agent via gRPC
 		for name, adpt := range adapters {
-			log.Printf("Registering gRPC message handler for %s adapter...", name)
+			slog.Info("Registering gRPC message handler for adapter", "adapter", name)
 			adpt.SetMessageHandler(grpcServer.HandleIncomingMessage)
 
 			// Wire audio forwarder for adapters that support it
 			if wa, ok := adpt.(*web.WebAdapter); ok {
 				wa.SetAudioForwarder(grpcServer)
-				log.Printf("Registered audio forwarder for %s adapter", name)
+				slog.Info("Registered audio forwarder for adapter", "adapter", name)
 			}
 		}
 	}
@@ -112,9 +118,9 @@ func main() {
 				ReadTimeout: 5 * time.Second,
 				IdleTimeout: 60 * time.Second,
 			}
-			log.Printf("Starting metrics server on %s", cfg.Metrics.ListenAddr)
+			slog.Info("Starting metrics server", "addr", cfg.Metrics.ListenAddr)
 			if err := srv.ListenAndServe(); err != nil {
-				log.Printf("Metrics server error: %v", err)
+				slog.Error("Metrics server error", "err", err)
 			}
 		}()
 	}
@@ -122,9 +128,9 @@ func main() {
 	// Start gRPC server
 	if grpcServer != nil {
 		go func() {
-			log.Printf("Starting gRPC server on %s", cfg.GRPC.ListenAddr)
+			slog.Info("Starting gRPC server", "addr", cfg.GRPC.ListenAddr)
 			if err := grpcServer.Start(ctx); err != nil {
-				log.Printf("gRPC server error: %v", err)
+				slog.Error("gRPC server error", "err", err)
 			}
 		}()
 	}
@@ -133,9 +139,9 @@ func main() {
 	if len(adapters) > 0 {
 		for name, adapterInstance := range adapters {
 			go func(n string, a adapter.Adapter) {
-				log.Printf("Starting %s adapter...", n)
+				slog.Info("Starting adapter", "adapter", n)
 				if err := a.Start(ctx); err != nil {
-					log.Printf("Error starting %s adapter: %v", n, err)
+					slog.Error("Error starting adapter", "adapter", n, "err", err)
 				}
 			}(name, adapterInstance)
 		}
@@ -146,28 +152,28 @@ func main() {
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	<-sigCh
 
-	log.Println("Shutting down gracefully...")
+	slog.Info("Shutting down gracefully...")
 
 	// Stop gRPC server
 	if grpcServer != nil {
-		log.Println("Stopping gRPC server...")
+		slog.Info("Stopping gRPC server...")
 		grpcServer.Stop()
 	}
 
 	// Stop all adapters
 	for name, adapterInstance := range adapters {
-		log.Printf("Stopping %s adapter...", name)
+		slog.Info("Stopping adapter", "adapter", name)
 		if err := adapterInstance.Stop(ctx); err != nil {
-			log.Printf("Error stopping %s adapter: %v", name, err)
+			slog.Error("Error stopping adapter", "adapter", name, "err", err)
 		}
 	}
 
 	// Close conversation store
 	if err := conversationStore.Close(); err != nil {
-		log.Printf("Error closing conversation store: %v", err)
+		slog.Error("Error closing conversation store", "err", err)
 	}
 
-	log.Println("Shutdown complete")
+	slog.Info("Shutdown complete")
 }
 
 // initializeAdapters creates and initializes adapters based on configuration
@@ -176,31 +182,31 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 
 	// Initialize Slack adapter if enabled
 	if cfg.Slack.Enabled {
-		log.Println("Initializing Slack adapter...")
+		slog.Info("Initializing Slack adapter...")
 		slackAdapter := slack.New()
 		if err := slackAdapter.Initialize(ctx, cfg.Slack.Config); err != nil {
-			log.Printf("Error initializing Slack adapter: %v", err)
+			slog.Error("Error initializing Slack adapter", "err", err)
 		} else {
 			adapters["slack"] = slackAdapter
-			log.Println("Slack adapter initialized")
+			slog.Info("Slack adapter initialized")
 		}
 	}
 
 	// Initialize Web adapter if enabled
 	if cfg.Web.Enabled {
-		log.Println("Initializing Web adapter...")
+		slog.Info("Initializing Web adapter...")
 		webAdapter := web.New(
 			web.WithListenAddr(cfg.Web.ListenAddr),
 			web.WithAllowedOrigins(cfg.Web.AllowedOrigins),
 			web.WithServePlayground(cfg.Web.ServePlayground),
 		)
 		if err := webAdapter.Initialize(ctx, adapter.Config{}); err != nil {
-			log.Printf("Error initializing Web adapter: %v", err)
+			slog.Error("Error initializing Web adapter", "err", err)
 		} else {
 			webAdapter.SetThreadStore(threadStore)
 			webAdapter.SetAgentConfigStore(agentConfigStore)
 			adapters["web"] = webAdapter
-			log.Println("Web adapter initialized")
+			slog.Info("Web adapter initialized")
 		}
 	}
 
