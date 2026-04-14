@@ -4,7 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
-	"log"
+	"log/slog"
 	"net/http"
 	"path"
 	"strings"
@@ -18,13 +18,13 @@ var distFS embed.FS
 func registerPlaygroundRoutes(mux *http.ServeMux) {
 	sub, err := fs.Sub(distFS, "dist")
 	if err != nil {
-		log.Printf("[Web] Playground: failed to open dist FS: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Playground: failed to open dist FS: %v", err))
 		return
 	}
 
 	// Verify that the assets are actually present (not just the .gitkeep placeholder)
 	if _, err := sub.Open("index.html"); err != nil {
-		log.Printf("[Web] Playground: index.html not found in dist — playground UI not available (build with Docker to include assets)")
+		slog.Info("[Web] Playground: index.html not found in dist — playground UI not available (build with Docker to include assets)")
 		return
 	}
 
@@ -38,7 +38,7 @@ func registerPlaygroundRoutes(mux *http.ServeMux) {
 	// Catch-all SPA handler — serves static assets directly, falls back to index.html
 	mux.Handle("/", spaHandler(sub))
 
-	log.Printf("[Web] Playground UI enabled at /")
+	slog.Info("[Web] Playground UI enabled at /")
 }
 
 // spaHandler returns an http.Handler that serves files from dist and falls back

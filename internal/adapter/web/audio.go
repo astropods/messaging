@@ -29,7 +29,8 @@ package web
 
 import (
 	"encoding/json"
-	"log"
+	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/gorilla/websocket"
@@ -123,7 +124,7 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 	// Upgrade HTTP connection to WebSocket
 	ws, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("[Web] WebSocket upgrade failed: %v", err)
+		slog.Error(fmt.Sprintf("[Web] WebSocket upgrade failed: %v", err))
 		return
 	}
 	defer func() { _ = ws.Close() }()
@@ -131,7 +132,7 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 	// Cap individual frame size to prevent memory exhaustion
 	ws.SetReadLimit(maxAudioMessageSize)
 
-	log.Printf("[Web] Audio WebSocket opened: conversation=%q, user=%q", conversationID, session.UserID) //nolint:gosec // G706 false positive: %q escapes control characters, preventing log injection
+	slog.Info(fmt.Sprintf("[Web] Audio WebSocket opened: conversation=%q, user=%q", conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters, preventing log injection
 
 	// --- Read loop: stream audio through to the agent in real time ---
 	//
@@ -150,9 +151,9 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 		msgType, data, err := ws.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				log.Printf("[Web] Audio WebSocket closed normally: conversation=%q", conversationID) //nolint:gosec // G706 false positive: %q escapes control characters
+				slog.Info(fmt.Sprintf("[Web] Audio WebSocket closed normally: conversation=%q", conversationID)) //nolint:gosec // G706 false positive: %q escapes control characters
 			} else {
-				log.Printf("[Web] Audio WebSocket read error: %v", err)
+				slog.Error(fmt.Sprintf("[Web] Audio WebSocket read error: %v", err))
 			}
 			break
 		}
@@ -162,7 +163,7 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 			// Text frames are JSON control messages (audio.config or audio.end)
 			var ctrl AudioControl
 			if err := json.Unmarshal(data, &ctrl); err != nil {
-				log.Printf("[Web] Audio WS invalid JSON: %v", err)
+				slog.Error(fmt.Sprintf("[Web] Audio WS invalid JSON: %v", err))
 				continue
 			}
 
@@ -171,14 +172,14 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 				// Parse the full config (AudioControl only has "type"; AudioConfig has all fields)
 				var config AudioConfig
 				if err := json.Unmarshal(data, &config); err != nil {
-					log.Printf("[Web] Audio WS invalid config: %v", err)
+					slog.Error(fmt.Sprintf("[Web] Audio WS invalid config: %v", err))
 					continue
 				}
 				currentConfig = &config
 				chunkCount = 0
 				totalBytes = 0
-				log.Printf("[Web] Audio config: encoding=%s, sampleRate=%d, source=%s",
-					config.Encoding, config.SampleRate, config.Source)
+				slog.Info(fmt.Sprintf("[Web] Audio config: encoding=%s, sampleRate=%d, source=%s",
+					config.Encoding, config.SampleRate, config.Source))
 
 				// Order matters here: send the audio format config to the agent FIRST,
 				// then the message metadata. This ensures the agent knows the encoding
@@ -187,7 +188,7 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 				if h.audioForwarder != nil {
 					protoConfig := audioConfigToProto(&config, conversationID, session.UserID)
 					if err := h.audioForwarder.SendAudioConfig(conversationID, protoConfig); err != nil {
-						log.Printf("[Web] Error sending audio config to agent: %v", err)
+						slog.Error(fmt.Sprintf("[Web] Error sending audio config to agent: %v", err))
 					}
 				}
 
@@ -200,7 +201,7 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 				// Client signals end of this utterance. Could be push-to-talk release,
 				// client-side VAD silence detection, or explicit user action.
 				if !segmentActive {
-					log.Printf("[Web] Audio WS got audio.end without active segment")
+					slog.Info("[Web] Audio WS got audio.end without active segment")
 					continue
 				}
 
@@ -208,37 +209,37 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 				// chunk with done=true. The agent can now run STT on the accumulated audio.
 				if h.audioForwarder != nil {
 					if err := h.audioForwarder.SendAudioChunk(conversationID, nil, int64(chunkCount+1), true); err != nil {
-						log.Printf("[Web] Error sending audio end to agent: %v", err)
+						slog.Error(fmt.Sprintf("[Web] Error sending audio end to agent: %v", err))
 					}
 				}
 
-				log.Printf("[Web] Audio segment complete: conversation=%q, chunks=%d, total=%d bytes, encoding=%q", //nolint:gosec // G706 false positive: %q escapes control characters
-					conversationID, chunkCount, totalBytes, currentConfig.Encoding)
+				slog.Info(fmt.Sprintf("[Web] Audio segment complete: conversation=%q, chunks=%d, total=%d bytes, encoding=%q", //nolint:gosec // G706 false positive: %q escapes control characters
+					conversationID, chunkCount, totalBytes, currentConfig.Encoding))
 				segmentActive = false
 
 			default:
-				log.Printf("[Web] Audio WS unknown control type: %s", ctrl.Type)
+				slog.Info(fmt.Sprintf("[Web] Audio WS unknown control type: %s", ctrl.Type))
 			}
 
 		case websocket.BinaryMessage:
 			// Binary frames contain raw audio bytes from the client's microphone.
 			// These are forwarded to the agent as-is — no transcoding, no buffering.
 			if !segmentActive {
-				log.Printf("[Web] Audio WS got binary data without active segment, dropping")
+				slog.Info("[Web] Audio WS got binary data without active segment, dropping")
 				continue
 			}
 			chunkCount++
 			totalBytes += len(data)
 			if h.audioForwarder != nil {
 				if err := h.audioForwarder.SendAudioChunk(conversationID, data, int64(chunkCount), false); err != nil {
-					log.Printf("[Web] Error streaming audio chunk to agent: %v", err)
+					slog.Error(fmt.Sprintf("[Web] Error streaming audio chunk to agent: %v", err))
 				}
 			}
 			// Log progress every 20 chunks to avoid flooding logs
 			// (at ~50ms per chunk from MediaRecorder, this logs roughly once per second)
 			if chunkCount%20 == 1 {
-				log.Printf("[Web] Audio WS streaming: conversation=%q, chunks=%d, total=%d bytes", //nolint:gosec // G706 false positive: %q escapes control characters
-					conversationID, chunkCount, totalBytes)
+				slog.Info(fmt.Sprintf("[Web] Audio WS streaming: conversation=%q, chunks=%d, total=%d bytes", //nolint:gosec // G706 false positive: %q escapes control characters
+					conversationID, chunkCount, totalBytes))
 			}
 		}
 	}
@@ -248,9 +249,9 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 	// the agent doesn't hang waiting for more audio that will never arrive.
 	if segmentActive && h.audioForwarder != nil {
 		_ = h.audioForwarder.SendAudioChunk(conversationID, nil, int64(chunkCount+1), true)
-		log.Printf("[Web] Audio segment flushed on close: conversation=%q, chunks=%d, total=%d bytes", //nolint:gosec // G706 false positive: %q escapes control characters
-			conversationID, chunkCount, totalBytes)
+		slog.Info(fmt.Sprintf("[Web] Audio segment flushed on close: conversation=%q, chunks=%d, total=%d bytes", //nolint:gosec // G706 false positive: %q escapes control characters
+			conversationID, chunkCount, totalBytes))
 	}
 
-	log.Printf("[Web] Audio WebSocket handler done: conversation=%q", conversationID) //nolint:gosec // G706 false positive: %q escapes control characters
+	slog.Info(fmt.Sprintf("[Web] Audio WebSocket handler done: conversation=%q", conversationID)) //nolint:gosec // G706 false positive: %q escapes control characters
 }
