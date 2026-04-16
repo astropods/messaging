@@ -253,40 +253,45 @@ func NewErrorResponse(conversationID string, code pb.ErrorResponse_ErrorCode, me
 // ```go
 // client, err := NewClient("localhost:9090")
 // if err != nil {
-//     log.Fatal(err)
+//     slog.Error("failed to create client", "err", err)
+//     os.Exit(1)
 // }
 // defer client.Close()
 //
 // // Get thread history
 // history, err := client.GetThreadHistory(ctx, "slack-C123-1234.5678", 50)
 // if err != nil {
-//     log.Fatal(err)
+//     slog.Error("failed to get thread history", "err", err)
+//     os.Exit(1)
 // }
 //
 // // Process single message
 // msg := NewMessage("slack-C123-1234.5678", "U123", "alice", "Hello!")
 // stream, err := client.ProcessMessage(ctx, msg)
 // if err != nil {
-//     log.Fatal(err)
+//     slog.Error("failed to process message", "err", err)
+//     os.Exit(1)
 // }
 //
 // err = stream.ReceiveAll(func(resp *pb.AgentResponse) error {
 //     switch payload := resp.Payload.(type) {
 //     case *pb.AgentResponse_Status:
-//         log.Printf("Status: %s", payload.Status.CustomMessage)
+//         slog.Info("status", "message", payload.Status.CustomMessage)
 //     case *pb.AgentResponse_Content:
-//         log.Printf("Content: %s", payload.Content.Content)
+//         slog.Info("content", "message", payload.Content.Content)
 //     }
 //     return nil
 // })
 // if err != nil {
-//     log.Fatal(err)
+//     slog.Error("stream error", "err", err)
+//     os.Exit(1)
 // }
 //
 // // Bidirectional conversation
 // convStream, err := client.ProcessConversation(ctx)
 // if err != nil {
-//     log.Fatal(err)
+//     slog.Error("failed to start conversation", "err", err)
+//     os.Exit(1)
 // }
 // defer convStream.Close()
 //
