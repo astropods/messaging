@@ -266,6 +266,11 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		// Thread metadata
 		slog.Info("[Web] Thread metadata received", "metadata", payload.ThreadMetadata)
 
+	case *pb.AgentResponse_Action:
+		log.Printf("[Web] Action received: conversation=%s, action=%s", conversationID, payload.Action.ActionName)
+		event := NewActionEvent(payload.Action, response.ResponseId)
+		a.connManager.Broadcast(conversationID, event)
+
 	default:
 		slog.Warn("[Web] Unhandled response payload type", "type", fmt.Sprintf("%T", response.Payload))
 	}

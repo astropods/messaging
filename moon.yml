@@ -6,7 +6,7 @@ tasks:
     outputs:
       - "pkg/gen"
   "sdk-build":
-    command: "cd sdk/node && bun run build"
+    command: "cd sdk/node && bun install && bun run build"
     inputs:
       - "sdk/node/**/*"
       - "proto/**/*"

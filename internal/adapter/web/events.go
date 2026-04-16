@@ -23,6 +23,7 @@ const (
 	EventHeartbeat      = "heartbeat"
 	EventPrompts        = "prompts"
 	EventTranscript     = "transcript"
+	EventAction         = "action"
 )
 
 // SSEEvent represents a Server-Sent Event
@@ -286,6 +287,34 @@ func NewTranscriptEvent(transcript *pb.Transcript) SSEEvent {
 	}
 	return SSEEvent{
 		Event: EventTranscript,
+		Data:  string(jsonData),
+	}
+}
+
+// ActionEventData represents the data for a client-side action event
+type ActionEventData struct {
+	Type        string          `json:"type"`
+	ActionName  string          `json:"action_name"`
+	PayloadJSON json.RawMessage `json:"payload"`
+}
+
+// NewActionEvent creates an action SSE event from a protobuf ActionRequest
+func NewActionEvent(action *pb.ActionRequest, responseID string) SSEEvent {
+	raw := json.RawMessage(action.PayloadJson)
+	if !json.Valid(raw) {
+		raw = json.RawMessage(`null`)
+	}
+	data := ActionEventData{
+		Type:        "action",
+		ActionName:  action.ActionName,
+		PayloadJSON: raw,
+	}
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[Web] Error marshaling action event: %v", err)
+	}
+	return SSEEvent{
+		Event: EventAction,
 		Data:  string(jsonData),
 	}
 }

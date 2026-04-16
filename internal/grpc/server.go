@@ -499,6 +499,8 @@ func agentResponseType(r *pb.AgentResponse) string {
 		return "audio_config"
 	case *pb.AgentResponse_AudioChunk:
 		return "audio_chunk"
+	case *pb.AgentResponse_Action:
+		return "action"
 	default:
 		return "unknown"
 	}
