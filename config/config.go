@@ -162,6 +162,7 @@ func Load() (*Config, error) {
 		AppToken:            cfg.Slack.Credentials.AppToken,
 		SocketMode:          socketMode,
 		AutoThread:          autoThread,
+		DevMode:             getEnvBool("DEV", false),
 		ActionableReactions: cfg.Slack.AdapterConfig.ActionableReactions,
 		AllowedChannelIDs:   cfg.Slack.AdapterConfig.AllowedChannelIDs,
 		AllowedUserIDs:      cfg.Slack.AdapterConfig.AllowedUserIDs,
