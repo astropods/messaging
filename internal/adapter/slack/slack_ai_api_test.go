@@ -265,6 +265,88 @@ func TestSlackAIClient_PostMessageWithFeedback_Success(t *testing.T) {
 	}
 }
 
+func TestSlackAIClient_PostMessageWithFeedback_DevMode(t *testing.T) {
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "9999.000001"})
+	}))
+	defer server.Close()
+
+	client := &SlackAIClient{
+		botToken:   "xoxb-test-token",
+		devMode:    true,
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	blocks, ok := capturedBody["blocks"].([]any)
+	if !ok {
+		t.Fatal("expected blocks in payload")
+	}
+
+	// Find the dev context block (should be between content and feedback buttons)
+	foundDevContext := false
+	for _, b := range blocks {
+		block, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		if block["type"] == "context" {
+			elements, ok := block["elements"].([]any)
+			if !ok || len(elements) == 0 {
+				continue
+			}
+			elem, ok := elements[0].(map[string]any)
+			if !ok {
+				continue
+			}
+			if text, ok := elem["text"].(string); ok && strings.Contains(text, "dev environment") {
+				foundDevContext = true
+			}
+		}
+	}
+	if !foundDevContext {
+		t.Error("expected a context block with dev environment indicator")
+	}
+}
+
+func TestSlackAIClient_PostMessageWithFeedback_NoDevMode(t *testing.T) {
+	var capturedBody map[string]any
+	client, cleanup := newTestAIClient(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "9999.000001"})
+	})
+	defer cleanup()
+
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	blocks, ok := capturedBody["blocks"].([]any)
+	if !ok {
+		t.Fatal("expected blocks in payload")
+	}
+
+	for _, b := range blocks {
+		block, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		if block["type"] == "context" {
+			t.Error("should not have a context block when devMode is false")
+		}
+	}
+}
+
 func TestSlackAIClient_PostMessageWithFeedback_NoThreadID(t *testing.T) {
 	var capturedBody map[string]any
 	client, cleanup := newTestAIClient(func(w http.ResponseWriter, r *http.Request) {
