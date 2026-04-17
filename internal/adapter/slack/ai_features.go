@@ -159,7 +159,12 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 			return fmt.Errorf("rate limit wait failed: %w", err)
 		}
 
-		_, _, err = a.client.PostMessageContext(ctx, channelID, slack.MsgOptionText(content.Content, false), slack.MsgOptionTS(threadTS))
+		text := content.Content
+		if a.config.DevMode {
+			text = text + "\n\n:test_tube: _Sent from dev environment_"
+		}
+
+		_, _, err = a.client.PostMessageContext(ctx, channelID, slack.MsgOptionText(text, false), slack.MsgOptionTS(threadTS))
 		if err != nil {
 			return fmt.Errorf("failed to send message: %w", err)
 		}
@@ -208,6 +213,9 @@ func (a *SlackAdapter) handleError(ctx context.Context, conversationID string, e
 	errorMessage := fmt.Sprintf(":warning: Error: %s", errorResponse.Message)
 	if errorResponse.Code != pb.ErrorResponse_ERROR_CODE_UNSPECIFIED {
 		errorMessage += fmt.Sprintf(" (code: %s)", errorResponse.Code.String())
+	}
+	if a.config.DevMode {
+		errorMessage += "\n\n:test_tube: _Sent from dev environment_"
 	}
 
 	_, _, err = a.client.PostMessageContext(ctx, channelID, slack.MsgOptionText(errorMessage, false), slack.MsgOptionTS(threadTS))

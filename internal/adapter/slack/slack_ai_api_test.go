@@ -625,9 +625,12 @@ func TestSplitIntoChunks_LeadingNewline(t *testing.T) {
 // --- Tests for NewSlackAIClient ---
 
 func TestNewSlackAIClient_Defaults(t *testing.T) {
-	client := NewSlackAIClient("xoxb-my-token")
+	client := NewSlackAIClient("xoxb-my-token", false)
 	if client.botToken != "xoxb-my-token" {
 		t.Errorf("expected botToken 'xoxb-my-token', got %q", client.botToken)
+	}
+	if client.devMode {
+		t.Error("expected devMode to be false")
 	}
 	if client.baseURL != slackAPIBaseURL {
 		t.Errorf("expected baseURL %q, got %q", slackAPIBaseURL, client.baseURL)

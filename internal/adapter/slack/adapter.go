@@ -72,7 +72,7 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 		config.RateLimit.BurstSize,
 	)
 
-	a.aiClient = NewSlackAIClient(config.BotToken)
+	a.aiClient = NewSlackAIClient(config.BotToken, config.DevMode)
 
 	a.actionableReactions = make(map[string]bool, len(config.ActionableReactions))
 	for _, r := range config.ActionableReactions {
@@ -458,6 +458,9 @@ func (a *SlackAdapter) sendErrorMessage(ctx context.Context, channelID, threadTS
 	}
 
 	content := fmt.Sprintf(":x: Error: %s", err.Error())
+	if a.config.DevMode {
+		content += "\n\n:test_tube: _Sent from dev environment_"
+	}
 	_, _, postErr := a.client.PostMessageContext(ctx, channelID,
 		slack.MsgOptionText(content, false),
 		slack.MsgOptionTS(threadTS),
@@ -470,6 +473,9 @@ func (a *SlackAdapter) sendErrorMessage(ctx context.Context, channelID, threadTS
 // sendNotEnabledMessage tells the user the app is not enabled for this channel or user
 func (a *SlackAdapter) sendNotEnabledMessage(ctx context.Context, channelID, threadTS string) {
 	content := "This app has not been enabled for this channel or user. Please contact your workspace admin to enable it."
+	if a.config.DevMode {
+		content += "\n\n:test_tube: _Sent from dev environment_"
+	}
 	_, _, postErr := a.client.PostMessageContext(ctx, channelID,
 		slack.MsgOptionText(content, false),
 		slack.MsgOptionTS(threadTS),
