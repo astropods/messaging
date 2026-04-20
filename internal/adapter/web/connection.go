@@ -2,7 +2,8 @@ package web
 
 import (
 	"context"
-	"log"
+	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -58,7 +59,7 @@ func (cm *ConnectionManager) Add(conn *SSEConnection) {
 	cm.connections[conn.ConversationID][conn.ID] = conn
 	metrics.WebActiveConnections.Inc()
 
-	log.Printf("[Web] SSE connection added: id=%s, conversation=%s", conn.ID, conn.ConversationID)
+	slog.Info(fmt.Sprintf("[Web] SSE connection added: id=%s, conversation=%s", conn.ID, conn.ConversationID))
 }
 
 // Remove unregisters an SSE connection
@@ -71,7 +72,7 @@ func (cm *ConnectionManager) Remove(conversationID, connID string) {
 			close(conn.Done)
 			delete(conns, connID)
 			metrics.WebActiveConnections.Dec()
-			log.Printf("[Web] SSE connection removed: id=%q, conversation=%q", connID, conversationID) //nolint:gosec // G706 false positive: %q escapes control characters
+			slog.Info(fmt.Sprintf("[Web] SSE connection removed: id=%q, conversation=%q", connID, conversationID)) //nolint:gosec // G706 false positive: %q escapes control characters
 		}
 		if len(conns) == 0 {
 			delete(cm.connections, conversationID)
@@ -95,7 +96,7 @@ func (cm *ConnectionManager) Broadcast(conversationID string, event SSEEvent) {
 			conn.LastEventAt = time.Now()
 		default:
 			// Channel full, connection may be slow
-			log.Printf("[Web] Event channel full for connection %s", conn.ID)
+			slog.Warn(fmt.Sprintf("[Web] Event channel full for connection %s", conn.ID))
 		}
 	}
 }
@@ -175,5 +176,5 @@ func (cm *ConnectionManager) CloseAll() {
 	}
 	metrics.WebActiveConnections.Set(0)
 
-	log.Println("[Web] All SSE connections closed")
+	slog.Info("[Web] All SSE connections closed")
 }

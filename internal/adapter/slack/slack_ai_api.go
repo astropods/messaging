@@ -19,14 +19,16 @@ const (
 // SlackAIClient handles calls to Slack AI APIs that aren't in the slack-go library yet
 type SlackAIClient struct {
 	botToken   string
+	devMode    bool
 	httpClient *http.Client
 	baseURL    string // defaults to slackAPIBaseURL
 }
 
 // NewSlackAIClient creates a new Slack AI API client
-func NewSlackAIClient(botToken string) *SlackAIClient {
+func NewSlackAIClient(botToken string, devMode bool) *SlackAIClient {
 	return &SlackAIClient{
 		botToken:   botToken,
+		devMode:    devMode,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		baseURL:    slackAPIBaseURL,
 	}
@@ -134,6 +136,18 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 			"text": map[string]interface{}{
 				"type": "mrkdwn",
 				"text": chunk,
+			},
+		})
+	}
+
+	if c.devMode {
+		blocks = append(blocks, map[string]interface{}{
+			"type": "context",
+			"elements": []map[string]interface{}{
+				{
+					"type": "mrkdwn",
+					"text": ":test_tube: Sent from dev environment",
+				},
 			},
 		})
 	}

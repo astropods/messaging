@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"regexp"
 	"slices"
 	"strings"
@@ -73,15 +73,15 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 		config.RateLimit.BurstSize,
 	)
 
-	a.aiClient = NewSlackAIClient(config.BotToken)
+	a.aiClient = NewSlackAIClient(config.BotToken, config.DevMode)
 
 	a.actionableReactions = make(map[string]bool, len(config.ActionableReactions))
 	for _, r := range config.ActionableReactions {
 		a.actionableReactions[r] = true
 	}
 
-	log.Printf("[Slack] Adapter initialized (Socket Mode: %v, actionable reactions: %v, allowed channels: %v, allowed user IDs: %v)",
-		config.SocketMode, config.ActionableReactions, config.AllowedChannelIDs, config.AllowedUserIDs)
+	slog.Info(fmt.Sprintf("[Slack] Adapter initialized (Socket Mode: %v, actionable reactions: %v, allowed channels: %v, allowed user IDs: %v)",
+		config.SocketMode, config.ActionableReactions, config.AllowedChannelIDs, config.AllowedUserIDs))
 	return nil
 }
 
@@ -95,12 +95,12 @@ func (a *SlackAdapter) Start(ctx context.Context) error {
 
 // startSocketMode starts the socket mode event listener
 func (a *SlackAdapter) startSocketMode(ctx context.Context) error {
-	log.Println("[Slack] Starting Socket Mode connection...")
+	slog.Info("[Slack] Starting Socket Mode connection...")
 
 	// Start socket mode client in background (this initializes the Events channel)
 	go func() {
 		if err := a.socketClient.RunContext(ctx); err != nil {
-			log.Printf("[Slack] Socket mode client error: %v", err)
+			slog.Error(fmt.Sprintf("[Slack] Socket mode client error: %v", err))
 		}
 	}()
 
@@ -108,10 +108,10 @@ func (a *SlackAdapter) startSocketMode(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("[Slack] Context cancelled, stopping event listener")
+			slog.Info("[Slack] Context cancelled, stopping event listener")
 			return ctx.Err()
 		case <-a.stopChan:
-			log.Println("[Slack] Stopping event listener")
+			slog.Info("[Slack] Stopping event listener")
 			return nil
 		case evt := <-a.socketClient.Events:
 			a.handleSocketEvent(ctx, evt)
@@ -123,13 +123,13 @@ func (a *SlackAdapter) startSocketMode(ctx context.Context) error {
 func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Event) {
 	switch evt.Type {
 	case socketmode.EventTypeConnecting:
-		log.Println("[Slack] Connecting to Slack...")
+		slog.Info("[Slack] Connecting to Slack...")
 
 	case socketmode.EventTypeConnectionError:
-		log.Printf("[Slack] Connection error: %v", evt.Data)
+		slog.Error(fmt.Sprintf("[Slack] Connection error: %v", evt.Data))
 
 	case socketmode.EventTypeConnected:
-		log.Println("[Slack] Connected to Slack via Socket Mode")
+		slog.Info("[Slack] Connected to Slack via Socket Mode")
 
 	case socketmode.EventTypeEventsAPI:
 		// Acknowledge the event
@@ -138,7 +138,7 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 		// Handle the inner event
 		eventsAPIEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
 		if !ok {
-			log.Printf("[Slack] Could not type cast event to EventsAPIEvent")
+			slog.Info("[Slack] Could not type cast event to EventsAPIEvent")
 			return
 		}
 
@@ -153,7 +153,7 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 		if ok && callback.Type == slack.InteractionTypeBlockActions {
 			a.handleBlockActions(ctx, &callback)
 		} else {
-			log.Println("[Slack] Interactive event received (not yet handled)")
+			slog.Info("[Slack] Interactive event received (not yet handled)")
 		}
 
 	case socketmode.EventTypeSlashCommand:
@@ -161,7 +161,7 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 		a.socketClient.Ack(*evt.Request)
 		cmd, ok := evt.Data.(slack.SlashCommand)
 		if !ok {
-			log.Println("[Slack] Slash command: could not parse payload")
+			slog.Info("[Slack] Slash command: could not parse payload")
 			return
 		}
 		a.handleSlashCommand(ctx, cmd)
@@ -172,7 +172,7 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 	default:
 		// Only log truly unknown event types at debug level
 		if evt.Type != "" {
-			log.Printf("[Slack] Unhandled event type: %s", evt.Type)
+			slog.Info(fmt.Sprintf("[Slack] Unhandled event type: %s", evt.Type))
 		}
 	}
 }
@@ -193,7 +193,7 @@ func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackeve
 		if innerEvent.Type == "assistant_thread_started" {
 			a.handleAssistantThreadStarted(ctx, innerEvent)
 		} else {
-			log.Printf("[Slack] Unhandled inner event type: %s", innerEvent.Type)
+      slog.Info(fmt.Sprintf("[Slack] Unhandled inner event type: %s", innerEvent.Type))
 		}
 	}
 }
@@ -215,15 +215,15 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	// Top-level channel messages are handled via app_mention events to avoid duplicates.
 	if ev.Channel != "" && ev.Channel[0] != 'D' {
 		if ev.ThreadTimeStamp == "" {
-			log.Printf("[Slack] Ignoring top-level message in channel %s (will handle via app_mention)", ev.Channel)
+			slog.Info(fmt.Sprintf("[Slack] Ignoring top-level message in channel %s (will handle via app_mention)", ev.Channel))
 			return
 		}
-		log.Printf("[Slack] Processing thread reply in channel %s, thread=%s", ev.Channel, ev.ThreadTimeStamp)
+		slog.Info(fmt.Sprintf("[Slack] Processing thread reply in channel %s, thread=%s", ev.Channel, ev.ThreadTimeStamp))
 	}
 
 	// Allowlist: if configured, only allow messages from allowed channels or users
 	if !a.isAllowed(ev.Channel, ev.User) {
-		log.Printf("[Slack] Message from disallowed channel=%s or user=%s", ev.Channel, ev.User)
+		slog.Info(fmt.Sprintf("[Slack] Message from disallowed channel=%s or user=%s", ev.Channel, ev.User))
 		metrics.MessagesDropped.WithLabelValues("slack", "allowlist").Inc()
 		a.sendNotEnabledMessage(ctx, ev.Channel, ev.ThreadTimeStamp)
 		return
@@ -235,7 +235,7 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	}
 	metrics.SlackEvents.WithLabelValues(eventType).Inc()
 
-	log.Printf("[Slack] Message received: channel=%s, user=%s, text=%s", ev.Channel, ev.User, ev.Text)
+	slog.Info(fmt.Sprintf("[Slack] Message received: channel=%s, user=%s, text=%s", ev.Channel, ev.User, ev.Text))
 
 	// Build conversation ID
 	conversationID := ev.Channel
@@ -263,7 +263,7 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	// Call handler if registered
 	if a.msgHandler != nil {
 		if err := a.msgHandler(ctx, msg); err != nil {
-			log.Printf("[Slack] Error handling message: %v", err)
+			slog.Error(fmt.Sprintf("[Slack] Error handling message: %v", err))
 			a.sendErrorMessage(ctx, ev.Channel, ev.ThreadTimeStamp, err)
 		}
 	}
@@ -271,17 +271,17 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 
 // handleBlockActions processes block action events (button clicks, etc.)
 func (a *SlackAdapter) handleBlockActions(ctx context.Context, callback *slack.InteractionCallback) {
-	log.Printf("[Slack] Block action received: type=%s, actions=%d", callback.Type, len(callback.ActionCallback.BlockActions))
+	slog.Info(fmt.Sprintf("[Slack] Block action received: type=%s, actions=%d", callback.Type, len(callback.ActionCallback.BlockActions)))
 
 	for _, action := range callback.ActionCallback.BlockActions {
-		log.Printf("[Slack] Action: id=%s, value=%s", action.ActionID, action.Value)
+		slog.Info(fmt.Sprintf("[Slack] Action: id=%s, value=%s", action.ActionID, action.Value))
 
 		// feedback_buttons: built-in Slack AI thumbs up/down widget — handled locally.
 		// All other block actions are agent-sent interactive buttons forwarded to the agent.
 		if action.ActionID == "feedback_buttons" {
 			feedbackType := action.Value // "positive_feedback" or "negative_feedback"
-			log.Printf("[Slack] Feedback received: %s from user %s on message %s",
-				feedbackType, callback.User.ID, callback.Message.Timestamp)
+			slog.Info(fmt.Sprintf("[Slack] Feedback received: %s from user %s on message %s",
+				feedbackType, callback.User.ID, callback.Message.Timestamp))
 
 			// Use Slack emoji names (not emoji characters)
 			emojiName := "thumbsup"
@@ -308,9 +308,9 @@ func (a *SlackAdapter) handleBlockActions(ctx context.Context, callback *slack.I
 				)
 
 				if err != nil {
-					log.Printf("[Slack] Failed to remove feedback buttons: %v", err)
+					slog.Error(fmt.Sprintf("[Slack] Failed to remove feedback buttons: %v", err))
 				} else {
-					log.Printf("[Slack] Feedback buttons removed from message")
+					slog.Info("[Slack] Feedback buttons removed from message")
 				}
 			}
 
@@ -321,9 +321,9 @@ func (a *SlackAdapter) handleBlockActions(ctx context.Context, callback *slack.I
 			})
 
 			if err != nil {
-				log.Printf("[Slack] Failed to add reaction: %v", err)
+				slog.Error(fmt.Sprintf("[Slack] Failed to add reaction: %v", err))
 			} else {
-				log.Printf("[Slack] Feedback acknowledged with :%s: reaction", emojiName)
+				slog.Info(fmt.Sprintf("[Slack] Feedback acknowledged with :%s: reaction", emojiName))
 			}
 		} else {
 			// Agent-sent interactive button: forward to agent as an incoming message.
@@ -493,11 +493,11 @@ func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEv
 
 // handleAppMention processes app mention events
 func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.AppMentionEvent) {
-	log.Printf("[Slack] App mentioned: channel=%s, user=%s, text=%s", ev.Channel, ev.User, ev.Text)
+	slog.Info(fmt.Sprintf("[Slack] App mentioned: channel=%s, user=%s, text=%s", ev.Channel, ev.User, ev.Text))
 
 	// Allowlist: if configured, only allow mentions from allowed channels or users
 	if !a.isAllowed(ev.Channel, ev.User) {
-		log.Printf("[Slack] App mention from disallowed channel=%s or user=%s", ev.Channel, ev.User)
+		slog.Info(fmt.Sprintf("[Slack] App mention from disallowed channel=%s or user=%s", ev.Channel, ev.User))
 		metrics.MessagesDropped.WithLabelValues("slack", "allowlist").Inc()
 		threadID := ev.ThreadTimeStamp
 		if threadID == "" {
@@ -519,9 +519,9 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 	conversationID := fmt.Sprintf("%s-%s", ev.Channel, threadID)
 	text := stripMentions(ev.Text)
 
-	log.Printf("[Slack] Setting loading state: channel=%s, threadTS=%s", ev.Channel, threadID)
+	slog.Info(fmt.Sprintf("[Slack] Setting loading state: channel=%s, threadTS=%s", ev.Channel, threadID))
 	if err := a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "Assistant is thinking...", "thinking_face"); err != nil {
-		log.Printf("[Slack] ERROR: Failed to set loading state: %v", err)
+		slog.Error(fmt.Sprintf("[Slack] ERROR: Failed to set loading state: %v", err))
 	}
 
 	// Convert to pb.Message
@@ -544,7 +544,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 	// Call handler if registered
 	if a.msgHandler != nil {
 		if err := a.msgHandler(ctx, msg); err != nil {
-			log.Printf("[Slack] Error handling mention: %v", err)
+			slog.Error(fmt.Sprintf("[Slack] Error handling mention: %v", err))
 			a.sendErrorMessage(ctx, ev.Channel, threadID, err)
 			// Clear loading state on error
 			_ = a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "", "")
@@ -556,11 +556,11 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 // configured actionableReactions set are forwarded to the agent. If the set
 // is empty (no reactions configured), all reactions are dropped.
 func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.ReactionAddedEvent) {
-	log.Printf("[Slack] Reaction added: emoji=%s, user=%s, channel=%s, item_ts=%s",
-		ev.Reaction, ev.User, ev.Item.Channel, ev.Item.Timestamp)
+	slog.Info(fmt.Sprintf("[Slack] Reaction added: emoji=%s, user=%s, channel=%s, item_ts=%s",
+		ev.Reaction, ev.User, ev.Item.Channel, ev.Item.Timestamp))
 
 	if !a.actionableReactions[ev.Reaction] {
-		log.Printf("[Slack] Ignoring non-actionable reaction :%s:", ev.Reaction)
+		slog.Info(fmt.Sprintf("[Slack] Ignoring non-actionable reaction :%s:", ev.Reaction))
 		return
 	}
 
@@ -568,7 +568,7 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 
 	originalText := a.fetchMessageText(ctx, ev.Item.Channel, ev.Item.Timestamp)
 	if originalText == "" {
-		log.Printf("[Slack] Could not fetch original message for reaction, skipping")
+		slog.Info("[Slack] Could not fetch original message for reaction, skipping")
 		return
 	}
 
@@ -596,7 +596,7 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 
 	if a.msgHandler != nil {
 		if err := a.msgHandler(ctx, msg); err != nil {
-			log.Printf("[Slack] Error handling reaction: %v", err)
+			slog.Error(fmt.Sprintf("[Slack] Error handling reaction: %v", err))
 			a.sendErrorMessage(ctx, ev.Item.Channel, threadID, err)
 		}
 	}
@@ -611,7 +611,7 @@ func (a *SlackAdapter) fetchMessageText(ctx context.Context, channelID, timestam
 		Inclusive:  true,
 	})
 	if err != nil {
-		log.Printf("[Slack] Failed to fetch message %s in %s: %v", timestamp, channelID, err)
+		slog.Error(fmt.Sprintf("[Slack] Failed to fetch message %s in %s: %v", timestamp, channelID, err))
 		return ""
 	}
 	for _, m := range msgs {
@@ -626,29 +626,35 @@ func (a *SlackAdapter) fetchMessageText(ctx context.Context, channelID, timestam
 // (e.g. agent not connected) are kept in logs only to avoid channel spam.
 func (a *SlackAdapter) sendErrorMessage(ctx context.Context, channelID, threadTS string, err error) {
 	if errors.Is(err, adapter.ErrNoAgentStream) {
-		log.Printf("[Slack] Suppressed infrastructure error (not posting to channel): %v", err)
+		slog.Info(fmt.Sprintf("[Slack] Suppressed infrastructure error (not posting to channel): %v", err))
 		return
 	}
 
 	content := fmt.Sprintf(":x: Error: %s", err.Error())
+	if a.config.DevMode {
+		content += "\n\n:test_tube: _Sent from dev environment_"
+	}
 	_, _, postErr := a.client.PostMessageContext(ctx, channelID,
 		slack.MsgOptionText(content, false),
 		slack.MsgOptionTS(threadTS),
 	)
 	if postErr != nil {
-		log.Printf("[Slack] Error sending error message: %v", postErr)
+		slog.Error(fmt.Sprintf("[Slack] Error sending error message: %v", postErr))
 	}
 }
 
 // sendNotEnabledMessage tells the user the app is not enabled for this channel or user
 func (a *SlackAdapter) sendNotEnabledMessage(ctx context.Context, channelID, threadTS string) {
 	content := "This app has not been enabled for this channel or user. Please contact your workspace admin to enable it."
+	if a.config.DevMode {
+		content += "\n\n:test_tube: _Sent from dev environment_"
+	}
 	_, _, postErr := a.client.PostMessageContext(ctx, channelID,
 		slack.MsgOptionText(content, false),
 		slack.MsgOptionTS(threadTS),
 	)
 	if postErr != nil {
-		log.Printf("[Slack] Error sending not-enabled message: %v", postErr)
+		slog.Error(fmt.Sprintf("[Slack] Error sending not-enabled message: %v", postErr))
 	}
 }
 
@@ -684,12 +690,12 @@ func (a *SlackAdapter) IsHealthy(ctx context.Context) bool {
 
 // Stop gracefully shuts down the adapter
 func (a *SlackAdapter) Stop(ctx context.Context) error {
-	log.Println("[Slack] Stopping adapter...")
+	slog.Info("[Slack] Stopping adapter...")
 
 	// Signal stop to event listener
 	close(a.stopChan)
 
-	log.Println("[Slack] Adapter stopped")
+	slog.Info("[Slack] Adapter stopped")
 	return nil
 }
 
@@ -705,7 +711,7 @@ func (a *SlackAdapter) HydrateThread(ctx context.Context, conversationID string,
 		return fmt.Errorf("invalid conversation ID: %w", err)
 	}
 
-	log.Printf("[Slack] Hydrating thread: channel=%s, thread=%s", channelID, threadTS)
+	slog.Info(fmt.Sprintf("[Slack] Hydrating thread: channel=%s, thread=%s", channelID, threadTS))
 
 	var messages []slack.Message
 
@@ -757,7 +763,7 @@ func (a *SlackAdapter) HydrateThread(ctx context.Context, conversationID string,
 		threadStore.AddMessage(conversationID, threadMsg)
 	}
 
-	log.Printf("[Slack] Hydrated %d messages for %s", len(messages), conversationID)
+	slog.Info(fmt.Sprintf("[Slack] Hydrated %d messages for %s", len(messages), conversationID))
 	return nil
 }
 
