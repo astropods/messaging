@@ -257,7 +257,7 @@ func (a *SlackAdapter) handleCardAttachment(ctx context.Context, channelID, thre
 		return fmt.Errorf("failed to post card: %w", err)
 	}
 
-	log.Printf("[Slack] Posted card attachment to %s/%s", channelID, threadTS)
+	slog.Info(fmt.Sprintf("[Slack] Posted card attachment to %s/%s", channelID, threadTS))
 	return nil
 }
 
