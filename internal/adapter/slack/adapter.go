@@ -348,7 +348,7 @@ func (a *SlackAdapter) routeButtonClickToAgent(ctx context.Context, callback *sl
 		threadTS = callback.Message.Timestamp
 	}
 	if channelID == "" || threadTS == "" {
-		log.Printf("[Slack] button click: missing channel or thread TS, dropping (channel=%q)", channelID)
+		slog.Warn(fmt.Sprintf("[Slack] button click: missing channel or thread TS, dropping (channel=%q)", channelID))
 		return
 	}
 
@@ -374,10 +374,10 @@ func (a *SlackAdapter) routeButtonClickToAgent(ctx context.Context, callback *sl
 		User: &pb.User{Id: callback.User.ID},
 	}
 
-	log.Printf("[Slack] Routing button click to agent: action_id=%s, user=%s", action.ActionID, callback.User.ID)
+	slog.Info(fmt.Sprintf("[Slack] Routing button click to agent: action_id=%s, user=%s", action.ActionID, callback.User.ID))
 	if a.msgHandler != nil {
 		if err := a.msgHandler(ctx, msg); err != nil {
-			log.Printf("[Slack] Error routing button click: %v", err)
+			slog.Error(fmt.Sprintf("[Slack] Error routing button click: %v", err))
 		}
 	}
 }
@@ -385,11 +385,11 @@ func (a *SlackAdapter) routeButtonClickToAgent(ctx context.Context, callback *sl
 // handleSlashCommand routes a Slack slash command to the agent as an incoming message.
 // The command text (without the /command prefix) is used as message content.
 func (a *SlackAdapter) handleSlashCommand(ctx context.Context, cmd slack.SlashCommand) {
-	log.Printf("[Slack] Slash command: %s %q from user=%s in channel=%s",
-		cmd.Command, cmd.Text, cmd.UserID, cmd.ChannelID)
+	slog.Info(fmt.Sprintf("[Slack] Slash command: %s %q from user=%s in channel=%s",
+		cmd.Command, cmd.Text, cmd.UserID, cmd.ChannelID))
 
 	if !a.isAllowed(cmd.ChannelID, cmd.UserID) {
-		log.Printf("[Slack] Slash command from disallowed channel=%s or user=%s", cmd.ChannelID, cmd.UserID)
+		slog.Info(fmt.Sprintf("[Slack] Slash command from disallowed channel=%s or user=%s", cmd.ChannelID, cmd.UserID))
 		metrics.MessagesDropped.WithLabelValues("slack", "allowlist").Inc()
 		return
 	}
@@ -420,7 +420,7 @@ func (a *SlackAdapter) handleSlashCommand(ctx context.Context, cmd slack.SlashCo
 
 	if a.msgHandler != nil {
 		if err := a.msgHandler(ctx, msg); err != nil {
-			log.Printf("[Slack] Error handling slash command: %v", err)
+			slog.Error(fmt.Sprintf("[Slack] Error handling slash command: %v", err))
 		}
 	}
 }
@@ -444,13 +444,13 @@ func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEv
 
 	rawData, ok := innerEvent.Data.(json.RawMessage)
 	if !ok {
-		log.Printf("[Slack] assistant_thread_started: event data unavailable; upgrade slack-go to ≥0.13 for typed support")
+		slog.Warn("[Slack] assistant_thread_started: event data unavailable; upgrade slack-go to ≥0.13 for typed support")
 		return
 	}
 
 	var ev payload
 	if err := json.Unmarshal(rawData, &ev); err != nil {
-		log.Printf("[Slack] assistant_thread_started: parse error: %v", err)
+		slog.Error(fmt.Sprintf("[Slack] assistant_thread_started: parse error: %v", err))
 		return
 	}
 
@@ -458,7 +458,7 @@ func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEv
 	threadTS := ev.AssistantThread.ThreadTs
 	userID := ev.AssistantThread.UserID
 	if channelID == "" || threadTS == "" {
-		log.Printf("[Slack] assistant_thread_started: missing channel (%q) or thread TS (%q)", channelID, threadTS)
+		slog.Warn(fmt.Sprintf("[Slack] assistant_thread_started: missing channel (%q) or thread TS (%q)", channelID, threadTS))
 		return
 	}
 
@@ -483,10 +483,10 @@ func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEv
 		User: &pb.User{Id: userID},
 	}
 
-	log.Printf("[Slack] Forwarding assistant_thread_started to agent: channel=%s thread=%s user=%s", channelID, threadTS, userID)
+	slog.Info(fmt.Sprintf("[Slack] Forwarding assistant_thread_started to agent: channel=%s thread=%s user=%s", channelID, threadTS, userID))
 	if a.msgHandler != nil {
 		if err := a.msgHandler(ctx, msg); err != nil {
-			log.Printf("[Slack] Error forwarding assistant_thread_started: %v", err)
+			slog.Error(fmt.Sprintf("[Slack] Error forwarding assistant_thread_started: %v", err))
 		}
 	}
 }
