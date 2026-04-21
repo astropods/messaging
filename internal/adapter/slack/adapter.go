@@ -354,12 +354,16 @@ func (a *SlackAdapter) routeButtonClickToAgent(ctx context.Context, callback *sl
 
 	metrics.SlackEvents.WithLabelValues("button_click").Inc()
 
-	content, _ := json.Marshal(map[string]string{
+	content, err := json.Marshal(map[string]string{
 		"type":      "button_click",
 		"button_id": action.ActionID,
 		"value":     action.Value,
 		"action":    action.ActionID,
 	})
+	if err != nil {
+		slog.Error(fmt.Sprintf("[Slack] Failed to marshal button click payload: %v", err))
+		return
+	}
 
 	msg := &pb.Message{
 		Id:             uuid.NewString(),
@@ -464,11 +468,15 @@ func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEv
 
 	metrics.SlackEvents.WithLabelValues("thread_started").Inc()
 
-	content, _ := json.Marshal(map[string]string{
+	content, err := json.Marshal(map[string]string{
 		"type":    "assistant_thread_started",
 		"channel": channelID,
 		"thread":  threadTS,
 	})
+	if err != nil {
+		slog.Error(fmt.Sprintf("[Slack] Failed to marshal assistant thread started payload: %v", err))
+		return
+	}
 
 	msg := &pb.Message{
 		Id:             uuid.NewString(),
