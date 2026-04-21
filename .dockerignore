@@ -1,0 +1,9 @@
+# Exclude playground dev artifacts from the Go build context.
+# The Bun stage copies playground/ explicitly; node_modules and dist
+# are not needed by the Go compiler and would bloat the context.
+playground/node_modules/
+playground/dist/
+playground/.git/
+
+# Go dev artifacts
+*.test

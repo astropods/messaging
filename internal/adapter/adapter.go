@@ -70,6 +70,7 @@ type Config struct {
 	SocketMode          bool
 	WebhookURL          string
 	AutoThread          bool
+	DevMode             bool // When true, messages include a "sent from dev" context
 	RateLimit           RateLimitConfig
 	ActionableReactions []string // Emoji names forwarded to the agent; empty means no reactions
 	AllowedChannelIDs   []string // Channel IDs that may use the app (empty = allow all)

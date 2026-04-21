@@ -3,7 +3,7 @@ package web
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -28,6 +28,7 @@ type WebAdapter struct {
 	listenAddr        string
 	heartbeatInterval time.Duration
 	allowedOrigins    []string
+	servePlayground   bool
 }
 
 // WebAdapterOption configures the WebAdapter
@@ -61,6 +62,13 @@ func WithAllowedOrigins(origins []string) WebAdapterOption {
 	}
 }
 
+// WithServePlayground enables serving the embedded playground UI
+func WithServePlayground(enabled bool) WebAdapterOption {
+	return func(a *WebAdapter) {
+		a.servePlayground = enabled
+	}
+}
+
 // New creates a new WebAdapter
 func New(opts ...WebAdapterOption) *WebAdapter {
 	a := &WebAdapter{
@@ -86,7 +94,7 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 	// Initialize handlers
 	a.handlers = NewHandlers(a.connManager, a.sessionManager, a.threadStore, a.agentConfigStore)
 
-	log.Printf("[Web] Adapter initialized (listen: %s)", a.listenAddr)
+	slog.Info("[Web] Adapter initialized", "listen", a.listenAddr)
 	return nil
 }
 
@@ -116,6 +124,11 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	mux.HandleFunc("POST /api/conversations/{id}/audio", a.handlers.HandleAudioUpload)
 	mux.HandleFunc("GET /health", a.handlers.HandleHealth)
 
+	// Playground UI — must be registered last so API routes always take priority
+	if a.servePlayground {
+		registerPlaygroundRoutes(mux)
+	}
+
 	// Wrap with CORS middleware
 	handler := a.corsMiddleware(mux)
 
@@ -128,12 +141,12 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	log.Printf("[Web] Starting HTTP server on %s", a.listenAddr)
+	slog.Info("[Web] Starting HTTP server", "addr", a.listenAddr)
 
 	// Start server in goroutine
 	go func() {
 		if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("[Web] HTTP server error: %v", err)
+			slog.Error("[Web] HTTP server error", "err", err)
 		}
 	}()
 
@@ -144,7 +157,7 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 
 // Stop gracefully shuts down the adapter
 func (a *WebAdapter) Stop(ctx context.Context) error {
-	log.Println("[Web] Stopping adapter...")
+	slog.Info("[Web] Stopping adapter...")
 
 	// Close all SSE connections
 	if a.connManager != nil {
@@ -157,12 +170,12 @@ func (a *WebAdapter) Stop(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		if err := a.server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("[Web] Error shutting down server: %v", err)
+			slog.Error("[Web] Error shutting down server", "err", err)
 			return err
 		}
 	}
 
-	log.Println("[Web] Adapter stopped")
+	slog.Info("[Web] Adapter stopped")
 	return nil
 }
 
@@ -245,13 +258,13 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 
 	case *pb.AgentResponse_Transcript:
 		// Audio transcript — update user message placeholder
-		log.Printf("[Web] Transcript received: conversation=%s, text=%q", conversationID, payload.Transcript.Text)
+		slog.Info("[Web] Transcript received", "conversation", conversationID, "text", payload.Transcript.Text)
 		event := NewTranscriptEvent(payload.Transcript)
 		a.connManager.Broadcast(conversationID, event)
 
 	case *pb.AgentResponse_ThreadMetadata:
 		// Thread metadata
-		log.Printf("[Web] Thread metadata received: %+v", payload.ThreadMetadata)
+		slog.Info("[Web] Thread metadata received", "metadata", payload.ThreadMetadata)
 
 	case *pb.AgentResponse_Action:
 		log.Printf("[Web] Action received: conversation=%s, action=%s", conversationID, payload.Action.ActionName)
@@ -259,7 +272,7 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		a.connManager.Broadcast(conversationID, event)
 
 	default:
-		log.Printf("[Web] Unhandled response payload type: %T", response.Payload)
+		slog.Warn("[Web] Unhandled response payload type", "type", fmt.Sprintf("%T", response.Payload))
 	}
 
 	return nil

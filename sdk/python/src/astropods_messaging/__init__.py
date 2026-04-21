@@ -12,6 +12,7 @@ from .astro.messaging.v1.response_pb2 import (
     ErrorResponse,
     SuggestedPrompts,
     ThreadMetadata,
+    Transcript,
 )
 from .astro.messaging.v1.config_pb2 import AgentConfig, AgentToolConfig
 from .astro.messaging.v1.audio_pb2 import AudioStreamConfig, AudioChunk, AudioEncoding
@@ -31,6 +32,7 @@ __all__ = [
     "ErrorResponse",
     "SuggestedPrompts",
     "ThreadMetadata",
+    "Transcript",
     "AgentConfig",
     "AgentToolConfig",
     "AudioStreamConfig",

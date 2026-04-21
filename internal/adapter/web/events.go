@@ -3,7 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
@@ -120,7 +120,7 @@ func NewConnectedEvent(conversationID, connectionID string) SSEEvent {
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("[Web] Error marshaling connected event: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Error marshaling connected event: %v", err))
 	}
 	return SSEEvent{
 		Event: EventConnected,
@@ -151,7 +151,7 @@ func NewChunkEvent(chunk *pb.ContentChunk, responseID string) SSEEvent {
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("[Web] Error marshaling chunk event: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Error marshaling chunk event: %v", err))
 	}
 	return SSEEvent{
 		Event: EventChunk,
@@ -170,7 +170,7 @@ func NewStatusEvent(status *pb.StatusUpdate) SSEEvent {
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("[Web] Error marshaling status event: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Error marshaling status event: %v", err))
 	}
 	return SSEEvent{
 		Event: EventStatus,
@@ -188,7 +188,7 @@ func NewStepStartEvent(stepID, name, details string) SSEEvent {
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("[Web] Error marshaling step-start event: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Error marshaling step-start event: %v", err))
 	}
 	return SSEEvent{
 		Event: EventStepStart,
@@ -204,7 +204,7 @@ func NewStepEndEvent(stepID string) SSEEvent {
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("[Web] Error marshaling step-end event: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Error marshaling step-end event: %v", err))
 	}
 	return SSEEvent{
 		Event: EventStepEnd,
@@ -223,7 +223,7 @@ func NewErrorEvent(pbErr *pb.ErrorResponse) SSEEvent {
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("[Web] Error marshaling error event: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Error marshaling error event: %v", err))
 	}
 	return SSEEvent{
 		Event: EventError,
@@ -241,7 +241,7 @@ func NewErrorEventFromMessage(code, message string, retryable bool) SSEEvent {
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("[Web] Error marshaling error event: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Error marshaling error event: %v", err))
 	}
 	return SSEEvent{
 		Event: EventError,
@@ -257,7 +257,7 @@ func NewFinishEvent(responseID string) SSEEvent {
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("[Web] Error marshaling finish event: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Error marshaling finish event: %v", err))
 	}
 	return SSEEvent{
 		Event: EventFinish,
@@ -283,7 +283,7 @@ func NewTranscriptEvent(transcript *pb.Transcript) SSEEvent {
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("[Web] Error marshaling transcript event: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Error marshaling transcript event: %v", err))
 	}
 	return SSEEvent{
 		Event: EventTranscript,
@@ -336,7 +336,7 @@ func NewPromptsEvent(prompts *pb.SuggestedPrompts) SSEEvent {
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("[Web] Error marshaling prompts event: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Error marshaling prompts event: %v", err))
 	}
 	return SSEEvent{
 		Event: EventPrompts,
