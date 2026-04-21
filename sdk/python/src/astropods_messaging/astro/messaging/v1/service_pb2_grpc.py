@@ -8,7 +8,7 @@ from . import message_pb2 as astro_dot_messaging_dot_v1_dot_message__pb2
 from . import response_pb2 as astro_dot_messaging_dot_v1_dot_response__pb2
 from . import service_pb2 as astro_dot_messaging_dot_v1_dot_service__pb2
 
-GRPC_GENERATED_VERSION = '1.78.0'
+GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 

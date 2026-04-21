@@ -311,7 +311,7 @@ func NewActionEvent(action *pb.ActionRequest, responseID string) SSEEvent {
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("[Web] Error marshaling action event: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Error marshaling action event: %v", err))
 	}
 	return SSEEvent{
 		Event: EventAction,

@@ -267,7 +267,7 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		slog.Info("[Web] Thread metadata received", "metadata", payload.ThreadMetadata)
 
 	case *pb.AgentResponse_Action:
-		log.Printf("[Web] Action received: conversation=%s, action=%s", conversationID, payload.Action.ActionName)
+		slog.Info("[Web] Action received", "conversation", conversationID, "action", payload.Action.ActionName)
 		event := NewActionEvent(payload.Action, response.ResponseId)
 		a.connManager.Broadcast(conversationID, event)
 
