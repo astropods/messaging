@@ -3,7 +3,7 @@ package grpc
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"sync"
 	"time"
@@ -68,7 +68,7 @@ func (s *Server) RegisterAdapter(name string, adpt adapter.Adapter) {
 	defer s.mu.Unlock()
 
 	s.adapters[name] = adpt
-	log.Printf("[gRPC] Registered adapter: %s", name)
+	slog.Info("[gRPC] Registered adapter", "name", name)
 }
 
 // Start starts the gRPC server
@@ -86,12 +86,12 @@ func (s *Server) Start(ctx context.Context) error {
 
 	pb.RegisterAgentMessagingServer(s.grpcServer, s)
 
-	log.Printf("[gRPC] Server listening on %s", s.listenAddr)
+	slog.Info("[gRPC] Server listening", "addr", s.listenAddr)
 
 	// Start server in goroutine
 	go func() {
 		if err := s.grpcServer.Serve(lis); err != nil {
-			log.Printf("[gRPC] Server error: %v", err)
+			slog.Error("[gRPC] Server error", "err", err)
 		}
 	}()
 
@@ -99,7 +99,7 @@ func (s *Server) Start(ctx context.Context) error {
 	<-ctx.Done()
 
 	// Graceful shutdown
-	log.Println("[gRPC] Shutting down server...")
+	slog.Info("[gRPC] Shutting down server...")
 	s.grpcServer.GracefulStop()
 
 	return nil
@@ -117,14 +117,14 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 	ctx := stream.Context()
 	streamID := fmt.Sprintf("stream-%p", stream)
 
-	log.Printf("[gRPC] New bidirectional stream: %s", streamID)
+	slog.Info("[gRPC] New bidirectional stream", "id", streamID)
 	metrics.ActiveStreams.Inc()
 	defer metrics.ActiveStreams.Dec()
 
 	// Wait for initial registration message from agent
 	req, err := stream.Recv()
 	if err != nil {
-		log.Printf("[gRPC] Stream closed before registration: %v", err)
+		slog.Warn("[gRPC] Stream closed before registration", "err", err)
 		return err
 	}
 
@@ -137,7 +137,7 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 		// Agent sent config as first message; store it and wait for registration
 		if s.agentConfigStore != nil {
 			s.agentConfigStore.Set(payload.AgentConfig)
-			log.Printf("[gRPC] Stored agent config from stream")
+			slog.Info("[gRPC] Stored agent config from stream")
 		}
 		conversationID = "agent-stream"
 	default:
@@ -158,21 +158,21 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 	}
 	s.streamsMu.Unlock()
 
-	log.Printf("[gRPC] Registered agent stream for conversation: %s", conversationID)
+	slog.Info("[gRPC] Registered agent stream", "conversation", conversationID)
 
 	// Clean up on exit
 	defer func() {
 		s.streamsMu.Lock()
 		delete(s.streams, conversationID)
 		s.streamsMu.Unlock()
-		log.Printf("[gRPC] Unregistered agent stream: %s", conversationID)
+		slog.Info("[gRPC] Unregistered agent stream", "conversation", conversationID)
 	}()
 
 	// Handle incoming requests from agent
 	for {
 		req, err := stream.Recv()
 		if err != nil {
-			log.Printf("[gRPC] Stream closed: %v", err)
+			slog.Info("[gRPC] Stream closed", "err", err)
 			return err
 		}
 
@@ -180,7 +180,7 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 		case *pb.ConversationRequest_Message:
 			// Agent sending a message — wrap as content and route through routeAgentResponse
 			msg := payload.Message
-			log.Printf("[gRPC] Agent message for conversation: %s", msg.ConversationId)
+			slog.Info("[gRPC] Agent message", "conversation", msg.ConversationId)
 
 			response := &pb.AgentResponse{
 				ConversationId: msg.ConversationId,
@@ -193,30 +193,30 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 				},
 			}
 			if err := s.routeAgentResponse(streamCtx, response); err != nil {
-				log.Printf("[gRPC] Error routing agent message: %v", err)
+				slog.Error("[gRPC] Error routing agent message", "err", err)
 			}
 
 		case *pb.ConversationRequest_Feedback:
 			// Agent acknowledging feedback
-			log.Printf("[gRPC] Agent feedback: %s", payload.Feedback.ConversationId)
+			slog.Info("[gRPC] Agent feedback", "conversation", payload.Feedback.ConversationId)
 
 		case *pb.ConversationRequest_AgentConfig:
 			// Agent sending/updating its config
 			if s.agentConfigStore != nil {
 				s.agentConfigStore.Set(payload.AgentConfig)
-				log.Printf("[gRPC] Stored agent config from stream")
+				slog.Info("[gRPC] Stored agent config from stream")
 			}
 
 		case *pb.ConversationRequest_AgentResponse:
 			// Agent sending a typed response (ContentChunk, StatusUpdate, etc.)
 			response := payload.AgentResponse
-			log.Printf("[gRPC] Agent response for conversation: %s", response.ConversationId)
+			slog.Info("[gRPC] Agent response", "conversation", response.ConversationId)
 			if err := s.routeAgentResponse(streamCtx, response); err != nil {
-				log.Printf("[gRPC] Error routing agent response: %v", err)
+				slog.Error("[gRPC] Error routing agent response", "err", err)
 			}
 
 		default:
-			log.Printf("[gRPC] Unknown request type in stream")
+			slog.Warn("[gRPC] Unknown request type in stream")
 		}
 
 		// Check if context is cancelled
@@ -230,20 +230,20 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 
 // ProcessMessage handles server-side streaming (message → stream of responses)
 func (s *Server) ProcessMessage(req *pb.Message, stream pb.AgentMessaging_ProcessMessageServer) error {
-	log.Printf("[gRPC] ProcessMessage: %s from %s", req.Id, req.Platform)
+	slog.Info("[gRPC] ProcessMessage", "id", req.Id, "platform", req.Platform)
 	return nil
 }
 
 // GetThreadHistory returns thread history from store
 func (s *Server) GetThreadHistory(ctx context.Context, req *pb.ThreadHistoryRequest) (*pb.ThreadHistoryResponse, error) {
-	log.Printf("[gRPC] GetThreadHistory: %s (max: %d)", req.ConversationId, req.MaxMessages)
+	slog.Info("[gRPC] GetThreadHistory", "conversation", req.ConversationId, "max", req.MaxMessages)
 
 	// Check if we need to hydrate from platform
 	if s.threadStore.IsStale(req.ConversationId, s.getRefreshInterval()) {
-		log.Printf("[gRPC] Thread history stale, hydrating from platform...")
+		slog.Info("[gRPC] Thread history stale, hydrating from platform...")
 
 		if err := s.hydrateThreadHistory(ctx, req.ConversationId); err != nil {
-			log.Printf("[gRPC] Failed to hydrate: %v", err)
+			slog.Warn("[gRPC] Failed to hydrate thread history", "err", err)
 		}
 	}
 
@@ -254,7 +254,7 @@ func (s *Server) GetThreadHistory(ctx context.Context, req *pb.ThreadHistoryRequ
 
 	history := s.threadStore.GetHistory(req.ConversationId, maxMessages, req.IncludeDeleted)
 
-	log.Printf("[gRPC] Returning %d messages for conversation %s", len(history.Messages), req.ConversationId)
+	slog.Info("[gRPC] Returning messages", "count", len(history.Messages), "conversation", req.ConversationId)
 
 	return history, nil
 }
@@ -301,7 +301,7 @@ func (s *Server) HealthCheck(ctx context.Context, req *pb.HealthCheckRequest) (*
 	allHealthy := true
 	for name, adpt := range s.adapters {
 		if !adpt.IsHealthy(ctx) {
-			log.Printf("[gRPC] Adapter unhealthy: %s", name)
+			slog.Warn("[gRPC] Adapter unhealthy", "name", name)
 			allHealthy = false
 		}
 	}
@@ -320,13 +320,13 @@ func (s *Server) HealthCheck(ctx context.Context, req *pb.HealthCheckRequest) (*
 // HandleIncomingMessage is called by adapters when a message arrives from a platform.
 // This routes the message to the agent via gRPC stream.
 func (s *Server) HandleIncomingMessage(ctx context.Context, msg *pb.Message) error {
-	log.Printf("[gRPC] Incoming platform message: %s from %s", msg.Id, msg.Platform)
+	slog.Info("[gRPC] Incoming platform message", "id", msg.Id, "platform", msg.Platform)
 	metrics.MessagesReceived.WithLabelValues(msg.Platform).Inc()
 	start := time.Now()
 
 	// Update conversation cache
 	if err := s.updateConversationCache(ctx, msg); err != nil {
-		log.Printf("[gRPC] Warning: failed to update conversation cache: %v", err)
+		slog.Warn("[gRPC] Failed to update conversation cache", "err", err)
 	}
 
 	// Find active agent stream
@@ -358,7 +358,7 @@ func (s *Server) HandleIncomingMessage(ctx context.Context, msg *pb.Message) err
 
 	metrics.MessagesForwarded.WithLabelValues(msg.Platform).Inc()
 	metrics.MessageLatency.WithLabelValues(msg.Platform).Observe(time.Since(start).Seconds())
-	log.Printf("[gRPC] Message forwarded to agent via stream")
+	slog.Info("[gRPC] Message forwarded to agent via stream")
 	return nil
 }
 
@@ -378,8 +378,7 @@ func (s *Server) SendAudioConfig(conversationID string, config *pb.AudioStreamCo
 	if stream == nil {
 		return fmt.Errorf("%w for conversation: %s", adapter.ErrNoAgentStream, conversationID)
 	}
-	log.Printf("[gRPC] Sending audio config to agent: conversation=%s, encoding=%s, sampleRate=%d",
-		conversationID, config.Encoding.String(), config.SampleRate)
+	slog.Info("[gRPC] Sending audio config to agent", "conversation", conversationID, "encoding", config.Encoding.String(), "sampleRate", config.SampleRate)
 	return stream.stream.Send(&pb.AgentResponse{
 		ConversationId: conversationID,
 		Payload:        &pb.AgentResponse_AudioConfig{AudioConfig: config},
@@ -467,13 +466,13 @@ func (s *Server) routeAgentResponse(ctx context.Context, response *pb.AgentRespo
 	}
 
 	// Conversation not in cache — broadcast to all adapters
-	log.Printf("[gRPC] Conversation %s not in cache, broadcasting to all adapters", conversationID)
+	slog.Info("[gRPC] Conversation not in cache, broadcasting to all adapters", "conversation", conversationID)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for name, adpt := range s.adapters {
 		if err := adpt.HandleAgentResponse(ctx, response); err != nil {
-			log.Printf("[gRPC] Error routing agent response to %s: %v", name, err)
+			slog.Error("[gRPC] Error routing agent response", "adapter", name, "err", err)
 			metrics.RoutingErrors.WithLabelValues(name).Inc()
 		}
 	}

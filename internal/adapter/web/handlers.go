@@ -3,7 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -99,9 +99,9 @@ func (h *Handlers) HandleCreateConversation(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Printf("[Web] Encode error on create conversation: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Encode error on create conversation: %v", err))
 	}
-	log.Printf("[Web] Conversation created: id=%q, user=%q", conversationID, session.UserID) //nolint:gosec // G706 false positive: %q escapes control characters
+	slog.Info(fmt.Sprintf("[Web] Conversation created: id=%q, user=%q", conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
 }
 
 // HandleSendMessage handles POST /api/conversations/{id}/messages
@@ -162,12 +162,12 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	// Forward to gRPC handler
 	if h.msgHandler == nil {
-		log.Printf("[Web] No message handler registered")
+		slog.Info("[Web] No message handler registered")
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if err := h.msgHandler(ctx, msg); err != nil {
-		log.Printf("[Web] Error forwarding message: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Error forwarding message: %v", err))
 		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process message")
 		http.Error(w, "Failed to process message", http.StatusInternalServerError)
 		return
@@ -193,9 +193,9 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Printf("[Web] Encode error on send message: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Encode error on send message: %v", err))
 	}
-	log.Printf("[Web] Message sent: id=%q, conversation=%q, user=%q", messageID, conversationID, session.UserID) //nolint:gosec // G706 false positive: %q escapes control characters
+	slog.Info(fmt.Sprintf("[Web] Message sent: id=%q, conversation=%q, user=%q", messageID, conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
 }
 
 // HandleStream handles GET /api/conversations/{id}/stream (SSE)
@@ -254,15 +254,15 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprint(w, connectedEvent.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
 	flusher.Flush()
 
-	log.Printf("[Web] SSE stream started: connection=%q, conversation=%q, user=%q", connID, conversationID, session.UserID) //nolint:gosec // G706 false positive: %q escapes control characters
+	slog.Info(fmt.Sprintf("[Web] SSE stream started: connection=%q, conversation=%q, user=%q", connID, conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
 	// Event loop
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[Web] SSE stream context cancelled: connection=%s", connID)
+			slog.Info(fmt.Sprintf("[Web] SSE stream context cancelled: connection=%s", connID))
 			return
 		case <-conn.Done:
-			log.Printf("[Web] SSE stream closed: connection=%s", connID)
+			slog.Info(fmt.Sprintf("[Web] SSE stream closed: connection=%s", connID))
 			return
 		case event := <-conn.EventChan:
 			_, _ = fmt.Fprint(w, event.Format())
@@ -333,7 +333,7 @@ func (h *Handlers) HandleHistory(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Printf("[Web] Encode error on get history: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Encode error on get history: %v", err))
 	}
 }
 
@@ -347,7 +347,7 @@ func (h *Handlers) HandleHealth(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Printf("[Web] Encode error on health: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Encode error on health: %v", err))
 	}
 }
 
@@ -422,7 +422,7 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Printf("[Web] Encode error on agent config: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Encode error on agent config: %v", err))
 	}
 }
 

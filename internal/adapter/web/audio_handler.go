@@ -17,7 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -61,7 +61,7 @@ func (h *Handlers) handleAudioSegmentStart(
 	config *AudioConfig,
 ) string {
 	if h.msgHandler == nil {
-		log.Printf("[Web] No message handler registered, dropping audio segment start")
+		slog.Info("[Web] No message handler registered, dropping audio segment start")
 		return ""
 	}
 
@@ -110,7 +110,7 @@ func (h *Handlers) handleAudioSegmentStart(
 	}
 
 	if err := h.msgHandler(ctx, msg); err != nil {
-		log.Printf("[Web] Error forwarding audio message: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Error forwarding audio message: %v", err))
 		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process audio")
 	}
 
@@ -211,14 +211,14 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 	if h.audioForwarder != nil {
 		protoConfig := audioConfigToProto(&config, conversationID, session.UserID)
 		if err := h.audioForwarder.SendAudioConfig(conversationID, protoConfig); err != nil {
-			log.Printf("[Web] Error sending upload audio config: %v", err)
+			slog.Error(fmt.Sprintf("[Web] Error sending upload audio config: %v", err))
 		}
 	}
 	messageID := h.handleAudioSegmentStart(ctx, conversationID, session, &config)
 	if h.audioForwarder != nil {
 		// Send as a single chunk with done=true since all data is available at once
 		if err := h.audioForwarder.SendAudioChunk(conversationID, audioData, 1, true); err != nil {
-			log.Printf("[Web] Error sending upload audio data: %v", err)
+			slog.Error(fmt.Sprintf("[Web] Error sending upload audio data: %v", err))
 		}
 	}
 
@@ -233,11 +233,11 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Printf("[Web] Encode error on audio upload response: %v", err)
+		slog.Error(fmt.Sprintf("[Web] Encode error on audio upload response: %v", err))
 	}
 
-	log.Printf("[Web] Audio upload accepted: conversation=%q, file=%q, size=%d", //nolint:gosec // G706 false positive: %q escapes control characters
-		conversationID, header.Filename, len(audioData))
+	slog.Info(fmt.Sprintf("[Web] Audio upload accepted: conversation=%q, file=%q, size=%d", //nolint:gosec // G706 false positive: %q escapes control characters
+		conversationID, header.Filename, len(audioData)))
 }
 
 // --- Encoding conversion utilities ---

@@ -45,7 +45,7 @@ jobs:
       - name: Check if version is already published
         id: check-published
         run: |
-          if pip index versions astropods-messaging 2>/dev/null | grep -q "${{ env.VERSION }}"; then
+          if pip index versions astropods-messaging 2>/dev/null | grep "Available versions:" | grep -q "${{ env.VERSION }}"; then
             echo "published=true" >> $GITHUB_OUTPUT
             echo "::notice::v${{ env.VERSION }} is already published on PyPI"
           else
