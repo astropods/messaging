@@ -335,6 +335,37 @@ func splitIntoChunks(text string, maxLen int) []string {
 	return chunks
 }
 
+// PostBlocks posts a message containing only Slack Block Kit blocks (no feedback widget).
+// blocksJSON must be a JSON array of block objects, e.g. `[{"type":"section",...}]`.
+// This is used for agent-generated rich cards (CardAttachment).
+func (c *SlackAIClient) PostBlocks(ctx context.Context, channelID, threadTS, blocksJSON string) error {
+	// Validate that the input is a JSON array before sending to Slack.
+	var raw []json.RawMessage
+	if err := json.Unmarshal([]byte(blocksJSON), &raw); err != nil {
+		return fmt.Errorf("platform_card_json is not a valid JSON array: %w", err)
+	}
+
+	payload := map[string]interface{}{
+		"channel": channelID,
+		"blocks":  raw,
+	}
+	if threadTS != "" {
+		payload["thread_ts"] = threadTS
+	}
+
+	var result struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+	if err := c.postJSON(ctx, "chat.postMessage", payload, &result); err != nil {
+		return err
+	}
+	if !result.OK {
+		return fmt.Errorf("slack API error: %s", result.Error)
+	}
+	return nil
+}
+
 // postJSON makes a POST request to a Slack API endpoint with JSON body
 func (c *SlackAIClient) postJSON(ctx context.Context, method string, body interface{}, result interface{}) error {
 	url := fmt.Sprintf("%s/%s", c.baseURL, method)
