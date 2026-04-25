@@ -39,13 +39,14 @@ type Config struct {
 
 // AuthzConfig holds the configuration the messaging container uses to call
 // astro-server's /deployments/authorize endpoint.
+//
+// Only the token is needed — astro-server's base URL travels inside the
+// token's standard `iss` claim, so URL discovery and authentication share
+// one source of truth.
 type AuthzConfig struct {
 	// IdentityToken is the raw HS256 JWT from ASTRO_AUTHZ_TOKEN. Empty
 	// disables authz entirely (dev mode — every request allowed).
 	IdentityToken string
-	// ServerURL is astro-server's base URL (e.g. http://astro-server:8080).
-	// Empty + non-empty IdentityToken is a misconfiguration: main fails closed.
-	ServerURL string
 }
 
 // MetricsConfig holds Prometheus metrics server configuration
@@ -207,12 +208,11 @@ func Load() (*Config, error) {
 		TTL:      getEnvInt("STORAGE_TTL", 604800), // 7 days default
 	}
 
-	// Authorization configuration. Both env vars are typically wired in by
-	// astro-server's K8s spec applier — empty values mean we're running
-	// outside that wiring (local dev) and skip the check.
+	// Authorization configuration. The token is wired in by astro-server's
+	// K8s spec applier; an empty value means we're running outside that
+	// wiring (local dev) and skip the check.
 	cfg.Authz = AuthzConfig{
 		IdentityToken: os.Getenv("ASTRO_AUTHZ_TOKEN"),
-		ServerURL:     os.Getenv("ASTRO_AUTHZ_URL"),
 	}
 
 	return cfg, nil

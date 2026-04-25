@@ -185,20 +185,21 @@ func TestAllowAll_DenyAll(t *testing.T) {
 
 // NewAuthorizer wires real claims + client; rejects empty config.
 func TestNewAuthorizer_RejectsMissingFields(t *testing.T) {
-	if _, err := NewAuthorizer(Config{ServerURL: "http://x"}); err == nil {
+	if _, err := NewAuthorizer(Config{}); err == nil {
 		t.Error("expected error for missing IdentityToken")
 	}
-	if _, err := NewAuthorizer(Config{IdentityToken: jwt(`{"sub":"d"}`)}); err == nil {
-		t.Error("expected error for missing ServerURL")
-	}
-	if _, err := NewAuthorizer(Config{IdentityToken: "garbage", ServerURL: "http://x"}); err == nil {
+	if _, err := NewAuthorizer(Config{IdentityToken: "garbage"}); err == nil {
 		t.Error("expected error for malformed token")
+	}
+	// Token without iss claim — server URL can't be derived.
+	if _, err := NewAuthorizer(Config{IdentityToken: jwt(`{"sub":"dep-1"}`)}); err == nil {
+		t.Error("expected error for token missing iss")
 	}
 }
 
 func TestNewAuthorizer_HappyPath(t *testing.T) {
-	tok := jwt(`{"sub":"dep-9","anyone_adapters":["web"]}`)
-	a, err := NewAuthorizer(Config{IdentityToken: tok, ServerURL: "http://stub"})
+	tok := jwt(`{"sub":"dep-9","iss":"https://astropods.com","anyone_adapters":["web"]}`)
+	a, err := NewAuthorizer(Config{IdentityToken: tok})
 	if err != nil {
 		t.Fatalf("NewAuthorizer: %v", err)
 	}

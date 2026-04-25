@@ -21,25 +21,20 @@ import (
 )
 
 // buildAuthorizer wires the per-deployment Authorizer used by adapters to
-// gate incoming requests. Three states:
-//   - Both ASTRO_AUTHZ_TOKEN and ASTRO_AUTHZ_URL set → real authz.
-//   - Both empty → dev mode: AllowAll() so local development doesn't need
+// gate incoming requests. Two states:
+//   - ASTRO_AUTHZ_TOKEN set → real authz. The token's iss claim carries
+//     astro-server's URL; no separate URL env var is needed.
+//   - Empty → dev mode: AllowAll() so local development doesn't need
 //     astro-server running.
-//   - One set, the other empty → misconfiguration: fail closed with DenyAll()
-//     so a half-configured production deploy doesn't accidentally run open.
+//
+// If the token is malformed (decode error, missing iss/sub), we fail
+// closed with DenyAll() rather than silently widening access.
 func buildAuthorizer(cfg config.AuthzConfig) authz.Authorizer {
-	if cfg.IdentityToken == "" && cfg.ServerURL == "" {
-		slog.Warn("Authz disabled: ASTRO_AUTHZ_TOKEN and ASTRO_AUTHZ_URL not set (dev mode — all requests allowed)")
+	if cfg.IdentityToken == "" {
+		slog.Warn("Authz disabled: ASTRO_AUTHZ_TOKEN not set (dev mode — all requests allowed)")
 		return authz.AllowAll()
 	}
-	if cfg.IdentityToken == "" || cfg.ServerURL == "" {
-		slog.Error("Authz misconfigured: exactly one of ASTRO_AUTHZ_TOKEN/ASTRO_AUTHZ_URL is set; failing closed")
-		return authz.DenyAll()
-	}
-	a, err := authz.NewAuthorizer(authz.Config{
-		IdentityToken: cfg.IdentityToken,
-		ServerURL:     cfg.ServerURL,
-	})
+	a, err := authz.NewAuthorizer(authz.Config{IdentityToken: cfg.IdentityToken})
 	if err != nil {
 		slog.Error("Failed to initialize authorizer; failing closed", "err", err)
 		return authz.DenyAll()

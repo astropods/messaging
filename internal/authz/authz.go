@@ -37,13 +37,15 @@ type Authorizer interface {
 }
 
 // Config configures a real Authorizer.
+//
+// Only the token is needed: the standard `iss` claim inside it carries
+// astro-server's base URL, so URL discovery and authentication share one
+// source of truth.
 type Config struct {
 	// IdentityToken is the raw ASTRO_AUTHZ_TOKEN env var value (HS256 JWT).
 	// Required. When empty, NewAuthorizer returns an error — adapters should
 	// short-circuit to AllowAll() in dev mode rather than constructing this.
 	IdentityToken string
-	// ServerURL is the base URL of astro-server (e.g. "http://astro-server:8080").
-	ServerURL string
 	// CacheTTL controls how long boolean results are cached. Zero → DefaultCacheTTL.
 	CacheTTL time.Duration
 	// RequestTimeout caps each authorize round-trip. Zero → DefaultRequestTimeout.
@@ -63,16 +65,19 @@ type realAuthorizer struct {
 // NewAuthorizer parses the deploy token, sets up the HTTP client + cache,
 // and returns a ready-to-use Authorizer. It does NOT verify the token's
 // signature (the server does on every request).
+//
+// The server URL is read from the token's iss claim — no separate config
+// field. astro-server signs each token with its own base URL there.
 func NewAuthorizer(cfg Config) (Authorizer, error) {
 	if cfg.IdentityToken == "" {
 		return nil, errors.New("authz: IdentityToken required")
 	}
-	if cfg.ServerURL == "" {
-		return nil, errors.New("authz: ServerURL required")
-	}
 	claims, err := DecodeToken(cfg.IdentityToken)
 	if err != nil {
 		return nil, fmt.Errorf("authz: decode identity token: %w", err)
+	}
+	if claims.Issuer == "" {
+		return nil, errors.New("authz: token missing iss claim (server URL)")
 	}
 
 	cacheTTL := cfg.CacheTTL
@@ -89,7 +94,7 @@ func NewAuthorizer(cfg Config) (Authorizer, error) {
 		"deployment_id", claims.Subject,
 	)
 	logger.Info("authorizer initialized",
-		"server_url", cfg.ServerURL,
+		"server_url", claims.Issuer,
 		"anyone_adapters", claims.AnyoneAdapters,
 		"cache_ttl", cacheTTL,
 	)
@@ -97,7 +102,7 @@ func NewAuthorizer(cfg Config) (Authorizer, error) {
 	return &realAuthorizer{
 		deploymentID:   claims.Subject,
 		anyoneAdapters: claims.AnyoneAdapters,
-		client:         newAuthorizeClient(cfg.ServerURL, cfg.IdentityToken, timeout),
+		client:         newAuthorizeClient(claims.Issuer, cfg.IdentityToken, timeout),
 		cache:          newResultCache(cacheTTL),
 		logger:         logger,
 	}, nil
