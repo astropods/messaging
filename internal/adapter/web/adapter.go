@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
@@ -199,6 +200,14 @@ func (a *WebAdapter) SetMessageHandler(handler adapter.MessageHandler) {
 	a.msgHandler = handler
 	if a.handlers != nil {
 		a.handlers.SetMessageHandler(handler)
+	}
+}
+
+// SetAuthorizer wires the authorizer used to gate every API request. nil
+// disables authz (dev mode).
+func (a *WebAdapter) SetAuthorizer(az authz.Authorizer) {
+	if a.handlers != nil {
+		a.handlers.SetAuthorizer(az)
 	}
 }
 

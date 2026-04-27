@@ -101,17 +101,10 @@ var wsUpgrader = websocket.Upgrader{
 // If the WebSocket closes unexpectedly mid-segment (e.g. network drop), the handler
 // automatically sends a done=true chunk to flush whatever audio the agent has received.
 func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	// Authenticate the request. The session token is typically passed as a
-	// query parameter or cookie, depending on the SessionManager implementation.
-	session, err := h.sessionManager.ValidateRequest(ctx, r)
-	if err != nil {
-		http.Error(w, "Authentication error", http.StatusInternalServerError)
-		return
-	}
+	// Authenticate the request (session) and authorize against this
+	// deployment's grants. authenticate writes the response on failure.
+	session := h.authenticate(w, r)
 	if session == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -194,7 +187,7 @@ func (h *Handlers) HandleAudioStream(w http.ResponseWriter, r *http.Request) {
 
 				// Send a placeholder "[audio]" message to the agent with metadata
 				// (user info, encoding details, etc.) so it has full context
-				h.handleAudioSegmentStart(ctx, conversationID, session, &config)
+				h.handleAudioSegmentStart(r.Context(), conversationID, session, &config)
 				segmentActive = true
 
 			case "audio.end":

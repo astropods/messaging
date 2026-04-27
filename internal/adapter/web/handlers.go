@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/google/uuid"
@@ -18,6 +19,7 @@ import (
 type Handlers struct {
 	connManager      *ConnectionManager
 	sessionManager   SessionManager
+	authz            authz.Authorizer // nil = skip authz (dev convenience)
 	msgHandler       adapter.MessageHandler
 	audioForwarder   adapter.AudioForwarder
 	threadStore      *store.ThreadHistoryStore
@@ -32,6 +34,50 @@ func NewHandlers(connManager *ConnectionManager, sessionManager SessionManager, 
 		threadStore:      threadStore,
 		agentConfigStore: agentConfigStore,
 	}
+}
+
+// SetAuthorizer wires the authorizer used to gate every API request. nil
+// disables the check (dev mode); production wiring sets a real Authorizer
+// in main.
+func (h *Handlers) SetAuthorizer(a authz.Authorizer) {
+	h.authz = a
+}
+
+// authenticate runs both authn (session) and authz (allowed-to-use-this-deployment).
+// On success it returns the session; on failure it has already written the
+// response and returns nil — the caller should `return` immediately.
+//
+// Centralising authn+authz here keeps every protected handler a single guard
+// line and makes it impossible to forget the authz check on a new endpoint.
+func (h *Handlers) authenticate(w http.ResponseWriter, r *http.Request) *Session {
+	ctx := r.Context()
+
+	session, err := h.sessionManager.ValidateRequest(ctx, r)
+	if err != nil {
+		http.Error(w, "Authentication error", http.StatusInternalServerError)
+		return nil
+	}
+	if session == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return nil
+	}
+
+	if h.authz != nil {
+		allowed, err := h.authz.Allowed(ctx, authz.IdentityTypeUser, session.UserID, authz.AdapterWeb)
+		if err != nil {
+			// Fail closed on authz transport errors — better to return a 503
+			// than to silently drop the check.
+			slog.Warn("[Web] authz check failed", "user_id", session.UserID, "err", err) //nolint:gosec // session.UserID is from a trusted ALB OIDC header
+			http.Error(w, "Authorization unavailable", http.StatusServiceUnavailable)
+			return nil
+		}
+		if !allowed {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return nil
+		}
+	}
+
+	return session
 }
 
 // SetMessageHandler sets the message handler
@@ -69,16 +115,10 @@ type SendMessageResponse struct {
 
 // HandleCreateConversation handles POST /api/conversations
 func (h *Handlers) HandleCreateConversation(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	// Validate session
-	session, err := h.sessionManager.ValidateRequest(ctx, r)
-	if err != nil {
-		http.Error(w, "Authentication error", http.StatusInternalServerError)
-		return
-	}
+	// Authenticate the request (session) and authorize against this
+	// deployment's grants. authenticate writes the response on failure.
+	session := h.authenticate(w, r)
 	if session == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -108,14 +148,10 @@ func (h *Handlers) HandleCreateConversation(w http.ResponseWriter, r *http.Reque
 func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Validate session
-	session, err := h.sessionManager.ValidateRequest(ctx, r)
-	if err != nil {
-		http.Error(w, "Authentication error", http.StatusInternalServerError)
-		return
-	}
+	// Authenticate the request (session) and authorize against this
+	// deployment's grants. authenticate writes the response on failure.
+	session := h.authenticate(w, r)
 	if session == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -202,14 +238,10 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Validate session
-	session, err := h.sessionManager.ValidateRequest(ctx, r)
-	if err != nil {
-		http.Error(w, "Authentication error", http.StatusInternalServerError)
-		return
-	}
+	// Authenticate the request (session) and authorize against this
+	// deployment's grants. authenticate writes the response on failure.
+	session := h.authenticate(w, r)
 	if session == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -273,16 +305,10 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 
 // HandleHistory handles GET /api/conversations/{id}/history
 func (h *Handlers) HandleHistory(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	// Validate session
-	session, err := h.sessionManager.ValidateRequest(ctx, r)
-	if err != nil {
-		http.Error(w, "Authentication error", http.StatusInternalServerError)
-		return
-	}
+	// Authenticate the request (session) and authorize against this
+	// deployment's grants. authenticate writes the response on failure.
+	session := h.authenticate(w, r)
 	if session == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -353,6 +379,13 @@ func (h *Handlers) HandleHealth(w http.ResponseWriter, r *http.Request) {
 
 // HandleAgentConfig handles GET /api/agent/config
 func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
+	// Authenticate the request (session) and authorize against this
+	// deployment's grants. The agent config exposes the system prompt and
+	// tool list — leaking it to a denied principal is a real disclosure.
+	if h.authenticate(w, r) == nil {
+		return
+	}
+
 	if h.agentConfigStore == nil {
 		http.Error(w, "Agent config not available", http.StatusNotFound)
 		return

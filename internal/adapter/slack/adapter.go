@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/metrics"
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
@@ -28,6 +29,7 @@ type SlackAdapter struct {
 	socketClient *socketmode.Client
 	config       adapter.Config
 	msgHandler   adapter.MessageHandler
+	authz        authz.Authorizer // nil = skip authz (dev convenience)
 	rateLimiter  *RateLimiter
 	stopChan     chan struct{}
 	aiClient     *SlackAIClient
@@ -39,6 +41,43 @@ type SlackAdapter struct {
 	// actionableReactions is the set of emoji names forwarded to the agent.
 	// Built from config at initialization; empty map means no reactions are forwarded.
 	actionableReactions map[string]bool
+}
+
+// SetAuthorizer wires the authorizer used to gate every incoming slack
+// message. nil disables the check (dev mode); production wiring sets a real
+// Authorizer in main.
+func (a *SlackAdapter) SetAuthorizer(az authz.Authorizer) {
+	a.authz = az
+}
+
+// dispatch authorizes the message's principal and forwards it to msgHandler.
+// All slack-side message ingress points (events, slash commands, AI prompts,
+// reactions, file uploads, ...) must go through this so authz can never be
+// forgotten on a new path. On a deny we silently drop — slack messages don't
+// get an HTTP-style response.
+func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message) error {
+	if a.authz != nil && msg != nil && msg.User != nil {
+		allowed, err := a.authz.Allowed(ctx, authz.IdentityTypeSlack, msg.User.Id, authz.AdapterSlack)
+		if err != nil {
+			// Drop silently on transport error — same as the deny case
+			// below. Returning err propagates up to sendErrorMessage
+			// which posts the failure into the user's channel, leaking
+			// internal authz wiring details. Fail closed (don't dispatch)
+			// and log; oncall sees the warn, the user sees nothing.
+			slog.Warn("[Slack] authz check failed; dropping message",
+				"user_id", msg.User.Id, "err", err)
+			return nil
+		}
+		if !allowed {
+			slog.Info("[Slack] message denied by authz; dropping",
+				"user_id", msg.User.Id)
+			return nil
+		}
+	}
+	if a.msgHandler == nil {
+		return nil
+	}
+	return a.msgHandler(ctx, msg)
 }
 
 // New creates a new Slack adapter
@@ -262,7 +301,7 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 
 	// Call handler if registered
 	if a.msgHandler != nil {
-		if err := a.msgHandler(ctx, msg); err != nil {
+		if err := a.dispatch(ctx, msg); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling message: %v", err))
 			a.sendErrorMessage(ctx, ev.Channel, ev.ThreadTimeStamp, err)
 		}
@@ -380,7 +419,7 @@ func (a *SlackAdapter) routeButtonClickToAgent(ctx context.Context, callback *sl
 
 	slog.Info(fmt.Sprintf("[Slack] Routing button click to agent: action_id=%s, user=%s", action.ActionID, callback.User.ID))
 	if a.msgHandler != nil {
-		if err := a.msgHandler(ctx, msg); err != nil {
+		if err := a.dispatch(ctx, msg); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error routing button click: %v", err))
 		}
 	}
@@ -423,7 +462,7 @@ func (a *SlackAdapter) handleSlashCommand(ctx context.Context, cmd slack.SlashCo
 	}
 
 	if a.msgHandler != nil {
-		if err := a.msgHandler(ctx, msg); err != nil {
+		if err := a.dispatch(ctx, msg); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling slash command: %v", err))
 		}
 	}
@@ -493,7 +532,7 @@ func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEv
 
 	slog.Info(fmt.Sprintf("[Slack] Forwarding assistant_thread_started to agent: channel=%s thread=%s user=%s", channelID, threadTS, userID))
 	if a.msgHandler != nil {
-		if err := a.msgHandler(ctx, msg); err != nil {
+		if err := a.dispatch(ctx, msg); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error forwarding assistant_thread_started: %v", err))
 		}
 	}
@@ -551,7 +590,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 
 	// Call handler if registered
 	if a.msgHandler != nil {
-		if err := a.msgHandler(ctx, msg); err != nil {
+		if err := a.dispatch(ctx, msg); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling mention: %v", err))
 			a.sendErrorMessage(ctx, ev.Channel, threadID, err)
 			// Clear loading state on error
@@ -603,7 +642,7 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 	}
 
 	if a.msgHandler != nil {
-		if err := a.msgHandler(ctx, msg); err != nil {
+		if err := a.dispatch(ctx, msg); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling reaction: %v", err))
 			a.sendErrorMessage(ctx, ev.Item.Channel, threadID, err)
 		}

@@ -149,15 +149,10 @@ func audioConfigToProto(config *AudioConfig, conversationID string, userID strin
 // AudioStreamConfig → "[audio]" message → AudioChunk(done=true). The only
 // difference is all audio arrives in one shot rather than being streamed.
 func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	session, err := h.sessionManager.ValidateRequest(ctx, r)
-	if err != nil {
-		http.Error(w, "Authentication error", http.StatusInternalServerError)
-		return
-	}
+	// Authenticate the request (session) and authorize against this
+	// deployment's grants. authenticate writes the response on failure.
+	session := h.authenticate(w, r)
 	if session == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -214,7 +209,7 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 			slog.Error(fmt.Sprintf("[Web] Error sending upload audio config: %v", err))
 		}
 	}
-	messageID := h.handleAudioSegmentStart(ctx, conversationID, session, &config)
+	messageID := h.handleAudioSegmentStart(r.Context(), conversationID, session, &config)
 	if h.audioForwarder != nil {
 		// Send as a single chunk with done=true since all data is available at once
 		if err := h.audioForwarder.SendAudioChunk(conversationID, audioData, 1, true); err != nil {

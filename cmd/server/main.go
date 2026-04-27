@@ -13,11 +13,34 @@ import (
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/adapter/slack"
 	"github.com/astropods/messaging/internal/adapter/web"
+	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/grpc"
 	"github.com/astropods/messaging/internal/store"
 	"github.com/astropods/messaging/internal/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// buildAuthorizer wires the per-deployment Authorizer used by adapters to
+// gate incoming requests. Two states:
+//   - ASTRO_AUTHZ_TOKEN set → real authz. The token's iss claim carries
+//     astro-server's URL; no separate URL env var is needed.
+//   - Empty → dev mode: AllowAll() so local development doesn't need
+//     astro-server running.
+//
+// If the token is malformed (decode error, missing iss/sub), we fail
+// closed with DenyAll() rather than silently widening access.
+func buildAuthorizer(cfg config.AuthzConfig) authz.Authorizer {
+	if cfg.IdentityToken == "" {
+		slog.Warn("Authz disabled: ASTRO_AUTHZ_TOKEN not set (dev mode — all requests allowed)")
+		return authz.AllowAll()
+	}
+	a, err := authz.NewAuthorizer(authz.Config{IdentityToken: cfg.IdentityToken})
+	if err != nil {
+		slog.Error("Failed to initialize authorizer; failing closed", "err", err)
+		return authz.DenyAll()
+	}
+	return a
+}
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -76,8 +99,13 @@ func main() {
 		slog.Info("gRPC server initialized", "addr", cfg.GRPC.ListenAddr)
 	}
 
+	// Build the authorizer once per process and share it across adapters.
+	// Adapters check Allowed() at request ingress; the cache lives inside
+	// the Authorizer so all adapters share one cache for the deployment.
+	authorizer := buildAuthorizer(cfg.Authz)
+
 	// Initialize adapters
-	adapters := initializeAdapters(ctx, cfg, threadStore, agentConfigStore)
+	adapters := initializeAdapters(ctx, cfg, threadStore, agentConfigStore, authorizer)
 	if len(adapters) == 0 && !cfg.GRPC.Enabled {
 		slog.Error("No adapters enabled or configured and gRPC is disabled")
 		os.Exit(1)
@@ -177,7 +205,7 @@ func main() {
 }
 
 // initializeAdapters creates and initializes adapters based on configuration
-func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore) map[string]adapter.Adapter {
+func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer) map[string]adapter.Adapter {
 	adapters := make(map[string]adapter.Adapter)
 
 	// Initialize Slack adapter if enabled
@@ -187,6 +215,7 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 		if err := slackAdapter.Initialize(ctx, cfg.Slack.Config); err != nil {
 			slog.Error("Error initializing Slack adapter", "err", err)
 		} else {
+			slackAdapter.SetAuthorizer(authorizer)
 			adapters["slack"] = slackAdapter
 			slog.Info("Slack adapter initialized")
 		}
@@ -195,16 +224,27 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 	// Initialize Web adapter if enabled
 	if cfg.Web.Enabled {
 		slog.Info("Initializing Web adapter...")
-		webAdapter := web.New(
+		// In production astro-server runs the web adapter behind ALB OIDC,
+		// which injects the WorkOS user ID as x-amzn-oidc-identity. Read
+		// that header as the session userID; without it (local dev) the
+		// adapter falls back to NoopSessionManager via the option below.
+		webOpts := []web.WebAdapterOption{
 			web.WithListenAddr(cfg.Web.ListenAddr),
 			web.WithAllowedOrigins(cfg.Web.AllowedOrigins),
 			web.WithServePlayground(cfg.Web.ServePlayground),
-		)
+		}
+		if cfg.Authz.IdentityToken != "" {
+			webOpts = append(webOpts, web.WithSessionManager(
+				web.NewHeaderSessionManager("x-amzn-oidc-identity", "", ""),
+			))
+		}
+		webAdapter := web.New(webOpts...)
 		if err := webAdapter.Initialize(ctx, adapter.Config{}); err != nil {
 			slog.Error("Error initializing Web adapter", "err", err)
 		} else {
 			webAdapter.SetThreadStore(threadStore)
 			webAdapter.SetAgentConfigStore(agentConfigStore)
+			webAdapter.SetAuthorizer(authorizer)
 			adapters["web"] = webAdapter
 			slog.Info("Web adapter initialized")
 		}
