@@ -445,6 +445,40 @@ func TestHandleReactionAdded_EmptyMapDropsAll(t *testing.T) {
 	}
 }
 
+// errAuthorizer always returns a transport error. Mirrors a real-world
+// failure where the authz endpoint is unreachable or returns 5xx.
+type errAuthorizer struct {
+	calls int
+	err   error
+}
+
+func (e *errAuthorizer) Allowed(_ context.Context, _, _, _ string) (bool, error) {
+	e.calls++
+	return false, e.err
+}
+
+// dispatch must drop silently on authz transport error — same as the deny
+// case. Returning the error would propagate up to sendErrorMessage and
+// post the failure into the user's slack channel, leaking internal authz
+// wiring details. Pinned to prevent the propagation-by-accident regression.
+func TestDispatch_AuthzTransportError_DropsSilently(t *testing.T) {
+	a, handler := newTestAdapter()
+	az := &errAuthorizer{err: fmt.Errorf("authz endpoint unreachable")}
+	a.SetAuthorizer(az)
+
+	msg := &pb.Message{User: &pb.User{Id: "U123"}}
+
+	if err := a.dispatch(t.Context(), msg); err != nil {
+		t.Errorf("dispatch should drop silently on authz transport error; got err=%v", err)
+	}
+	if az.calls != 1 {
+		t.Errorf("expected exactly one Allowed() call, got %d", az.calls)
+	}
+	if handler.count() != 0 {
+		t.Errorf("msgHandler should not be invoked on authz transport error; got %d call(s)", handler.count())
+	}
+}
+
 func TestSendErrorMessage_SuppressesInfraError(t *testing.T) {
 	srv := newFakeSlackServer(t, "")
 	defer srv.Close()

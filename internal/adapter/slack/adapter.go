@@ -59,9 +59,14 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message) error {
 	if a.authz != nil && msg != nil && msg.User != nil {
 		allowed, err := a.authz.Allowed(ctx, authz.IdentityTypeSlack, msg.User.Id, authz.AdapterSlack)
 		if err != nil {
+			// Drop silently on transport error — same as the deny case
+			// below. Returning err propagates up to sendErrorMessage
+			// which posts the failure into the user's channel, leaking
+			// internal authz wiring details. Fail closed (don't dispatch)
+			// and log; oncall sees the warn, the user sees nothing.
 			slog.Warn("[Slack] authz check failed; dropping message",
 				"user_id", msg.User.Id, "err", err)
-			return err
+			return nil
 		}
 		if !allowed {
 			slog.Info("[Slack] message denied by authz; dropping",

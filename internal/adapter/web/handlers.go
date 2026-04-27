@@ -379,6 +379,13 @@ func (h *Handlers) HandleHealth(w http.ResponseWriter, r *http.Request) {
 
 // HandleAgentConfig handles GET /api/agent/config
 func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
+	// Authenticate the request (session) and authorize against this
+	// deployment's grants. The agent config exposes the system prompt and
+	// tool list — leaking it to a denied principal is a real disclosure.
+	if h.authenticate(w, r) == nil {
+		return
+	}
+
 	if h.agentConfigStore == nil {
 		http.Error(w, "Agent config not available", http.StatusNotFound)
 		return
