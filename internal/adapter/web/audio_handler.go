@@ -164,7 +164,7 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Cap request body at 25MB to prevent memory exhaustion from large uploads
 	r.Body = http.MaxBytesReader(w, r.Body, 25<<20)
-	if err := r.ParseMultipartForm(25 << 20); err != nil {
+	if err := r.ParseMultipartForm(25 << 20); err != nil { //nolint:gosec // G120: body is already capped via MaxBytesReader on the line above
 		http.Error(w, "Invalid multipart form", http.StatusBadRequest)
 		return
 	}
