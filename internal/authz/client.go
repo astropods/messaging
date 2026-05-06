@@ -47,7 +47,11 @@ func newAuthorizeClient(serverURL, token string, timeout time.Duration) *authori
 // authorize issues GET /api/v1/deployments/authorize and returns the boolean
 // result from the server. Empty identityType/identityID are valid (anonymous)
 // — the server's anyone short-circuit may still allow them.
-func (c *authorizeClient) authorize(ctx context.Context, identityType, identityID, adapter string) (bool, error) {
+//
+// identityScope is sent as identity_scope when non-empty; the server uses
+// it to disambiguate identity_id values that aren't globally unique
+// (slack user_id needs team_id). Empty scope is the unscoped behavior.
+func (c *authorizeClient) authorize(ctx context.Context, identityType, identityID, adapter, identityScope string) (bool, error) {
 	if c.serverURL == "" {
 		return false, errors.New("authz: server URL not configured")
 	}
@@ -65,6 +69,9 @@ func (c *authorizeClient) authorize(ctx context.Context, identityType, identityI
 	}
 	if identityID != "" {
 		q.Set("identity_id", identityID)
+	}
+	if identityScope != "" {
+		q.Set("identity_scope", identityScope)
 	}
 	q.Set("adapter", adapter)
 	u.RawQuery = q.Encode()

@@ -63,7 +63,8 @@ func (h *Handlers) authenticate(w http.ResponseWriter, r *http.Request) *Session
 	}
 
 	if h.authz != nil {
-		allowed, err := h.authz.Allowed(ctx, authz.IdentityTypeUser, session.UserID, authz.AdapterWeb)
+		// Web identity is a globally-unique WorkOS user_id, so no scope.
+		allowed, err := h.authz.Allowed(ctx, authz.IdentityTypeUser, session.UserID, authz.AdapterWeb, "")
 		if err != nil {
 			// Fail closed on authz transport errors — better to return a 503
 			// than to silently drop the check.
