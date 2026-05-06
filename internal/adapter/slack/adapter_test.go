@@ -75,7 +75,7 @@ func TestHandleMessage_DMProcessed(t *testing.T) {
 
 	beforeEvent := testutil.ToFloat64(metrics.SlackEvents.WithLabelValues("dm"))
 
-	a.handleMessage(t.Context(), ev)
+	a.handleMessage(t.Context(), ev, "")
 
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
@@ -100,7 +100,7 @@ func TestHandleMessage_DMThreadReplyProcessed(t *testing.T) {
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev)
+	a.handleMessage(t.Context(), ev, "")
 
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
@@ -121,7 +121,7 @@ func TestHandleMessage_ChannelTopLevelIgnored(t *testing.T) {
 		TimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev)
+	a.handleMessage(t.Context(), ev, "")
 
 	if handler.count() != 0 {
 		t.Errorf("expected top-level channel message to be ignored, got %d messages", handler.count())
@@ -139,7 +139,7 @@ func TestHandleMessage_ChannelThreadReplyProcessed(t *testing.T) {
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev)
+	a.handleMessage(t.Context(), ev, "")
 
 	if handler.count() != 1 {
 		t.Fatalf("expected thread reply in channel to be processed, got %d messages", handler.count())
@@ -167,7 +167,7 @@ func TestHandleMessage_BotMessageIgnored(t *testing.T) {
 
 	beforeDropped := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "bot_filtered"))
 
-	a.handleMessage(t.Context(), ev)
+	a.handleMessage(t.Context(), ev, "")
 
 	if handler.count() != 0 {
 		t.Errorf("expected bot message to be ignored, got %d messages", handler.count())
@@ -188,7 +188,7 @@ func TestHandleMessage_SubtypeIgnored(t *testing.T) {
 		TimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev)
+	a.handleMessage(t.Context(), ev, "")
 
 	if handler.count() != 0 {
 		t.Errorf("expected message_changed subtype to be ignored, got %d messages", handler.count())
@@ -207,7 +207,7 @@ func TestHandleMessage_ThreadBroadcastAllowed(t *testing.T) {
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev)
+	a.handleMessage(t.Context(), ev, "")
 
 	if handler.count() != 1 {
 		t.Fatalf("expected thread_broadcast to be processed, got %d messages", handler.count())
@@ -225,7 +225,7 @@ func TestHandleMessage_PlatformContext(t *testing.T) {
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev)
+	a.handleMessage(t.Context(), ev, "")
 
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
@@ -260,7 +260,7 @@ func TestHandleMessage_AllowedChannelIDs_DisallowedDoesNotInvokeHandler(t *testi
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev)
+	a.handleMessage(t.Context(), ev, "")
 
 	if handler.count() != 0 {
 		t.Errorf("disallowed event must not invoke msgHandler, got %d messages", handler.count())
@@ -282,7 +282,7 @@ func TestHandleMessage_AllowedChannelIDs_AllowedInvokesHandler(t *testing.T) {
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev)
+	a.handleMessage(t.Context(), ev, "")
 
 	if handler.count() != 1 {
 		t.Fatalf("allowed event must invoke msgHandler, got %d messages", handler.count())
@@ -303,7 +303,7 @@ func TestHandleMessage_AllowedUserIDs_DisallowedDoesNotInvokeHandler(t *testing.
 		TimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev)
+	a.handleMessage(t.Context(), ev, "")
 
 	if handler.count() != 0 {
 		t.Errorf("disallowed event must not invoke msgHandler, got %d messages", handler.count())
@@ -324,7 +324,7 @@ func TestHandleMessage_AllowedUserIDs_AllowedInvokesHandle(t *testing.T) {
 		TimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev)
+	a.handleMessage(t.Context(), ev, "")
 
 	if handler.count() != 1 {
 		t.Fatalf("allowed event must invoke msgHandler, got %d messages", handler.count())
@@ -346,7 +346,7 @@ func TestHandleAppMention_AllowedChannelIDs_DisallowedDoesNotInvokeHandlerAndPos
 		ThreadTimeStamp: "",
 	}
 
-	a.handleAppMention(t.Context(), ev)
+	a.handleAppMention(t.Context(), ev, "")
 
 	if handler.count() != 0 {
 		t.Errorf("disallowed app_mention must not invoke msgHandler, got %d messages", handler.count())
@@ -374,7 +374,7 @@ func TestHandleAppMention_AllowedChannelIDs_AllowedInvokesHandlerAndDoesNotPostN
 		ThreadTimeStamp: "",
 	}
 
-	a.handleAppMention(t.Context(), ev)
+	a.handleAppMention(t.Context(), ev, "")
 
 	if handler.count() != 1 {
 		t.Fatalf("allowed app_mention must invoke msgHandler, got %d messages", handler.count())
@@ -396,7 +396,7 @@ func TestHandleReactionAdded_ActionableReactionForwarded(t *testing.T) {
 		},
 	}
 
-	a.handleReactionAdded(t.Context(), ev)
+	a.handleReactionAdded(t.Context(), ev, "")
 
 	if handler.count() != 1 {
 		t.Fatalf("expected actionable reaction to be forwarded, got %d messages", handler.count())
@@ -419,7 +419,7 @@ func TestHandleReactionAdded_NonActionableReactionDropped(t *testing.T) {
 		},
 	}
 
-	a.handleReactionAdded(t.Context(), ev)
+	a.handleReactionAdded(t.Context(), ev, "")
 
 	if handler.count() != 0 {
 		t.Errorf("expected non-actionable reaction to be dropped, got %d messages", handler.count())
@@ -438,7 +438,7 @@ func TestHandleReactionAdded_EmptyMapDropsAll(t *testing.T) {
 		},
 	}
 
-	a.handleReactionAdded(t.Context(), ev)
+	a.handleReactionAdded(t.Context(), ev, "")
 
 	if handler.count() != 0 {
 		t.Errorf("expected all reactions dropped when no actionable reactions configured, got %d", handler.count())
@@ -452,7 +452,7 @@ type errAuthorizer struct {
 	err   error
 }
 
-func (e *errAuthorizer) Allowed(_ context.Context, _, _, _ string) (bool, error) {
+func (e *errAuthorizer) Allowed(_ context.Context, _, _, _, _ string) (bool, error) {
 	e.calls++
 	return false, e.err
 }
@@ -468,7 +468,7 @@ func TestDispatch_AuthzTransportError_DropsSilently(t *testing.T) {
 
 	msg := &pb.Message{User: &pb.User{Id: "U123"}}
 
-	if err := a.dispatch(t.Context(), msg); err != nil {
+	if err := a.dispatch(t.Context(), msg, ""); err != nil {
 		t.Errorf("dispatch should drop silently on authz transport error; got err=%v", err)
 	}
 	if az.calls != 1 {

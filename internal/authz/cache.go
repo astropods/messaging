@@ -6,12 +6,15 @@ import (
 )
 
 // cacheKey identifies one cached authorize result. The deployment_id is
-// implicit (the cache lives in a single Authorizer bound to one deployment),
-// so we only key on the request triple.
+// implicit (the cache lives in a single Authorizer bound to one deployment).
+// identityScope disambiguates identity_id values that aren't globally
+// unique — e.g. a slack user_id is only unique within its team_id, so two
+// teams with overlapping user_ids must NOT share a cache slot.
 type cacheKey struct {
-	identityType string
-	identityID   string
-	adapter      string
+	identityType  string
+	identityID    string
+	adapter       string
+	identityScope string
 }
 
 type cacheEntry struct {

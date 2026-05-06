@@ -50,18 +50,25 @@ func TestCache_CachesDeny(t *testing.T) {
 	}
 }
 
-// Different request triples are independent cache entries — a hit on one
-// must not leak to another.
+// Different request tuples are independent cache entries — a hit on one
+// must not leak to another. identityScope is part of the key so two slack
+// workspaces with overlapping user_ids never collide.
 func TestCache_KeysAreTupleScoped(t *testing.T) {
 	c := newResultCache(60 * time.Second)
-	c.put(cacheKey{"user", "alice", "web"}, true)
-	if _, ok := c.get(cacheKey{"user", "alice", "slack"}); ok {
+	c.put(cacheKey{"user", "alice", "web", ""}, true)
+	if _, ok := c.get(cacheKey{"user", "alice", "slack", ""}); ok {
 		t.Error("different adapter must not hit")
 	}
-	if _, ok := c.get(cacheKey{"user", "bob", "web"}); ok {
+	if _, ok := c.get(cacheKey{"user", "bob", "web", ""}); ok {
 		t.Error("different identity_id must not hit")
 	}
-	if _, ok := c.get(cacheKey{"slack", "alice", "web"}); ok {
+	if _, ok := c.get(cacheKey{"slack", "alice", "web", ""}); ok {
 		t.Error("different identity_type must not hit")
+	}
+	// Same identity_id in two different slack workspaces is a collision
+	// risk — slack user_ids are only unique within one team.
+	c.put(cacheKey{"slack", "U01", "slack", "T1"}, true)
+	if _, ok := c.get(cacheKey{"slack", "U01", "slack", "T2"}); ok {
+		t.Error("different identity_scope must not hit (cross-workspace leak)")
 	}
 }

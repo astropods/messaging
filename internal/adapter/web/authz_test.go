@@ -29,7 +29,7 @@ import (
 // these tests pin down.
 type denyAuthorizer struct{ calls int }
 
-func (d *denyAuthorizer) Allowed(_ context.Context, _, _, _ string) (bool, error) {
+func (d *denyAuthorizer) Allowed(_ context.Context, _, _, _, _ string) (bool, error) {
 	d.calls++
 	return false, nil
 }

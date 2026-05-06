@@ -33,7 +33,15 @@ type Authorizer interface {
 	// Allowed returns true if the principal may use the deployment via the
 	// named adapter. identityType / identityID may be empty for anonymous
 	// requests; the server's anyone short-circuit may still allow them.
-	Allowed(ctx context.Context, identityType, identityID, adapter string) (bool, error)
+	//
+	// identityScope is an adapter-specific disambiguator for identityID:
+	//   - slack → team_id (the workspace), since slack user_ids are only
+	//     unique within one team.
+	//   - web → empty; WorkOS user_id is globally unique.
+	// The server uses scope to resolve slack identities to mapped WorkOS
+	// users via slack_identity_mappings; an empty scope is the unscoped
+	// behavior (today's owning-account candidate fallback).
+	Allowed(ctx context.Context, identityType, identityID, adapter, identityScope string) (bool, error)
 }
 
 // Config configures a real Authorizer.
@@ -109,19 +117,24 @@ func NewAuthorizer(cfg Config) (Authorizer, error) {
 }
 
 // Allowed implements Authorizer.
-func (a *realAuthorizer) Allowed(ctx context.Context, identityType, identityID, adapter string) (bool, error) {
+func (a *realAuthorizer) Allowed(ctx context.Context, identityType, identityID, adapter, identityScope string) (bool, error) {
 	// Fast path: adapter is publicly granted via the token's anyone_adapters
 	// claim. No server round-trip, no cache lookup, no identity required.
 	if slices.Contains(a.anyoneAdapters, adapter) {
 		return true, nil
 	}
 
-	key := cacheKey{identityType: identityType, identityID: identityID, adapter: adapter}
+	key := cacheKey{
+		identityType:  identityType,
+		identityID:    identityID,
+		adapter:       adapter,
+		identityScope: identityScope,
+	}
 	if allowed, ok := a.cache.get(key); ok {
 		return allowed, nil
 	}
 
-	allowed, err := a.client.authorize(ctx, identityType, identityID, adapter)
+	allowed, err := a.client.authorize(ctx, identityType, identityID, adapter, identityScope)
 	if err != nil {
 		// Fail closed on transport/server errors; do not cache so we retry on
 		// the next request rather than denying for the full TTL.
@@ -149,7 +162,7 @@ func AllowAll() Authorizer { return allowAll{} }
 
 type allowAll struct{}
 
-func (allowAll) Allowed(_ context.Context, _ , _ , _ string) (bool, error) { return true, nil }
+func (allowAll) Allowed(_ context.Context, _, _, _, _ string) (bool, error) { return true, nil }
 
 // DenyAll returns an Authorizer that denies every request. Used as the
 // safe failure mode in production when configuration is missing — fail
@@ -158,4 +171,4 @@ func DenyAll() Authorizer { return denyAll{} }
 
 type denyAll struct{}
 
-func (denyAll) Allowed(_ context.Context, _ , _ , _ string) (bool, error) { return false, nil }
+func (denyAll) Allowed(_ context.Context, _, _, _, _ string) (bool, error) { return false, nil }

@@ -55,9 +55,16 @@ func (a *SlackAdapter) SetAuthorizer(az authz.Authorizer) {
 // reactions, file uploads, ...) must go through this so authz can never be
 // forgotten on a new path. On a deny we silently drop — slack messages don't
 // get an HTTP-style response.
-func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message) error {
+//
+// teamID is the slack workspace identifier. The server pairs it with
+// msg.User.Id to look up the linked WorkOS user (slack_identity_mappings),
+// which is the only way per-user grants on slack can match. Pass the
+// raw value from the source event (MessageEvent.Team, SlashCommand.TeamID,
+// etc.). Empty string is acceptable for legacy callers — the server
+// falls back to the unscoped owning-account candidate.
+func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID string) error {
 	if a.authz != nil && msg != nil && msg.User != nil {
-		allowed, err := a.authz.Allowed(ctx, authz.IdentityTypeSlack, msg.User.Id, authz.AdapterSlack)
+		allowed, err := a.authz.Allowed(ctx, authz.IdentityTypeSlack, msg.User.Id, authz.AdapterSlack, teamID)
 		if err != nil {
 			// Drop silently on transport error — same as the deny case
 			// below. Returning err propagates up to sendErrorMessage
@@ -181,7 +188,7 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 			return
 		}
 
-		a.handleInnerEvent(ctx, eventsAPIEvent.InnerEvent)
+		a.handleInnerEvent(ctx, eventsAPIEvent.InnerEvent, eventsAPIEvent.TeamID)
 
 	case socketmode.EventTypeInteractive:
 		// Acknowledge interactive events (buttons, modals, etc.)
@@ -216,21 +223,25 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 	}
 }
 
-// handleInnerEvent processes the actual event data
-func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackevents.EventsAPIInnerEvent) {
+// handleInnerEvent processes the actual event data. teamID comes from the
+// outer EventsAPIEvent envelope and is threaded down to every dispatch
+// call so the server can resolve slack identities to WorkOS users —
+// individual event payloads (e.g. ReactionAddedEvent) don't always carry
+// the workspace id, so we use the envelope's value uniformly.
+func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackevents.EventsAPIInnerEvent, teamID string) {
 	switch ev := innerEvent.Data.(type) {
 	case *slackevents.MessageEvent:
-		a.handleMessage(ctx, ev)
+		a.handleMessage(ctx, ev, teamID)
 
 	case *slackevents.AppMentionEvent:
-		a.handleAppMention(ctx, ev)
+		a.handleAppMention(ctx, ev, teamID)
 
 	case *slackevents.ReactionAddedEvent:
-		a.handleReactionAdded(ctx, ev)
+		a.handleReactionAdded(ctx, ev, teamID)
 
 	default:
 		if innerEvent.Type == "assistant_thread_started" {
-			a.handleAssistantThreadStarted(ctx, innerEvent)
+			a.handleAssistantThreadStarted(ctx, innerEvent, teamID)
 		} else {
       slog.Info(fmt.Sprintf("[Slack] Unhandled inner event type: %s", innerEvent.Type))
 		}
@@ -238,7 +249,7 @@ func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackeve
 }
 
 // handleMessage processes message events
-func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.MessageEvent) {
+func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.MessageEvent, teamID string) {
 	// Filter out bot messages
 	if ev.BotID != "" {
 		metrics.MessagesDropped.WithLabelValues("slack", "bot_filtered").Inc()
@@ -301,7 +312,7 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 
 	// Call handler if registered
 	if a.msgHandler != nil {
-		if err := a.dispatch(ctx, msg); err != nil {
+		if err := a.dispatch(ctx, msg, teamID); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling message: %v", err))
 			a.sendErrorMessage(ctx, ev.Channel, ev.ThreadTimeStamp, err)
 		}
@@ -419,7 +430,7 @@ func (a *SlackAdapter) routeButtonClickToAgent(ctx context.Context, callback *sl
 
 	slog.Info(fmt.Sprintf("[Slack] Routing button click to agent: action_id=%s, user=%s", action.ActionID, callback.User.ID))
 	if a.msgHandler != nil {
-		if err := a.dispatch(ctx, msg); err != nil {
+		if err := a.dispatch(ctx, msg, callback.Team.ID); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error routing button click: %v", err))
 		}
 	}
@@ -462,7 +473,7 @@ func (a *SlackAdapter) handleSlashCommand(ctx context.Context, cmd slack.SlashCo
 	}
 
 	if a.msgHandler != nil {
-		if err := a.dispatch(ctx, msg); err != nil {
+		if err := a.dispatch(ctx, msg, cmd.TeamID); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling slash command: %v", err))
 		}
 	}
@@ -476,7 +487,7 @@ func (a *SlackAdapter) handleSlashCommand(ctx context.Context, cmd slack.SlashCo
 // JSON is extracted from the InnerEvent.Data field via json.RawMessage. Upgrading
 // to slack-go ≥0.13 will allow using the typed slackevents.AssistantThreadStartedEvent
 // instead and this fallback can be removed.
-func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEvent slackevents.EventsAPIInnerEvent) {
+func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEvent slackevents.EventsAPIInnerEvent, teamID string) {
 	type payload struct {
 		AssistantThread struct {
 			UserID    string `json:"user_id"`
@@ -532,14 +543,14 @@ func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEv
 
 	slog.Info(fmt.Sprintf("[Slack] Forwarding assistant_thread_started to agent: channel=%s thread=%s user=%s", channelID, threadTS, userID))
 	if a.msgHandler != nil {
-		if err := a.dispatch(ctx, msg); err != nil {
+		if err := a.dispatch(ctx, msg, teamID); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error forwarding assistant_thread_started: %v", err))
 		}
 	}
 }
 
 // handleAppMention processes app mention events
-func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.AppMentionEvent) {
+func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.AppMentionEvent, teamID string) {
 	slog.Info(fmt.Sprintf("[Slack] App mentioned: channel=%s, user=%s, text=%s", ev.Channel, ev.User, ev.Text))
 
 	// Allowlist: if configured, only allow mentions from allowed channels or users
@@ -590,7 +601,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 
 	// Call handler if registered
 	if a.msgHandler != nil {
-		if err := a.dispatch(ctx, msg); err != nil {
+		if err := a.dispatch(ctx, msg, teamID); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling mention: %v", err))
 			a.sendErrorMessage(ctx, ev.Channel, threadID, err)
 			// Clear loading state on error
@@ -602,7 +613,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 // handleReactionAdded processes reaction_added events. Only reactions in the
 // configured actionableReactions set are forwarded to the agent. If the set
 // is empty (no reactions configured), all reactions are dropped.
-func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.ReactionAddedEvent) {
+func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.ReactionAddedEvent, teamID string) {
 	slog.Info(fmt.Sprintf("[Slack] Reaction added: emoji=%s, user=%s, channel=%s, item_ts=%s",
 		ev.Reaction, ev.User, ev.Item.Channel, ev.Item.Timestamp))
 
@@ -642,7 +653,7 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 	}
 
 	if a.msgHandler != nil {
-		if err := a.dispatch(ctx, msg); err != nil {
+		if err := a.dispatch(ctx, msg, teamID); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling reaction: %v", err))
 			a.sendErrorMessage(ctx, ev.Item.Channel, threadID, err)
 		}

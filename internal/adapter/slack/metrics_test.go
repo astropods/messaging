@@ -44,7 +44,7 @@ func TestMetrics_BotFiltered(t *testing.T) {
 		BotID:     "B999",
 		Text:      "bot says hi",
 		TimeStamp: "1111111111.000001",
-	})
+	}, "")
 
 	if got := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "bot_filtered")) - before; got != 1 {
 		t.Errorf("MessagesDropped{bot_filtered}: expected +1, got +%v", got)
@@ -69,7 +69,7 @@ func TestMetrics_AllowlistDropped_Message(t *testing.T) {
 		Text:            "not allowed",
 		TimeStamp:       "2222222222.000001",
 		ThreadTimeStamp: "2222222222.000000",
-	})
+	}, "")
 
 	if got := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "allowlist")) - before; got != 1 {
 		t.Errorf("MessagesDropped{allowlist} (message): expected +1, got +%v", got)
@@ -93,7 +93,7 @@ func TestMetrics_AllowlistDropped_Mention(t *testing.T) {
 		User:      "U123",
 		Text:      "<@BOT> hello",
 		TimeStamp: "3333333333.000001",
-	})
+	}, "")
 
 	if got := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "allowlist")) - before; got != 1 {
 		t.Errorf("MessagesDropped{allowlist} (mention): expected +1, got +%v", got)
@@ -112,7 +112,7 @@ func TestMetrics_SlackEvent_DM(t *testing.T) {
 		User:      "U123",
 		Text:      "direct message",
 		TimeStamp: "4444444444.000001",
-	})
+	}, "")
 
 	if got := testutil.ToFloat64(metrics.SlackEvents.WithLabelValues("dm")) - before; got != 1 {
 		t.Errorf("SlackEvents{dm}: expected +1, got +%v", got)
@@ -132,7 +132,7 @@ func TestMetrics_SlackEvent_ThreadReply(t *testing.T) {
 		Text:            "thread reply",
 		TimeStamp:       "5555555555.000001",
 		ThreadTimeStamp: "5555555555.000000",
-	})
+	}, "")
 
 	if got := testutil.ToFloat64(metrics.SlackEvents.WithLabelValues("thread_reply")) - before; got != 1 {
 		t.Errorf("SlackEvents{thread_reply}: expected +1, got +%v", got)
@@ -158,7 +158,7 @@ func TestMetrics_SlackEvent_Mention(t *testing.T) {
 		User:      "U123",
 		Text:      "<@BOT> hello",
 		TimeStamp: "6666666666.000001",
-	})
+	}, "")
 
 	if got := testutil.ToFloat64(metrics.SlackEvents.WithLabelValues("mention")) - before; got != 1 {
 		t.Errorf("SlackEvents{mention}: expected +1, got +%v", got)
@@ -185,7 +185,7 @@ func TestMetrics_SlackEvent_Reaction(t *testing.T) {
 			Channel:   "C123456",
 			Timestamp: itemTS,
 		},
-	})
+	}, "")
 
 	if got := testutil.ToFloat64(metrics.SlackEvents.WithLabelValues("reaction")) - before; got != 1 {
 		t.Errorf("SlackEvents{reaction}: expected +1, got +%v", got)

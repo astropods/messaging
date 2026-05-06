@@ -68,7 +68,7 @@ func TestAllowed_AnyoneFastPath_NoServerCall(t *testing.T) {
 		return nil, errors.New("should not call")
 	})
 
-	allowed, err := a.Allowed(context.Background(), "", "", "web")
+	allowed, err := a.Allowed(context.Background(), "", "", "web", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestAllowed_ServerCall_AndCache(t *testing.T) {
 	})
 
 	for i := 0; i < 3; i++ {
-		allowed, err := a.Allowed(context.Background(), "user", "alice", "web")
+		allowed, err := a.Allowed(context.Background(), "user", "alice", "web", "")
 		if err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
@@ -120,7 +120,7 @@ func TestAllowed_DeniedIsCached(t *testing.T) {
 	})
 
 	for i := 0; i < 3; i++ {
-		allowed, err := a.Allowed(context.Background(), "user", "bob", "web")
+		allowed, err := a.Allowed(context.Background(), "user", "bob", "web", "")
 		if err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
@@ -141,7 +141,7 @@ func TestAllowed_TransportError_FailClosedNotCached(t *testing.T) {
 	})
 
 	for i := 0; i < 2; i++ {
-		allowed, err := a.Allowed(context.Background(), "user", "alice", "web")
+		allowed, err := a.Allowed(context.Background(), "user", "alice", "web", "")
 		if err == nil {
 			t.Errorf("call %d: expected error", i)
 		}
@@ -164,7 +164,7 @@ func TestAllowed_ServerError_FailClosed(t *testing.T) {
 		}, nil
 	})
 
-	allowed, err := a.Allowed(context.Background(), "user", "alice", "web")
+	allowed, err := a.Allowed(context.Background(), "user", "alice", "web", "")
 	if err == nil {
 		t.Error("expected error on 500")
 	}
@@ -173,12 +173,41 @@ func TestAllowed_ServerError_FailClosed(t *testing.T) {
 	}
 }
 
+// identity_scope is sent as a query param when non-empty and is part of
+// the cache key — same identityID in two scopes must miss separately.
+func TestAllowed_IdentityScopeSentAndScopedInCache(t *testing.T) {
+	var seenScope string
+	a, stub := newTestAuthorizer(t, nil, func(r *http.Request) (*http.Response, error) {
+		seenScope = r.URL.Query().Get("identity_scope")
+		return okResp(true), nil
+	})
+
+	if _, err := a.Allowed(context.Background(), "slack", "U01", "slack", "T1"); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if seenScope != "T1" {
+		t.Errorf("identity_scope: got %q, want T1", seenScope)
+	}
+
+	// Same identity, different scope → cache must miss; the server gets a
+	// second call with the new scope.
+	if _, err := a.Allowed(context.Background(), "slack", "U01", "slack", "T2"); err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if seenScope != "T2" {
+		t.Errorf("identity_scope on second call: got %q, want T2", seenScope)
+	}
+	if got := stub.callCount.Load(); got != 2 {
+		t.Errorf("expected 2 HTTP calls (different scopes mustn't share a cache slot), got %d", got)
+	}
+}
+
 // AllowAll / DenyAll do what they say.
 func TestAllowAll_DenyAll(t *testing.T) {
-	if ok, _ := AllowAll().Allowed(context.Background(), "", "", "web"); !ok {
+	if ok, _ := AllowAll().Allowed(context.Background(), "", "", "web", ""); !ok {
 		t.Error("AllowAll should allow")
 	}
-	if ok, _ := DenyAll().Allowed(context.Background(), "", "", "web"); ok {
+	if ok, _ := DenyAll().Allowed(context.Background(), "", "", "web", ""); ok {
 		t.Error("DenyAll should deny")
 	}
 }
@@ -204,7 +233,7 @@ func TestNewAuthorizer_HappyPath(t *testing.T) {
 		t.Fatalf("NewAuthorizer: %v", err)
 	}
 	// anyone_adapters=["web"] → web allowed without server call
-	if ok, err := a.Allowed(context.Background(), "", "", "web"); !ok || err != nil {
+	if ok, err := a.Allowed(context.Background(), "", "", "web", ""); !ok || err != nil {
 		t.Errorf("expected allow on web; got ok=%v err=%v", ok, err)
 	}
 }
