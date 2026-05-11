@@ -50,11 +50,20 @@ func (a *SlackAdapter) SetAuthorizer(az authz.Authorizer) {
 	a.authz = az
 }
 
+// errAuthzDenied / errAuthzUnavailable are sentinel errors returned by
+// dispatch so call sites can surface a sanitized user-facing reply via
+// sendErrorMessage. The raw authz error is never posted to slack — it
+// would leak internal wiring details.
+var (
+	errAuthzDenied      = errors.New("slack: message denied by authz")
+	errAuthzUnavailable = errors.New("slack: authz check unavailable")
+)
+
 // dispatch authorizes the message's principal and forwards it to msgHandler.
 // All slack-side message ingress points (events, slash commands, AI prompts,
 // reactions, file uploads, ...) must go through this so authz can never be
-// forgotten on a new path. On a deny we silently drop — slack messages don't
-// get an HTTP-style response.
+// forgotten on a new path. On deny or authz error, returns a sentinel so the
+// caller can post a sanitized reply.
 //
 // teamID is the slack workspace identifier. The server pairs it with
 // msg.User.Id to look up the linked WorkOS user (slack_identity_mappings),
@@ -66,19 +75,14 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 	if a.authz != nil && msg != nil && msg.User != nil {
 		allowed, err := a.authz.Allowed(ctx, authz.IdentityTypeSlack, msg.User.Id, authz.AdapterSlack, teamID)
 		if err != nil {
-			// Drop silently on transport error — same as the deny case
-			// below. Returning err propagates up to sendErrorMessage
-			// which posts the failure into the user's channel, leaking
-			// internal authz wiring details. Fail closed (don't dispatch)
-			// and log; oncall sees the warn, the user sees nothing.
-			slog.Warn("[Slack] authz check failed; dropping message",
+			slog.Warn("[Slack] authz check failed",
 				"user_id", msg.User.Id, "err", err)
-			return nil
+			return errAuthzUnavailable
 		}
 		if !allowed {
-			slog.Info("[Slack] message denied by authz; dropping",
+			slog.Info("[Slack] message denied by authz",
 				"user_id", msg.User.Id)
-			return nil
+			return errAuthzDenied
 		}
 	}
 	if a.msgHandler == nil {
@@ -432,6 +436,9 @@ func (a *SlackAdapter) routeButtonClickToAgent(ctx context.Context, callback *sl
 	if a.msgHandler != nil {
 		if err := a.dispatch(ctx, msg, callback.Team.ID); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error routing button click: %v", err))
+			if errors.Is(err, errAuthzDenied) || errors.Is(err, errAuthzUnavailable) {
+				a.sendErrorMessage(ctx, channelID, threadTS, err)
+			}
 		}
 	}
 }
@@ -475,6 +482,9 @@ func (a *SlackAdapter) handleSlashCommand(ctx context.Context, cmd slack.SlashCo
 	if a.msgHandler != nil {
 		if err := a.dispatch(ctx, msg, cmd.TeamID); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling slash command: %v", err))
+			if errors.Is(err, errAuthzDenied) || errors.Is(err, errAuthzUnavailable) {
+				a.sendErrorMessage(ctx, cmd.ChannelID, "", err)
+			}
 		}
 	}
 }
@@ -545,6 +555,9 @@ func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEv
 	if a.msgHandler != nil {
 		if err := a.dispatch(ctx, msg, teamID); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error forwarding assistant_thread_started: %v", err))
+			if errors.Is(err, errAuthzDenied) || errors.Is(err, errAuthzUnavailable) {
+				a.sendErrorMessage(ctx, channelID, threadTS, err)
+			}
 		}
 	}
 }
@@ -682,13 +695,23 @@ func (a *SlackAdapter) fetchMessageText(ctx context.Context, channelID, timestam
 
 // sendErrorMessage posts user-facing errors to Slack. Infrastructure errors
 // (e.g. agent not connected) are kept in logs only to avoid channel spam.
+// Authz sentinels (errAuthzDenied, errAuthzUnavailable) are translated into
+// fixed user-facing text so the raw error never reaches the channel.
 func (a *SlackAdapter) sendErrorMessage(ctx context.Context, channelID, threadTS string, err error) {
 	if errors.Is(err, adapter.ErrNoAgentStream) {
 		slog.Info(fmt.Sprintf("[Slack] Suppressed infrastructure error (not posting to channel): %v", err))
 		return
 	}
 
-	content := fmt.Sprintf(":x: Error: %s", err.Error())
+	var content string
+	switch {
+	case errors.Is(err, errAuthzDenied):
+		content = ":lock: You're not authorized to use this app. Contact your workspace admin if you think this is a mistake."
+	case errors.Is(err, errAuthzUnavailable):
+		content = ":hourglass_flowing_sand: Couldn't verify your access right now. Please try again in a moment."
+	default:
+		content = fmt.Sprintf(":x: Error: %s", err.Error())
+	}
 	if a.config.DevMode {
 		content += "\n\n:test_tube: _Sent from dev environment_"
 	}

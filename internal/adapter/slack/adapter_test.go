@@ -3,9 +3,11 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -457,25 +459,93 @@ func (e *errAuthorizer) Allowed(_ context.Context, _, _, _, _ string) (bool, err
 	return false, e.err
 }
 
-// dispatch must drop silently on authz transport error — same as the deny
-// case. Returning the error would propagate up to sendErrorMessage and
-// post the failure into the user's slack channel, leaking internal authz
-// wiring details. Pinned to prevent the propagation-by-accident regression.
-func TestDispatch_AuthzTransportError_DropsSilently(t *testing.T) {
+// dispatch must return errAuthzUnavailable on authz transport error. The
+// sentinel lets callers post a sanitized user-facing reply via
+// sendErrorMessage; the raw authz error is never propagated to slack.
+func TestDispatch_AuthzTransportError_ReturnsUnavailableSentinel(t *testing.T) {
 	a, handler := newTestAdapter()
 	az := &errAuthorizer{err: fmt.Errorf("authz endpoint unreachable")}
 	a.SetAuthorizer(az)
 
 	msg := &pb.Message{User: &pb.User{Id: "U123"}}
 
-	if err := a.dispatch(t.Context(), msg, ""); err != nil {
-		t.Errorf("dispatch should drop silently on authz transport error; got err=%v", err)
+	err := a.dispatch(t.Context(), msg, "")
+	if !errors.Is(err, errAuthzUnavailable) {
+		t.Errorf("expected errAuthzUnavailable, got %v", err)
 	}
 	if az.calls != 1 {
 		t.Errorf("expected exactly one Allowed() call, got %d", az.calls)
 	}
 	if handler.count() != 0 {
 		t.Errorf("msgHandler should not be invoked on authz transport error; got %d call(s)", handler.count())
+	}
+}
+
+// denyAuthorizer always returns allowed=false with no error.
+type denyAuthorizer struct{ calls int }
+
+func (d *denyAuthorizer) Allowed(_ context.Context, _, _, _, _ string) (bool, error) {
+	d.calls++
+	return false, nil
+}
+
+func TestDispatch_AuthzDenied_ReturnsDeniedSentinel(t *testing.T) {
+	a, handler := newTestAdapter()
+	az := &denyAuthorizer{}
+	a.SetAuthorizer(az)
+
+	msg := &pb.Message{User: &pb.User{Id: "U123"}}
+
+	err := a.dispatch(t.Context(), msg, "")
+	if !errors.Is(err, errAuthzDenied) {
+		t.Errorf("expected errAuthzDenied, got %v", err)
+	}
+	if handler.count() != 0 {
+		t.Errorf("msgHandler should not be invoked on deny; got %d call(s)", handler.count())
+	}
+}
+
+func TestSendErrorMessage_AuthzDenied_PostsSanitized(t *testing.T) {
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a := &SlackAdapter{
+		client:         slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/")),
+		contentBuffers: make(map[string]string),
+	}
+
+	a.sendErrorMessage(t.Context(), "C123", "1234.0001", errAuthzDenied)
+
+	if srv.postCount != 1 {
+		t.Fatalf("expected exactly one post, got %d", srv.postCount)
+	}
+	text := srv.postedTexts[0]
+	if !strings.Contains(text, "not authorized") {
+		t.Errorf("expected sanitized denied text, got %q", text)
+	}
+	if strings.Contains(text, "authz") {
+		t.Errorf("posted text leaks internal term 'authz': %q", text)
+	}
+}
+
+func TestSendErrorMessage_AuthzUnavailable_PostsSanitized(t *testing.T) {
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a := &SlackAdapter{
+		client:         slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/")),
+		contentBuffers: make(map[string]string),
+	}
+
+	a.sendErrorMessage(t.Context(), "C123", "1234.0001", errAuthzUnavailable)
+
+	if srv.postCount != 1 {
+		t.Fatalf("expected exactly one post, got %d", srv.postCount)
+	}
+	text := srv.postedTexts[0]
+	if !strings.Contains(text, "try again") {
+		t.Errorf("expected sanitized unavailable text, got %q", text)
+	}
+	if strings.Contains(text, "authz") {
+		t.Errorf("posted text leaks internal term 'authz': %q", text)
 	}
 }
 
@@ -639,7 +709,8 @@ func TestInitialize_AutoThreadConfig(t *testing.T) {
 // needed by tests. It records calls to chat.postMessage.
 type fakeSlackServer struct {
 	*httptest.Server
-	postCount int
+	postCount   int
+	postedTexts []string
 }
 
 func newFakeSlackServer(t *testing.T, replyText string) *fakeSlackServer {
@@ -661,6 +732,7 @@ func newFakeSlackServer(t *testing.T, replyText string) *fakeSlackServer {
 
 	mux.HandleFunc("/chat.postMessage", func(w http.ResponseWriter, r *http.Request) {
 		fs.postCount++
+		fs.postedTexts = append(fs.postedTexts, r.FormValue("text"))
 		resp := map[string]interface{}{
 			"ok":      true,
 			"channel": r.FormValue("channel"),
