@@ -137,8 +137,9 @@ func Load() (*Config, error) {
 	}
 
 	cfg.Slack.AdapterConfig = SlackAdapterConfig{
-		SocketMode: boolPtr(true),
-		AutoThread: boolPtr(true),
+		SocketMode:      boolPtr(true),
+		AutoThread:      boolPtr(true),
+		ChannelMessages: true,
 	}
 	if raw := os.Getenv("SLACK_CONFIG"); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &cfg.Slack.AdapterConfig); err != nil {
