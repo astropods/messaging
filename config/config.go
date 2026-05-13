@@ -82,6 +82,7 @@ type SlackAdapterConfig struct {
 	AutoThread          *bool    `json:"auto_thread,omitempty"`
 	AllowedChannelIDs   []string `json:"allowed_channel_ids,omitempty"`
 	AllowedUserIDs      []string `json:"allowed_user_ids,omitempty"`
+	ChannelMessages     bool     `json:"channel_messages,omitempty"`
 }
 
 // SlackConfig holds Slack-specific configuration
@@ -181,6 +182,7 @@ func Load() (*Config, error) {
 		ActionableReactions: cfg.Slack.AdapterConfig.ActionableReactions,
 		AllowedChannelIDs:   cfg.Slack.AdapterConfig.AllowedChannelIDs,
 		AllowedUserIDs:      cfg.Slack.AdapterConfig.AllowedUserIDs,
+		ChannelMessages:     cfg.Slack.AdapterConfig.ChannelMessages,
 		RateLimit: adapter.RateLimitConfig{
 			RequestsPerSecond: getEnvFloat("SLACK_RATE_LIMIT_RPS", 3.0),
 			BurstSize:         getEnvInt("SLACK_RATE_LIMIT_BURST", 10),

@@ -41,6 +41,11 @@ type SlackAdapter struct {
 	// actionableReactions is the set of emoji names forwarded to the agent.
 	// Built from config at initialization; empty map means no reactions are forwarded.
 	actionableReactions map[string]bool
+
+	// botUserID is the Slack user ID of this bot, fetched at initialization.
+	// Used to deduplicate @mention messages when ChannelMessages mode is enabled:
+	// a message containing <@botUserID> is already handled by handleAppMention.
+	botUserID string
 }
 
 // SetAuthorizer wires the authorizer used to gate every incoming slack
@@ -130,8 +135,18 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 		a.actionableReactions[r] = true
 	}
 
-	slog.Info(fmt.Sprintf("[Slack] Adapter initialized (Socket Mode: %v, actionable reactions: %v, allowed channels: %v, allowed user IDs: %v)",
-		config.SocketMode, config.ActionableReactions, config.AllowedChannelIDs, config.AllowedUserIDs))
+	if config.ChannelMessages {
+		resp, err := a.client.AuthTestContext(ctx)
+		if err != nil {
+			slog.Warn(fmt.Sprintf("[Slack] Could not fetch bot user ID for channel_messages dedup: %v", err))
+		} else {
+			a.botUserID = resp.UserID
+			slog.Info(fmt.Sprintf("[Slack] channel_messages enabled, bot user ID: %s", a.botUserID))
+		}
+	}
+
+	slog.Info(fmt.Sprintf("[Slack] Adapter initialized (Socket Mode: %v, channel_messages: %v, actionable reactions: %v, allowed channels: %v, allowed user IDs: %v)",
+		config.SocketMode, config.ChannelMessages, config.ActionableReactions, config.AllowedChannelIDs, config.AllowedUserIDs))
 	return nil
 }
 
@@ -266,13 +281,23 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	}
 
 	// In public/private channels, only process thread replies (follow-ups).
-	// Top-level channel messages are handled via app_mention events to avoid duplicates.
+	// Top-level channel messages are handled via app_mention events to avoid duplicates,
+	// unless ChannelMessages mode is enabled.
 	if ev.Channel != "" && ev.Channel[0] != 'D' {
 		if ev.ThreadTimeStamp == "" {
-			slog.Info(fmt.Sprintf("[Slack] Ignoring top-level message in channel %s (will handle via app_mention)", ev.Channel))
-			return
+			if !a.config.ChannelMessages {
+				slog.Info(fmt.Sprintf("[Slack] Ignoring top-level message in channel %s (will handle via app_mention)", ev.Channel))
+				return
+			}
+			// ChannelMessages mode: @mention messages fire both message + app_mention events.
+			// Let handleAppMention own those to avoid sending duplicates to the agent.
+			if a.botUserID != "" && strings.Contains(ev.Text, "<@"+a.botUserID+">") {
+				return
+			}
+			slog.Info(fmt.Sprintf("[Slack] Processing top-level channel message in %s (channel_messages mode)", ev.Channel))
+		} else {
+			slog.Info(fmt.Sprintf("[Slack] Processing thread reply in channel %s, thread=%s", ev.Channel, ev.ThreadTimeStamp))
 		}
-		slog.Info(fmt.Sprintf("[Slack] Processing thread reply in channel %s, thread=%s", ev.Channel, ev.ThreadTimeStamp))
 	}
 
 	// Allowlist: if configured, only allow messages from allowed channels or users
@@ -286,15 +311,25 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	eventType := "thread_reply"
 	if ev.Channel != "" && ev.Channel[0] == 'D' {
 		eventType = "dm"
+	} else if ev.ThreadTimeStamp == "" {
+		eventType = "channel_message"
 	}
 	metrics.SlackEvents.WithLabelValues(eventType).Inc()
 
 	slog.Info(fmt.Sprintf("[Slack] Message received: channel=%s, user=%s, text=%s", ev.Channel, ev.User, ev.Text))
 
+	// For top-level channel messages in ChannelMessages mode, use the message's
+	// own timestamp as the thread root when AutoThread is enabled so that the
+	// agent's response creates a thread under the original message.
+	threadID := ev.ThreadTimeStamp
+	if threadID == "" && a.config.AutoThread && ev.Channel != "" && ev.Channel[0] != 'D' {
+		threadID = ev.TimeStamp
+	}
+
 	// Build conversation ID
 	conversationID := ev.Channel
-	if ev.ThreadTimeStamp != "" {
-		conversationID = fmt.Sprintf("%s-%s", ev.Channel, ev.ThreadTimeStamp)
+	if threadID != "" {
+		conversationID = fmt.Sprintf("%s-%s", ev.Channel, threadID)
 	}
 
 	// Convert to pb.Message
@@ -307,7 +342,7 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		PlatformContext: &pb.PlatformContext{
 			MessageId: ev.TimeStamp,
 			ChannelId: ev.Channel,
-			ThreadId:  ev.ThreadTimeStamp,
+			ThreadId:  threadID,
 		},
 		User: &pb.User{
 			Id: ev.User,
