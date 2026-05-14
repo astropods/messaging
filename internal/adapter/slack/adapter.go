@@ -192,7 +192,15 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 			return
 		}
 
-		a.handleInnerEvent(ctx, eventsAPIEvent.InnerEvent, eventsAPIEvent.TeamID)
+		// Pull the raw inner event JSON out of the socket-mode payload so
+		// downstream handlers can read fields (notably `blocks`) that
+		// slack-go v0.12.3's typed structs don't surface.
+		var rawInner []byte
+		if evt.Request != nil {
+			rawInner = innerEventJSON(evt.Request.Payload)
+		}
+
+		a.handleInnerEvent(ctx, eventsAPIEvent.InnerEvent, eventsAPIEvent.TeamID, rawInner)
 
 	case socketmode.EventTypeInteractive:
 		// Acknowledge interactive events (buttons, modals, etc.)
@@ -232,13 +240,17 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 // call so the server can resolve slack identities to WorkOS users —
 // individual event payloads (e.g. ReactionAddedEvent) don't always carry
 // the workspace id, so we use the envelope's value uniformly.
-func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackevents.EventsAPIInnerEvent, teamID string) {
+//
+// rawInnerEvent is the raw JSON of the inner event (or nil if unavailable).
+// It's threaded into handlers that need to read fields slack-go's typed
+// structs omit — currently `blocks` on MessageEvent / AppMentionEvent.
+func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackevents.EventsAPIInnerEvent, teamID string, rawInnerEvent []byte) {
 	switch ev := innerEvent.Data.(type) {
 	case *slackevents.MessageEvent:
-		a.handleMessage(ctx, ev, teamID)
+		a.handleMessage(ctx, ev, teamID, rawInnerEvent)
 
 	case *slackevents.AppMentionEvent:
-		a.handleAppMention(ctx, ev, teamID)
+		a.handleAppMention(ctx, ev, teamID, rawInnerEvent)
 
 	case *slackevents.ReactionAddedEvent:
 		a.handleReactionAdded(ctx, ev, teamID)
@@ -252,8 +264,14 @@ func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackeve
 	}
 }
 
-// handleMessage processes message events
-func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.MessageEvent, teamID string) {
+// handleMessage processes message events.
+//
+// rawInnerEvent is the raw JSON of the underlying Events API inner event
+// (or nil when unavailable, e.g. in tests). It's used to extract Block
+// Kit text that slack-go v0.12.3's typed MessageEvent struct doesn't
+// expose so the agent receives both the fallback `text` and any
+// structured block content the message carries.
+func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.MessageEvent, teamID string, rawInnerEvent []byte) {
 	// Filter out bot messages
 	if ev.BotID != "" {
 		metrics.MessagesDropped.WithLabelValues("slack", "bot_filtered").Inc()
@@ -297,12 +315,13 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		conversationID = fmt.Sprintf("%s-%s", ev.Channel, ev.ThreadTimeStamp)
 	}
 
-	// Convert to pb.Message
+	content := mergeBlockText(ev.Text, extractBlockTextFromInnerEvent(rawInnerEvent))
+
 	msg := &pb.Message{
 		Id:             uuid.NewString(),
 		Timestamp:      timestamppb.New(parseSlackTimestamp(ev.TimeStamp)),
 		Platform:       "slack",
-		Content:        ev.Text,
+		Content:        content,
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
 			MessageId: ev.TimeStamp,
@@ -314,7 +333,6 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		},
 	}
 
-	// Call handler if registered
 	if a.msgHandler != nil {
 		if err := a.dispatch(ctx, msg, teamID); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling message: %v", err))
@@ -562,8 +580,14 @@ func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEv
 	}
 }
 
-// handleAppMention processes app mention events
-func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.AppMentionEvent, teamID string) {
+// handleAppMention processes app mention events.
+//
+// rawInnerEvent is the raw JSON of the underlying Events API inner event
+// (or nil when unavailable, e.g. in tests). It's used to extract Block
+// Kit text that slack-go v0.12.3's typed AppMentionEvent struct doesn't
+// expose so the agent receives both the fallback `text` and any
+// structured block content the message carries.
+func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.AppMentionEvent, teamID string, rawInnerEvent []byte) {
 	slog.Info(fmt.Sprintf("[Slack] App mentioned: channel=%s, user=%s, text=%s", ev.Channel, ev.User, ev.Text))
 
 	// Allowlist: if configured, only allow mentions from allowed channels or users
@@ -590,17 +614,23 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 	conversationID := fmt.Sprintf("%s-%s", ev.Channel, threadID)
 	text := stripMentions(ev.Text)
 
+	// Strip the bot mention from block-extracted text too: rich_text user
+	// elements get rendered as <@U…> by extractBlockText, so the same
+	// regex used on ev.Text removes them consistently before mergeBlockText
+	// decides whether the two representations duplicate each other.
+	blockText := stripMentions(extractBlockTextFromInnerEvent(rawInnerEvent))
+	content := mergeBlockText(text, blockText)
+
 	slog.Info(fmt.Sprintf("[Slack] Setting loading state: channel=%s, threadTS=%s", ev.Channel, threadID))
 	if err := a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "Assistant is thinking...", "thinking_face"); err != nil {
 		slog.Error(fmt.Sprintf("[Slack] ERROR: Failed to set loading state: %v", err))
 	}
 
-	// Convert to pb.Message
 	msg := &pb.Message{
 		Id:             uuid.NewString(),
 		Timestamp:      timestamppb.New(parseSlackTimestamp(ev.TimeStamp)),
 		Platform:       "slack",
-		Content:        text,
+		Content:        content,
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
 			MessageId: ev.TimeStamp,
@@ -673,7 +703,10 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 	}
 }
 
-// fetchMessageText retrieves the text of a single message by channel + timestamp.
+// fetchMessageText retrieves a single message by channel + timestamp and
+// returns its text, including any text content from Block Kit blocks
+// (sections, headers, context, rich_text). Falls back to plain `text`
+// when blocks contribute nothing extra.
 func (a *SlackAdapter) fetchMessageText(ctx context.Context, channelID, timestamp string) string {
 	msgs, _, _, err := a.client.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
 		ChannelID: channelID,
@@ -687,7 +720,7 @@ func (a *SlackAdapter) fetchMessageText(ctx context.Context, channelID, timestam
 	}
 	for _, m := range msgs {
 		if m.Timestamp == timestamp {
-			return m.Text
+			return mergeBlockText(m.Text, extractBlockText(m.Blocks))
 		}
 	}
 	return ""
@@ -828,7 +861,7 @@ func (a *SlackAdapter) HydrateThread(ctx context.Context, conversationID string,
 				Id:       msg.User,
 				Username: msg.Username,
 			},
-			Content:   msg.Text,
+			Content:   mergeBlockText(msg.Text, extractBlockText(msg.Blocks)),
 			Timestamp: timestamppb.New(parseSlackTimestamp(msg.Timestamp)),
 			WasEdited: msg.Edited != nil,
 			PlatformData: map[string]string{

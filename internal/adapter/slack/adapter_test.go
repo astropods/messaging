@@ -77,7 +77,7 @@ func TestHandleMessage_DMProcessed(t *testing.T) {
 
 	beforeEvent := testutil.ToFloat64(metrics.SlackEvents.WithLabelValues("dm"))
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
@@ -102,7 +102,7 @@ func TestHandleMessage_DMThreadReplyProcessed(t *testing.T) {
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
@@ -123,7 +123,7 @@ func TestHandleMessage_ChannelTopLevelIgnored(t *testing.T) {
 		TimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 0 {
 		t.Errorf("expected top-level channel message to be ignored, got %d messages", handler.count())
@@ -141,7 +141,7 @@ func TestHandleMessage_ChannelThreadReplyProcessed(t *testing.T) {
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("expected thread reply in channel to be processed, got %d messages", handler.count())
@@ -169,7 +169,7 @@ func TestHandleMessage_BotMessageIgnored(t *testing.T) {
 
 	beforeDropped := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "bot_filtered"))
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 0 {
 		t.Errorf("expected bot message to be ignored, got %d messages", handler.count())
@@ -190,7 +190,7 @@ func TestHandleMessage_SubtypeIgnored(t *testing.T) {
 		TimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 0 {
 		t.Errorf("expected message_changed subtype to be ignored, got %d messages", handler.count())
@@ -209,7 +209,7 @@ func TestHandleMessage_ThreadBroadcastAllowed(t *testing.T) {
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("expected thread_broadcast to be processed, got %d messages", handler.count())
@@ -227,7 +227,7 @@ func TestHandleMessage_PlatformContext(t *testing.T) {
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
@@ -262,7 +262,7 @@ func TestHandleMessage_AllowedChannelIDs_DisallowedDoesNotInvokeHandler(t *testi
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 0 {
 		t.Errorf("disallowed event must not invoke msgHandler, got %d messages", handler.count())
@@ -284,7 +284,7 @@ func TestHandleMessage_AllowedChannelIDs_AllowedInvokesHandler(t *testing.T) {
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("allowed event must invoke msgHandler, got %d messages", handler.count())
@@ -305,7 +305,7 @@ func TestHandleMessage_AllowedUserIDs_DisallowedDoesNotInvokeHandler(t *testing.
 		TimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 0 {
 		t.Errorf("disallowed event must not invoke msgHandler, got %d messages", handler.count())
@@ -326,7 +326,7 @@ func TestHandleMessage_AllowedUserIDs_AllowedInvokesHandle(t *testing.T) {
 		TimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("allowed event must invoke msgHandler, got %d messages", handler.count())
@@ -348,7 +348,7 @@ func TestHandleAppMention_AllowedChannelIDs_DisallowedDoesNotInvokeHandlerAndPos
 		ThreadTimeStamp: "",
 	}
 
-	a.handleAppMention(t.Context(), ev, "")
+	a.handleAppMention(t.Context(), ev, "", nil)
 
 	if handler.count() != 0 {
 		t.Errorf("disallowed app_mention must not invoke msgHandler, got %d messages", handler.count())
@@ -376,7 +376,7 @@ func TestHandleAppMention_AllowedChannelIDs_AllowedInvokesHandlerAndDoesNotPostN
 		ThreadTimeStamp: "",
 	}
 
-	a.handleAppMention(t.Context(), ev, "")
+	a.handleAppMention(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("allowed app_mention must invoke msgHandler, got %d messages", handler.count())
@@ -749,4 +749,168 @@ func newFakeSlackServer(t *testing.T, replyText string) *fakeSlackServer {
 
 	fs.Server = httptest.NewServer(mux)
 	return fs
+}
+
+// TestHandleMessage_BlockTextSurfacedToAgent verifies that when a Slack
+// message arrives with structured Block Kit content, the text inside the
+// blocks (section body, fields, header, rich_text) is included in the
+// pb.Message.Content delivered to the agent — not just the fallback
+// `text` field.
+func TestHandleMessage_BlockTextSurfacedToAgent(t *testing.T) {
+	a, handler := newTestAdapter()
+
+	rawInner := []byte(`{
+		"type":"message",
+		"user":"U123",
+		"channel":"D123456",
+		"text":"summary fallback",
+		"ts":"1234567890.000001",
+		"blocks":[
+			{"type":"header","text":{"type":"plain_text","text":"Deploy Status"}},
+			{"type":"section",
+			 "text":{"type":"mrkdwn","text":"All green."},
+			 "fields":[
+				{"type":"mrkdwn","text":"*Service:* api"},
+				{"type":"mrkdwn","text":"*Version:* v1.2.3"}
+			 ]}
+		]
+	}`)
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "D123456",
+		User:      "U123",
+		Text:      "summary fallback",
+		TimeStamp: "1234567890.000001",
+	}
+
+	a.handleMessage(t.Context(), ev, "T1", rawInner)
+
+	if handler.count() != 1 {
+		t.Fatalf("expected 1 message, got %d", handler.count())
+	}
+	got := handler.last().Content
+	for _, want := range []string{"summary fallback", "Deploy Status", "All green.", "*Service:* api", "*Version:* v1.2.3"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("content %q missing expected substring %q", got, want)
+		}
+	}
+}
+
+// TestHandleMessage_BlockTextDeduplicatesPlainText verifies that when
+// the fallback `text` field is identical to (or a subset of) the
+// extracted block text — the common case for user-typed rich_text
+// messages — the agent receives a single un-duplicated rendering.
+func TestHandleMessage_BlockTextDeduplicatesPlainText(t *testing.T) {
+	a, handler := newTestAdapter()
+
+	rawInner := []byte(`{
+		"type":"message",
+		"user":"U123",
+		"channel":"D123456",
+		"text":"hello world",
+		"ts":"1234567890.000001",
+		"blocks":[
+			{"type":"rich_text","elements":[
+				{"type":"rich_text_section","elements":[
+					{"type":"text","text":"hello world"}
+				]}
+			]}
+		]
+	}`)
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "D123456",
+		User:      "U123",
+		Text:      "hello world",
+		TimeStamp: "1234567890.000001",
+	}
+
+	a.handleMessage(t.Context(), ev, "T1", rawInner)
+
+	if handler.count() != 1 {
+		t.Fatalf("expected 1 message, got %d", handler.count())
+	}
+	if got := handler.last().Content; got != "hello world" {
+		t.Errorf("expected deduplicated content %q, got %q", "hello world", got)
+	}
+}
+
+// TestHandleAppMention_BlockTextSurfacedAndMentionsStripped verifies that
+// rich_text user mentions in blocks (rendered as <@U…>) are stripped from
+// the merged content the same way they're stripped from ev.Text, so the
+// agent doesn't see leftover bot-mention markup.
+func TestHandleAppMention_BlockTextSurfacedAndMentionsStripped(t *testing.T) {
+	a, handler := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	a.aiClient = &SlackAIClient{
+		botToken:   "xoxb-fake",
+		httpClient: srv.Client(),
+		baseURL:    srv.URL,
+	}
+
+	rawInner := []byte(`{
+		"type":"app_mention",
+		"user":"U123",
+		"channel":"C123456",
+		"text":"<@UBOT> please summarize this report",
+		"ts":"1234567890.000001",
+		"blocks":[
+			{"type":"rich_text","elements":[
+				{"type":"rich_text_section","elements":[
+					{"type":"user","user_id":"UBOT"},
+					{"type":"text","text":" please summarize this report"}
+				]}
+			]},
+			{"type":"section","text":{"type":"mrkdwn","text":"Q3 revenue: $5M"}}
+		]
+	}`)
+
+	ev := &slackevents.AppMentionEvent{
+		Channel:   "C123456",
+		User:      "U123",
+		Text:      "<@UBOT> please summarize this report",
+		TimeStamp: "1234567890.000001",
+	}
+
+	a.handleAppMention(t.Context(), ev, "T1", rawInner)
+
+	if handler.count() != 1 {
+		t.Fatalf("expected 1 message, got %d", handler.count())
+	}
+	got := handler.last().Content
+	if strings.Contains(got, "<@UBOT>") {
+		t.Errorf("expected bot mention to be stripped, content was %q", got)
+	}
+	if !strings.Contains(got, "please summarize this report") {
+		t.Errorf("expected mention text to survive, content was %q", got)
+	}
+	if !strings.Contains(got, "Q3 revenue: $5M") {
+		t.Errorf("expected section block text to be included, content was %q", got)
+	}
+}
+
+// TestHandleMessage_NoBlocksFallsBackToText guards the path where the
+// raw inner event is unavailable (e.g. webhook mode in the future, or
+// any test that doesn't construct a payload): block extraction must be
+// a pure addition and never regress the existing text-only behavior.
+func TestHandleMessage_NoBlocksFallsBackToText(t *testing.T) {
+	a, handler := newTestAdapter()
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "D123456",
+		User:      "U123",
+		Text:      "plain text only",
+		TimeStamp: "1234567890.000001",
+	}
+
+	a.handleMessage(t.Context(), ev, "T1", nil)
+
+	if handler.count() != 1 {
+		t.Fatalf("expected 1 message, got %d", handler.count())
+	}
+	if got := handler.last().Content; got != "plain text only" {
+		t.Errorf("no-blocks content: got %q, want %q", got, "plain text only")
+	}
 }
