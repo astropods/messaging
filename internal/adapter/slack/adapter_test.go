@@ -60,6 +60,7 @@ func newTestAdapterWithReactions(reactions []string) (*SlackAdapter, *mockMessag
 	a := &SlackAdapter{
 		contentBuffers:      make(map[string]string),
 		actionableReactions: reactionMap,
+		msgDedup:            newSlackMsgDedup(512),
 	}
 	a.msgHandler = handler.handle
 	return a, handler
@@ -130,6 +131,122 @@ func TestHandleMessage_ChannelTopLevelIgnored(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_ChannelMessagesForwardsTopLevel(t *testing.T) {
+	a, handler := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	a.config = adapter.Config{
+		ChannelMessages:   true,
+		AllowedChannelIDs: []string{"C123456"},
+	}
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "C123456",
+		User:      "U123",
+		Text:      "hello everyone",
+		TimeStamp: "9999999999.000001",
+	}
+	a.handleMessage(t.Context(), ev, "")
+
+	if handler.count() != 1 {
+		t.Fatalf("expected 1 message, got %d", handler.count())
+	}
+	msg := handler.last()
+	if !strings.HasPrefix(msg.Content, "[slack_channel_messages]\n") {
+		t.Errorf("expected slack_channel_messages prefix, got %q", msg.Content)
+	}
+	if !strings.Contains(msg.Content, "[slack_meta]") {
+		t.Errorf("expected slack_meta in content, got %q", msg.Content)
+	}
+}
+
+func TestHandleMessage_ChannelMessagesSkipsBotMention(t *testing.T) {
+	a, handler := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	a.botUserID = "UBOTTEST"
+	a.config = adapter.Config{
+		ChannelMessages:   true,
+		AllowedChannelIDs: []string{"C123456"},
+	}
+	before := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "app_mention_dedup"))
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "C123456",
+		User:      "U123",
+		Text:      "<@UBOTTEST> please help",
+		TimeStamp: "8888888888.000001",
+	}
+	a.handleMessage(t.Context(), ev, "")
+
+	if handler.count() != 0 {
+		t.Fatalf("expected no forward when body mentions bot, got %d", handler.count())
+	}
+	if got := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "app_mention_dedup")) - before; got != 1 {
+		t.Errorf("expected app_mention_dedup +1, got %v", got)
+	}
+}
+
+func TestHandleMessage_ChannelMessagesObserverTagPrecedence(t *testing.T) {
+	a, handler := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	a.observerChannels = map[string]bool{"C123456": true}
+	a.autoLinkSubstrings = []string{"https://example.com/"}
+	a.config = adapter.Config{
+		ChannelMessages:   true,
+		AllowedChannelIDs: []string{"C123456"},
+	}
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "C123456",
+		User:      "U123",
+		Text:      "see https://example.com/foo",
+		TimeStamp: "7777777777.000001",
+	}
+	a.handleMessage(t.Context(), ev, "")
+
+	if handler.count() != 1 {
+		t.Fatalf("expected 1 message, got %d", handler.count())
+	}
+	if !strings.HasPrefix(handler.last().Content, "[slack_observer]\n") {
+		t.Errorf("want observer tag to win, got %q", handler.last().Content)
+	}
+}
+
+func TestHandleMessage_ChannelMessagesAutoLinkTagPrecedence(t *testing.T) {
+	a, handler := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	a.autoLinkSubstrings = []string{"https://example.com/"}
+	a.config = adapter.Config{
+		ChannelMessages:   true,
+		AllowedChannelIDs: []string{"C123456"},
+	}
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "C123456",
+		User:      "U123",
+		Text:      "see https://example.com/foo",
+		TimeStamp: "6666666666.000001",
+	}
+	a.handleMessage(t.Context(), ev, "")
+
+	if handler.count() != 1 {
+		t.Fatalf("expected 1 message, got %d", handler.count())
+	}
+	if !strings.HasPrefix(handler.last().Content, "[slack_auto_link]\n") {
+		t.Errorf("want auto_link tag when not observer, got %q", handler.last().Content)
+	}
+	if !strings.Contains(handler.last().Content, "[slack_meta]") {
+		t.Errorf("expected slack_meta in auto_link forward, got %q", handler.last().Content)
+	}
+}
+
 func TestHandleMessage_ChannelThreadReplyProcessed(t *testing.T) {
 	a, handler := newTestAdapter()
 
@@ -147,12 +264,15 @@ func TestHandleMessage_ChannelThreadReplyProcessed(t *testing.T) {
 		t.Fatalf("expected thread reply in channel to be processed, got %d messages", handler.count())
 	}
 	msg := handler.last()
+	if !strings.HasPrefix(msg.Content, "[slack_meta]") {
+		t.Errorf("expected slack_meta prefix on thread reply, got %q", msg.Content)
+	}
 	expectedConvID := "C123456-1234567890.000001"
 	if msg.ConversationId != expectedConvID {
 		t.Errorf("expected conversation ID %q, got %q", expectedConvID, msg.ConversationId)
 	}
-	if msg.Content != "thread reply without mention" {
-		t.Errorf("expected content 'thread reply without mention', got %q", msg.Content)
+	if !strings.HasSuffix(strings.TrimSpace(msg.Content), "thread reply without mention") {
+		t.Errorf("expected user text at end of content, got %q", msg.Content)
 	}
 }
 
@@ -381,6 +501,16 @@ func TestHandleAppMention_AllowedChannelIDs_AllowedInvokesHandlerAndDoesNotPostN
 	if handler.count() != 1 {
 		t.Fatalf("allowed app_mention must invoke msgHandler, got %d messages", handler.count())
 	}
+	last := handler.last()
+	if !strings.HasPrefix(last.Content, "[slack_meta]") {
+		t.Errorf("expected slack_meta prefix on app_mention, got %q", last.Content)
+	}
+	if !strings.Contains(last.Content, "https://fake.slack/archives/") {
+		t.Errorf("expected permalink inside slack_meta JSON, got %q", last.Content)
+	}
+	if !strings.Contains(last.Content, "hello") {
+		t.Errorf("expected stripped user text after meta, got %q", last.Content)
+	}
 }
 
 func TestHandleReactionAdded_ActionableReactionForwarded(t *testing.T) {
@@ -404,8 +534,64 @@ func TestHandleReactionAdded_ActionableReactionForwarded(t *testing.T) {
 		t.Fatalf("expected actionable reaction to be forwarded, got %d messages", handler.count())
 	}
 	msg := handler.last()
+	if !strings.HasPrefix(msg.Content, "[slack_meta]") {
+		t.Errorf("expected slack_meta prefix on reaction forward, got %q", msg.Content)
+	}
 	if msg.PlatformContext.ChannelId != "C123456" {
 		t.Errorf("expected channel 'C123456', got %q", msg.PlatformContext.ChannelId)
+	}
+	if !strings.Contains(msg.Content, "https://fake.slack/archives/C123/p1234567890123456") {
+		t.Errorf("expected permalink in reaction payload, got %q", msg.Content)
+	}
+	if !strings.Contains(msg.Content, "[slack_thread_url] https://fake.slack/archives/C123/p1234567890123456") {
+		t.Errorf("expected plaintext slack_thread_url line in reaction payload, got %q", msg.Content)
+	}
+	if !strings.Contains(msg.Content, "original message text") {
+		t.Errorf("expected original message in payload, got %q", msg.Content)
+	}
+}
+
+func TestSlackArchivePermalink(t *testing.T) {
+	t.Parallel()
+	if got := slackArchivePermalink("https://team.slack.com/", "C08RB1RP492", "1778784239.511069"); got !=
+		"https://team.slack.com/archives/C08RB1RP492/p1778784239511069" {
+		t.Fatalf("unexpected archive URL: %q", got)
+	}
+	if slackArchivePermalink("", "C1", "1.2") != "" {
+		t.Fatal("expected empty when workspace base missing")
+	}
+}
+
+func TestHandleReactionAdded_PermalinkUsesWorkspaceFallbackWhenGetPermalinkFails(t *testing.T) {
+	t.Parallel()
+	a, handler := newTestAdapterWithReactions([]string{"ticket"})
+	srv := newFakeSlackServer(t, "original message text")
+	srv.permalinkFail = true
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	a.workspaceURL = "https://myteam.slack.com"
+
+	ev := &slackevents.ReactionAddedEvent{
+		Reaction: "ticket",
+		User:     "U123",
+		Item: slackevents.Item{
+			Channel:   "C123456",
+			Timestamp: "1234567890.000001",
+		},
+	}
+
+	a.handleReactionAdded(t.Context(), ev, "")
+
+	if handler.count() != 1 {
+		t.Fatalf("expected actionable reaction to be forwarded, got %d messages", handler.count())
+	}
+	msg := handler.last()
+	want := "https://myteam.slack.com/archives/C123456/p1234567890000001"
+	if !strings.Contains(msg.Content, want) {
+		t.Errorf("expected fallback permalink %q in payload, got %q", want, msg.Content)
+	}
+	if !strings.Contains(msg.Content, "[slack_thread_url] "+want) {
+		t.Errorf("expected [slack_thread_url] line with fallback URL, got %q", msg.Content)
 	}
 }
 
@@ -709,13 +895,20 @@ func TestInitialize_AutoThreadConfig(t *testing.T) {
 // needed by tests. It records calls to chat.postMessage.
 type fakeSlackServer struct {
 	*httptest.Server
-	postCount   int
-	postedTexts []string
+	postCount         int
+	postedTexts       []string
+	conversationReply string
+	permalinkURL      string
+	permalinkFail     bool
+	authTestURL       string
 }
 
 func newFakeSlackServer(t *testing.T, replyText string) *fakeSlackServer {
 	t.Helper()
-	fs := &fakeSlackServer{}
+	fs := &fakeSlackServer{
+		conversationReply: replyText,
+		permalinkURL:      "https://fake.slack/archives/C123/p1234567890123456",
+	}
 
 	mux := http.NewServeMux()
 
@@ -723,8 +916,22 @@ func newFakeSlackServer(t *testing.T, replyText string) *fakeSlackServer {
 		resp := map[string]interface{}{
 			"ok": true,
 			"messages": []map[string]interface{}{
-				{"ts": r.FormValue("ts"), "text": replyText, "user": "U999"},
+				{"ts": r.FormValue("ts"), "text": fs.conversationReply, "user": "U999", "type": "message"},
 			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	mux.HandleFunc("/chat.getPermalink", func(w http.ResponseWriter, r *http.Request) {
+		if fs.permalinkFail {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "missing_scope"})
+			return
+		}
+		resp := map[string]interface{}{
+			"ok":        true,
+			"permalink": fs.permalinkURL,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -737,6 +944,18 @@ func newFakeSlackServer(t *testing.T, replyText string) *fakeSlackServer {
 			"ok":      true,
 			"channel": r.FormValue("channel"),
 			"ts":      "1234567890.000099",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	mux.HandleFunc("/auth.test", func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"ok":      true,
+			"user_id": "UFAKEAUTHTEST",
+		}
+		if fs.authTestURL != "" {
+			resp["url"] = fs.authTestURL
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)

@@ -57,8 +57,13 @@ func (a *SlackAdapter) setSlackStatus(ctx context.Context, conversationID string
 		return fmt.Errorf("rate limit wait failed: %w", err)
 	}
 
-	// Call Slack AI API to set thread status
+	// Call Slack AI API to set thread status (only valid for Slack AI assistant threads).
 	if err := a.aiClient.SetThreadStatus(ctx, channelID, threadTS, statusMessage, emoji); err != nil {
+		if skippableSlackAssistantThreadError(err) {
+			slog.Debug("[Slack] assistant.threads.setStatus skipped — thread_ts is not an AI assistant thread",
+				"conversation", conversationID, "err", err)
+			return nil
+		}
 		return fmt.Errorf("failed to set Slack status: %w", err)
 	}
 
@@ -92,8 +97,13 @@ func (a *SlackAdapter) setSlackPrompts(ctx context.Context, conversationID strin
 		return fmt.Errorf("rate limit wait failed: %w", err)
 	}
 
-	// Call Slack AI API to set suggested prompts
+	// Call Slack AI API to set suggested prompts (assistant threads only).
 	if err := a.aiClient.SetSuggestedPrompts(ctx, channelID, threadTS, slackPrompts); err != nil {
+		if skippableSlackAssistantThreadError(err) {
+			slog.Debug("[Slack] assistant.threads.setSuggestedPrompts skipped — not an AI assistant thread",
+				"conversation", conversationID, "err", err)
+			return nil
+		}
 		return fmt.Errorf("failed to set Slack prompts: %w", err)
 	}
 
@@ -145,7 +155,7 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 			return fmt.Errorf("failed to send message: %w", err)
 		}
 
-    slog.Info(fmt.Sprintf("[Slack] Sent content to %s (%d chars)", conversationID, len(fullContent)))
+		slog.Info(fmt.Sprintf("[Slack] Sent content to %s (%d chars)", conversationID, len(fullContent)))
 
 		// Post any card attachments that came with the END chunk.
 		for _, att := range content.Attachments {
@@ -262,6 +272,17 @@ func (a *SlackAdapter) handleCardAttachment(ctx context.Context, channelID, thre
 }
 
 // Helper functions
+
+// skippableSlackAssistantThreadError is true when Slack's assistant.* HTTP APIs
+// reject the thread_ts because the conversation is a normal channel / thread /
+// reaction context, not a Slack AI Assistant thread.
+func skippableSlackAssistantThreadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "invalid_thread_ts")
+}
 
 // parseConversationID parses a conversation ID into channel ID and thread timestamp.
 // Accepted formats:

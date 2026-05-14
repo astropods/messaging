@@ -75,6 +75,32 @@ type Config struct {
 	ActionableReactions []string // Emoji names forwarded to the agent; empty means no reactions
 	AllowedChannelIDs   []string // Channel IDs that may use the app (empty = allow all)
 	AllowedUserIDs      []string // User IDs that may use the app (empty = allow all)
+
+	// ObserverChannelIDs lists public/private channel IDs (not DMs) where top-level
+	// messages are forwarded to the agent instead of being dropped.
+	ObserverChannelIDs []string
+	// AutoLinkTextSubstrings lists substrings (case-insensitive). When non-empty,
+	// a top-level channel message whose text contains any entry is forwarded to
+	// the agent (subject to AutoLinkChannelIDs / allowed_channel_ids). Host- and
+	// product-agnostic — operators choose strings that match URLs or phrases their
+	// agent should react to (e.g. a link prefix for a private repo).
+	AutoLinkTextSubstrings []string
+	// AutoLinkChannelIDs restricts auto-link delivery; empty means use AllowedChannelIDs.
+	AutoLinkChannelIDs []string
+	// ChannelMessages forwards all top-level public/private channel messages to the
+	// agent (still subject to allowlists). When false, only observer channels and
+	// auto-link rules bypass the usual app_mention-only top-level handling. When true,
+	// top-level messages that contain <@bot_user_id> are skipped (dedup with app_mention).
+	ChannelMessages bool
+	// ReactionPrependThread fetches conversation replies and prepends a bounded
+	// transcript before the reacted-to message when forwarding reactions.
+	ReactionPrependThread bool
+	// ObserverPrependThread prepends bounded thread context for observer-channel messages.
+	ObserverPrependThread bool
+	// ThreadMaxMessages caps Slack thread transcript length (0 = default 30).
+	ThreadMaxMessages int
+	// ThreadMaxRunes caps total runes in a prepended transcript (0 = default 12000).
+	ThreadMaxRunes int
 }
 
 // RateLimitConfig configures rate limiting

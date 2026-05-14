@@ -41,6 +41,20 @@ type SlackAdapter struct {
 	// actionableReactions is the set of emoji names forwarded to the agent.
 	// Built from config at initialization; empty map means no reactions are forwarded.
 	actionableReactions map[string]bool
+
+	observerChannels   map[string]bool
+	autoLinkSubstrings []string
+
+	// botUserID is the Slack authed bot user (U…), resolved at init when
+	// ChannelMessages is enabled, used to skip message events that duplicate
+	// app_mention delivery when the text contains <@botUserID>.
+	botUserID string
+
+	msgDedup *slackMsgDedup
+
+	// workspaceURL is https://{subdomain}.slack.com from auth.test (no trailing slash).
+	// Used to build /archives/…/p… permalinks when chat.getPermalink returns nothing.
+	workspaceURL string
 }
 
 // SetAuthorizer wires the authorizer used to gate every incoming slack
@@ -130,9 +144,54 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 		a.actionableReactions[r] = true
 	}
 
-	slog.Info(fmt.Sprintf("[Slack] Adapter initialized (Socket Mode: %v, actionable reactions: %v, allowed channels: %v, allowed user IDs: %v)",
-		config.SocketMode, config.ActionableReactions, config.AllowedChannelIDs, config.AllowedUserIDs))
+	a.observerChannels = make(map[string]bool)
+	for _, id := range config.ObserverChannelIDs {
+		if id != "" {
+			a.observerChannels[id] = true
+		}
+	}
+	for _, s := range config.AutoLinkTextSubstrings {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		a.autoLinkSubstrings = append(a.autoLinkSubstrings, strings.ToLower(s))
+	}
+	a.msgDedup = newSlackMsgDedup(512)
+
+	auth, err := a.client.AuthTestContext(ctx)
+	if err != nil {
+		slog.Warn("[Slack] AuthTest failed during init", "err", err)
+	} else {
+		if u := strings.TrimSpace(auth.URL); u != "" {
+			a.workspaceURL = strings.TrimRight(u, "/")
+			slog.Info("[Slack] workspace URL from auth.test", "url", a.workspaceURL)
+		}
+		if config.ChannelMessages && auth.UserID != "" {
+			a.botUserID = auth.UserID
+			slog.Info("[Slack] channel_messages: resolved bot user id", "bot_user_id", a.botUserID)
+		}
+	}
+
+	slog.Info(fmt.Sprintf("[Slack] Adapter initialized (Socket Mode: %v, channel_messages: %v, actionable reactions: %v, allowed channels: %v, allowed user IDs: %v)",
+		config.SocketMode, config.ChannelMessages, config.ActionableReactions, config.AllowedChannelIDs, config.AllowedUserIDs))
 	return nil
+}
+
+// textMatchesAutoLink is true when the message text contains any configured
+// auto-link substring (case-insensitive). Product-specific URL shapes belong
+// in operator config and agent prompts, not in hardcoded adapter regex.
+func (a *SlackAdapter) textMatchesAutoLink(text string) bool {
+	if len(a.autoLinkSubstrings) == 0 {
+		return false
+	}
+	tl := strings.ToLower(text)
+	for _, sub := range a.autoLinkSubstrings {
+		if sub != "" && strings.Contains(tl, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // Start begins listening for Slack events
@@ -247,9 +306,99 @@ func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackeve
 		if innerEvent.Type == "assistant_thread_started" {
 			a.handleAssistantThreadStarted(ctx, innerEvent, teamID)
 		} else {
-      slog.Info(fmt.Sprintf("[Slack] Unhandled inner event type: %s", innerEvent.Type))
+			slog.Info(fmt.Sprintf("[Slack] Unhandled inner event type: %s", innerEvent.Type))
 		}
 	}
+}
+
+// slackArchivePermalink builds a message URL in Slack /archives/{channel}/p{ts} form
+// (ts with the dot removed) when chat.getPermalink is unavailable.
+func slackArchivePermalink(workspaceBase, channelID, ts string) string {
+	workspaceBase = strings.TrimRight(strings.TrimSpace(workspaceBase), "/")
+	if workspaceBase == "" || channelID == "" || ts == "" {
+		return ""
+	}
+	return workspaceBase + "/archives/" + channelID + "/p" + strings.ReplaceAll(ts, ".", "")
+}
+
+// resolveSlackPermalink returns a permalink for channelID + Slack message ts (use the
+// thread root ts when linking a reply so the URL opens the whole thread).
+func (a *SlackAdapter) resolveSlackPermalink(ctx context.Context, channelID, ts string) string {
+	if channelID == "" || ts == "" {
+		return ""
+	}
+	if a.client != nil {
+		perma, err := a.client.GetPermalinkContext(ctx, &slack.PermalinkParameters{
+			Channel: channelID,
+			Ts:      ts,
+		})
+		if err != nil {
+			slog.Debug(fmt.Sprintf("[Slack] getPermalink skipped: %v", err))
+		} else if perma != "" {
+			return perma
+		}
+	}
+	if a.workspaceURL != "" {
+		if fb := slackArchivePermalink(a.workspaceURL, channelID, ts); fb != "" {
+			slog.Debug("[Slack] permalink from workspace archive URL fallback")
+			return fb
+		}
+	}
+	return ""
+}
+
+// formatSlackMetaLine returns a single "[slack_meta] {json}\n" line with channel_id,
+// message_ts, optional thread_ts, and optional permalink when the Slack client can
+// resolve chat.getPermalink. Used for app mentions, thread replies, DMs, and
+// top-level bypass paths so agents always see stable location context.
+// If cachedPermalink is non-empty, it is used as permalink without a second HTTP call.
+func (a *SlackAdapter) formatSlackMetaLine(ctx context.Context, channelID, threadTs, messageTs string, cachedPermalink string) string {
+	if channelID == "" || messageTs == "" {
+		return ""
+	}
+	meta := map[string]string{
+		"channel_id": channelID,
+		"message_ts": messageTs,
+	}
+	if threadTs != "" {
+		meta["thread_ts"] = threadTs
+	}
+	tsForPermalink := threadTs
+	if tsForPermalink == "" {
+		tsForPermalink = messageTs
+	}
+	p := strings.TrimSpace(cachedPermalink)
+	if p == "" {
+		p = a.resolveSlackPermalink(ctx, channelID, tsForPermalink)
+	}
+	if p != "" {
+		meta["permalink"] = p
+	}
+	metaBytes, err := json.Marshal(meta)
+	if err != nil {
+		slog.Warn(fmt.Sprintf("[Slack] slack_meta marshal: %v", err))
+		return ""
+	}
+	return "[slack_meta] " + string(metaBytes) + "\n"
+}
+
+// topLevelMessageBypass reports whether a top-level channel message should be
+// forwarded despite the default app_mention-only rule, and which path wins for
+// metrics, dedup logging, and preamble tags (observer > auto_link > channel_messages).
+func (a *SlackAdapter) topLevelMessageBypass(ev *slackevents.MessageEvent, topLevelInChannel, isChannel bool) (bypass bool, path string) {
+	if !topLevelInChannel || !isChannel {
+		return false, ""
+	}
+	if a.isObserverChannel(ev.Channel) {
+		return true, "observer"
+	}
+	if len(a.autoLinkSubstrings) > 0 && a.textMatchesAutoLink(ev.Text) && a.autoLinkChannelAllowed(ev.Channel) {
+		return true, "auto_link"
+	}
+	if a.config.ChannelMessages {
+		return true, "channel_messages"
+	}
+	return false, ""
 }
 
 // handleMessage processes message events
@@ -265,36 +414,114 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		return
 	}
 
-	// In public/private channels, only process thread replies (follow-ups).
-	// Top-level channel messages are handled via app_mention events to avoid duplicates.
-	if ev.Channel != "" && ev.Channel[0] != 'D' {
-		if ev.ThreadTimeStamp == "" {
-			slog.Info(fmt.Sprintf("[Slack] Ignoring top-level message in channel %s (will handle via app_mention)", ev.Channel))
+	// In public/private channels, top-level messages are normally dropped (handled
+	// via app_mention). Observer channels, auto-link rules, and optional
+	// channel_messages mode may bypass that.
+	isDM := ev.Channel != "" && ev.Channel[0] == 'D'
+	isChannel := ev.Channel != "" && ev.Channel[0] != 'D'
+	topLevelInChannel := isChannel && ev.ThreadTimeStamp == ""
+
+	if topLevelInChannel && isChannel && a.botUserID != "" && strings.Contains(ev.Text, "<@"+a.botUserID+">") {
+		slog.Info("[Slack] Skipping top-level channel message: contains bot user mention (handled via app_mention)",
+			"channel_id", ev.Channel, "message_ts", ev.TimeStamp, "user_id", ev.User)
+		metrics.MessagesDropped.WithLabelValues("slack", "app_mention_dedup").Inc()
+		return
+	}
+
+	bypassTopLevel, topBypassPath := a.topLevelMessageBypass(ev, topLevelInChannel, isChannel)
+
+	if topLevelInChannel && !bypassTopLevel {
+		slog.Info(fmt.Sprintf("[Slack] Ignoring top-level message in channel %s (will handle via app_mention)", ev.Channel))
+		return
+	}
+
+	if topLevelInChannel && bypassTopLevel && a.msgDedup != nil {
+		key := ev.Channel + ":" + ev.TimeStamp
+		if ok, dupAge := a.msgDedup.shouldDeliver(key); !ok {
+			slog.Info("[Slack] Dedup: skipping duplicate top-level message",
+				"dedup_key", key,
+				"channel_id", ev.Channel,
+				"message_ts", ev.TimeStamp,
+				"user_id", ev.User,
+				"bypass_path", topBypassPath,
+				"since_first_delivery", dupAge,
+			)
 			return
 		}
+	}
+
+	if topLevelInChannel && bypassTopLevel {
+		slog.Info(fmt.Sprintf("[Slack] Processing top-level message in channel %s (%s)", ev.Channel, topBypassPath))
+	} else if isChannel && ev.ThreadTimeStamp != "" {
 		slog.Info(fmt.Sprintf("[Slack] Processing thread reply in channel %s, thread=%s", ev.Channel, ev.ThreadTimeStamp))
+	}
+
+	threadForSlackReply := ev.ThreadTimeStamp
+	if topLevelInChannel && bypassTopLevel {
+		threadForSlackReply = ev.TimeStamp
 	}
 
 	// Allowlist: if configured, only allow messages from allowed channels or users
 	if !a.isAllowed(ev.Channel, ev.User) {
 		slog.Info(fmt.Sprintf("[Slack] Message from disallowed channel=%s or user=%s", ev.Channel, ev.User))
 		metrics.MessagesDropped.WithLabelValues("slack", "allowlist").Inc()
-		a.sendNotEnabledMessage(ctx, ev.Channel, ev.ThreadTimeStamp)
+		a.sendNotEnabledMessage(ctx, ev.Channel, threadForSlackReply)
 		return
 	}
 
 	eventType := "thread_reply"
-	if ev.Channel != "" && ev.Channel[0] == 'D' {
+	if isDM {
 		eventType = "dm"
+	} else if topLevelInChannel && bypassTopLevel {
+		switch topBypassPath {
+		case "observer":
+			eventType = "observer_top"
+		case "auto_link":
+			eventType = "auto_link_top"
+		case "channel_messages":
+			eventType = "channel_messages_top"
+		}
 	}
 	metrics.SlackEvents.WithLabelValues(eventType).Inc()
 
 	slog.Info(fmt.Sprintf("[Slack] Message received: channel=%s, user=%s, text=%s", ev.Channel, ev.User, ev.Text))
 
+	threadIDForConv := ev.ThreadTimeStamp
+	if topLevelInChannel && bypassTopLevel {
+		threadIDForConv = ev.TimeStamp
+	}
+
 	// Build conversation ID
 	conversationID := ev.Channel
-	if ev.ThreadTimeStamp != "" {
-		conversationID = fmt.Sprintf("%s-%s", ev.Channel, ev.ThreadTimeStamp)
+	if threadIDForConv != "" {
+		conversationID = fmt.Sprintf("%s-%s", ev.Channel, threadIDForConv)
+	}
+
+	text := ev.Text
+	if isChannel && a.isObserverChannel(ev.Channel) && a.config.ObserverPrependThread {
+		rootTS := ev.ThreadTimeStamp
+		if rootTS == "" {
+			rootTS = ev.TimeStamp
+		}
+		if tr := a.threadTranscript(ctx, ev.Channel, rootTS); tr != "" {
+			text = "[slack_thread_summary]\n" + tr + "\n\n" + text
+		}
+	}
+	if ((isChannel && ev.ThreadTimeStamp != "") || isDM) && !(topLevelInChannel && bypassTopLevel) {
+		if meta := a.formatSlackMetaLine(ctx, ev.Channel, threadIDForConv, ev.TimeStamp, ""); meta != "" {
+			text = meta + text
+		}
+	}
+	if isChannel && topLevelInChannel && bypassTopLevel {
+		metaLine := a.formatSlackMetaLine(ctx, ev.Channel, threadIDForConv, ev.TimeStamp, "")
+		switch topBypassPath {
+		case "observer":
+			text = "[slack_observer]\n" + metaLine + text
+		case "auto_link":
+			text = "[slack_auto_link]\n" + metaLine + text
+		case "channel_messages":
+			text = "[slack_channel_messages]\n" + metaLine + text
+		}
 	}
 
 	// Convert to pb.Message
@@ -302,12 +529,12 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		Id:             uuid.NewString(),
 		Timestamp:      timestamppb.New(parseSlackTimestamp(ev.TimeStamp)),
 		Platform:       "slack",
-		Content:        ev.Text,
+		Content:        text,
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
 			MessageId: ev.TimeStamp,
 			ChannelId: ev.Channel,
-			ThreadId:  ev.ThreadTimeStamp,
+			ThreadId:  threadIDForConv,
 		},
 		User: &pb.User{
 			Id: ev.User,
@@ -318,7 +545,11 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	if a.msgHandler != nil {
 		if err := a.dispatch(ctx, msg, teamID); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling message: %v", err))
-			a.sendErrorMessage(ctx, ev.Channel, ev.ThreadTimeStamp, err)
+			threadTS := ev.ThreadTimeStamp
+			if threadTS == "" && topLevelInChannel && bypassTopLevel {
+				threadTS = ev.TimeStamp
+			}
+			a.sendErrorMessage(ctx, ev.Channel, threadTS, err)
 		}
 	}
 }
@@ -408,7 +639,7 @@ func (a *SlackAdapter) routeButtonClickToAgent(ctx context.Context, callback *sl
 
 	metrics.SlackEvents.WithLabelValues("button_click").Inc()
 
-	content, err := json.Marshal(map[string]string{
+	payload, err := json.Marshal(map[string]string{
 		"type":      "button_click",
 		"button_id": action.ActionID,
 		"value":     action.Value,
@@ -419,13 +650,17 @@ func (a *SlackAdapter) routeButtonClickToAgent(ctx context.Context, callback *sl
 		return
 	}
 
+	metaPrefix := a.formatSlackMetaLine(ctx, channelID, threadTS, callback.Message.Timestamp, "")
+	content := metaPrefix + string(payload)
+
 	msg := &pb.Message{
 		Id:             uuid.NewString(),
 		Timestamp:      timestamppb.New(time.Now()),
 		Platform:       "slack",
-		Content:        string(content),
+		Content:        content,
 		ConversationId: fmt.Sprintf("%s-%s", channelID, threadTS),
 		PlatformContext: &pb.PlatformContext{
+			MessageId: callback.Message.Timestamp,
 			ChannelId: channelID,
 			ThreadId:  threadTS,
 		},
@@ -528,7 +763,7 @@ func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEv
 
 	metrics.SlackEvents.WithLabelValues("thread_started").Inc()
 
-	content, err := json.Marshal(map[string]string{
+	startedJSON, err := json.Marshal(map[string]string{
 		"type":    "assistant_thread_started",
 		"channel": channelID,
 		"thread":  threadTS,
@@ -538,13 +773,17 @@ func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEv
 		return
 	}
 
+	metaPrefix := a.formatSlackMetaLine(ctx, channelID, threadTS, threadTS, "")
+	content := metaPrefix + string(startedJSON)
+
 	msg := &pb.Message{
 		Id:             uuid.NewString(),
 		Timestamp:      timestamppb.New(time.Now()),
 		Platform:       "slack",
-		Content:        string(content),
+		Content:        content,
 		ConversationId: fmt.Sprintf("%s-%s", channelID, threadTS),
 		PlatformContext: &pb.PlatformContext{
+			MessageId: threadTS,
 			ChannelId: channelID,
 			ThreadId:  threadTS,
 		},
@@ -589,6 +828,9 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 
 	conversationID := fmt.Sprintf("%s-%s", ev.Channel, threadID)
 	text := stripMentions(ev.Text)
+	if meta := a.formatSlackMetaLine(ctx, ev.Channel, threadID, ev.TimeStamp, ""); meta != "" {
+		text = meta + text
+	}
 
 	slog.Info(fmt.Sprintf("[Slack] Setting loading state: channel=%s, threadTS=%s", ev.Channel, threadID))
 	if err := a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "Assistant is thinking...", "thinking_face"); err != nil {
@@ -637,17 +879,41 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 
 	metrics.SlackEvents.WithLabelValues("reaction").Inc()
 
-	originalText := a.fetchMessageText(ctx, ev.Item.Channel, ev.Item.Timestamp)
-	if originalText == "" {
+	originalText, threadTsForMeta, ok := a.fetchReactionMessage(ctx, ev.Item.Channel, ev.Item.Timestamp)
+	if !ok || originalText == "" {
 		slog.Info("[Slack] Could not fetch original message for reaction, skipping")
 		return
 	}
 
+	tsForPermalink := ev.Item.Timestamp
+	if threadTsForMeta != "" {
+		tsForPermalink = threadTsForMeta
+	}
+	permalink := a.resolveSlackPermalink(ctx, ev.Item.Channel, tsForPermalink)
+
+	var blocks []string
+	if a.config.ReactionPrependThread {
+		if tr := a.threadTranscript(ctx, ev.Item.Channel, ev.Item.Timestamp); tr != "" {
+			blocks = append(blocks, "[slack_thread_summary]\n"+tr)
+		}
+	}
+	reactionLine := fmt.Sprintf("[reaction :%s: added by <@%s> on message]", ev.Reaction, ev.User)
+	if permalink != "" {
+		reactionLine = fmt.Sprintf("[reaction :%s: added by <@%s> on message %s]", ev.Reaction, ev.User, permalink)
+	}
+	reactionLine += "\n" + originalText
+	blocks = append(blocks, reactionLine)
+	// Same structured location line as handleMessage / app_mention so downstream
+	// agents (e.g. GitHub amend flows) always see channel + timestamps + permalink.
+	metaPrefix := a.formatSlackMetaLine(ctx, ev.Item.Channel, threadTsForMeta, ev.Item.Timestamp, permalink)
+	var urlLine string
+	if permalink != "" {
+		urlLine = "[slack_thread_url] " + permalink + "\n"
+	}
+	content := metaPrefix + urlLine + strings.Join(blocks, "\n\n")
+
 	threadID := ev.Item.Timestamp
 	conversationID := fmt.Sprintf("%s-%s", ev.Item.Channel, threadID)
-
-	content := fmt.Sprintf("[reaction :%s: added by <@%s> on message]\n%s",
-		ev.Reaction, ev.User, originalText)
 
 	msg := &pb.Message{
 		Id:             uuid.NewString(),
@@ -673,24 +939,28 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 	}
 }
 
-// fetchMessageText retrieves the text of a single message by channel + timestamp.
-func (a *SlackAdapter) fetchMessageText(ctx context.Context, channelID, timestamp string) string {
+// fetchReactionMessage loads the reacted message text and, when the message is a
+// thread reply, the parent thread_ts (for permalinks that open the whole thread).
+func (a *SlackAdapter) fetchReactionMessage(ctx context.Context, channelID, timestamp string) (text string, threadTsForMeta string, ok bool) {
 	msgs, _, _, err := a.client.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
 		ChannelID: channelID,
 		Timestamp: timestamp,
 		Limit:     1,
-		Inclusive:  true,
+		Inclusive: true,
 	})
 	if err != nil {
 		slog.Error(fmt.Sprintf("[Slack] Failed to fetch message %s in %s: %v", timestamp, channelID, err))
-		return ""
+		return "", "", false
 	}
 	for _, m := range msgs {
 		if m.Timestamp == timestamp {
-			return m.Text
+			if m.ThreadTimestamp != "" {
+				threadTsForMeta = m.ThreadTimestamp
+			}
+			return m.Text, threadTsForMeta, true
 		}
 	}
-	return ""
+	return "", "", false
 }
 
 // sendErrorMessage posts user-facing errors to Slack. Infrastructure errors

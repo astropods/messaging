@@ -2,6 +2,7 @@ package slack
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -918,5 +919,18 @@ func TestSlackAdapter_HandleAgentResponse_ErrorUnspecifiedCode(t *testing.T) {
 				t.Errorf("should not include unspecified error code in message, got: %s", text)
 			}
 		}
+	}
+}
+
+func TestSkippableSlackAssistantThreadError(t *testing.T) {
+	t.Parallel()
+	if !skippableSlackAssistantThreadError(fmt.Errorf("slack API error: invalid_thread_ts")) {
+		t.Fatal("expected invalid_thread_ts to be skippable")
+	}
+	if skippableSlackAssistantThreadError(nil) {
+		t.Fatal("nil should not be skippable")
+	}
+	if skippableSlackAssistantThreadError(fmt.Errorf("rate_limited")) {
+		t.Fatal("unrelated errors should not be skippable")
 	}
 }

@@ -88,6 +88,24 @@ func TestLoad_SlackConfigJSON_DefaultsWhenAbsent(t *testing.T) {
 	if len(cfg.Slack.Config.AllowedUserIDs) != 0 {
 		t.Errorf("AllowedUserIDs default = %v, want empty", cfg.Slack.Config.AllowedUserIDs)
 	}
+	if cfg.Slack.Config.ChannelMessages {
+		t.Errorf("adapter.Config.ChannelMessages default = %v, want false", cfg.Slack.Config.ChannelMessages)
+	}
+}
+
+func TestLoad_SlackConfigJSON_ChannelMessages(t *testing.T) {
+	t.Setenv("SLACK_ENABLED", "true")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
+	t.Setenv("SLACK_CONFIG", `{"channel_messages":true}`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Slack.Config.ChannelMessages {
+		t.Errorf("adapter.Config.ChannelMessages = %v, want true", cfg.Slack.Config.ChannelMessages)
+	}
 }
 
 func TestLoad_SlackConfigJSON_PartialJSON(t *testing.T) {

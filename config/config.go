@@ -82,6 +82,15 @@ type SlackAdapterConfig struct {
 	AutoThread          *bool    `json:"auto_thread,omitempty"`
 	AllowedChannelIDs   []string `json:"allowed_channel_ids,omitempty"`
 	AllowedUserIDs      []string `json:"allowed_user_ids,omitempty"`
+
+	ObserverChannelIDs     []string `json:"observer_channels,omitempty"`
+	AutoLinkTextSubstrings []string `json:"auto_link_text_substrings,omitempty"`
+	AutoLinkChannelIDs     []string `json:"auto_link_channel_ids,omitempty"`
+	ChannelMessages        *bool    `json:"channel_messages,omitempty"`
+	ReactionPrependThread  *bool    `json:"reaction_prepend_thread,omitempty"`
+	ObserverPrependThread  *bool    `json:"observer_prepend_thread,omitempty"`
+	ThreadMaxMessages      *int     `json:"thread_max_messages,omitempty"`
+	ThreadMaxRunes         *int     `json:"thread_max_runes,omitempty"`
 }
 
 // SlackConfig holds Slack-specific configuration
@@ -173,14 +182,22 @@ func Load() (*Config, error) {
 	}
 
 	cfg.Slack.Config = adapter.Config{
-		BotToken:            cfg.Slack.Credentials.BotToken,
-		AppToken:            cfg.Slack.Credentials.AppToken,
-		SocketMode:          socketMode,
-		AutoThread:          autoThread,
-		DevMode:             getEnvBool("DEV", false),
-		ActionableReactions: cfg.Slack.AdapterConfig.ActionableReactions,
-		AllowedChannelIDs:   cfg.Slack.AdapterConfig.AllowedChannelIDs,
-		AllowedUserIDs:      cfg.Slack.AdapterConfig.AllowedUserIDs,
+		BotToken:               cfg.Slack.Credentials.BotToken,
+		AppToken:               cfg.Slack.Credentials.AppToken,
+		SocketMode:             socketMode,
+		AutoThread:             autoThread,
+		DevMode:                getEnvBool("DEV", false),
+		ActionableReactions:    cfg.Slack.AdapterConfig.ActionableReactions,
+		AllowedChannelIDs:      cfg.Slack.AdapterConfig.AllowedChannelIDs,
+		AllowedUserIDs:         cfg.Slack.AdapterConfig.AllowedUserIDs,
+		ObserverChannelIDs:     cfg.Slack.AdapterConfig.ObserverChannelIDs,
+		AutoLinkTextSubstrings: cfg.Slack.AdapterConfig.AutoLinkTextSubstrings,
+		AutoLinkChannelIDs:     cfg.Slack.AdapterConfig.AutoLinkChannelIDs,
+		ChannelMessages:        derefBool(cfg.Slack.AdapterConfig.ChannelMessages, false),
+		ReactionPrependThread:  derefBool(cfg.Slack.AdapterConfig.ReactionPrependThread, false),
+		ObserverPrependThread:  derefBool(cfg.Slack.AdapterConfig.ObserverPrependThread, false),
+		ThreadMaxMessages:      derefInt(cfg.Slack.AdapterConfig.ThreadMaxMessages, 30),
+		ThreadMaxRunes:         derefInt(cfg.Slack.AdapterConfig.ThreadMaxRunes, 12000),
 		RateLimit: adapter.RateLimitConfig{
 			RequestsPerSecond: getEnvFloat("SLACK_RATE_LIMIT_RPS", 3.0),
 			BurstSize:         getEnvInt("SLACK_RATE_LIMIT_BURST", 10),
@@ -276,6 +293,13 @@ func getEnvFloat(key string, defaultValue float64) float64 {
 func boolPtr(v bool) *bool { return &v }
 
 func derefBool(p *bool, fallback bool) bool {
+	if p != nil {
+		return *p
+	}
+	return fallback
+}
+
+func derefInt(p *int, fallback int) int {
 	if p != nil {
 		return *p
 	}

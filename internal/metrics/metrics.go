@@ -19,17 +19,17 @@ var (
 	}, []string{"platform"})
 
 	// MessagesDropped counts messages that were received but not forwarded.
-	// reason: no_agent | allowlist | bot_filtered
+	// reason: no_agent | allowlist | bot_filtered | app_mention_dedup
 	MessagesDropped = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "messaging_messages_dropped_total",
-		Help: "Total messages dropped before reaching an agent. Labelled by reason: no_agent, allowlist, bot_filtered.",
+		Help: "Total messages dropped before reaching an agent. Labelled by reason: no_agent, allowlist, bot_filtered, app_mention_dedup.",
 	}, []string{"platform", "reason"})
 
 	// SlackEvents counts Slack events by interaction type before any filtering.
-	// event_type: dm | thread_reply | mention | reaction
+	// event_type: dm | thread_reply | mention | reaction | observer_top | auto_link_top | channel_messages_top
 	SlackEvents = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "messaging_slack_events_total",
-		Help: "Total Slack events received, by type: dm, thread_reply, mention, reaction.",
+		Help: "Total Slack events received, by type: dm, thread_reply, mention, reaction, observer_top, auto_link_top, channel_messages_top.",
 	}, []string{"event_type"})
 
 	// AgentResponses counts responses routed from agents, labelled by payload type.
