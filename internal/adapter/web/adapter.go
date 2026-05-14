@@ -267,13 +267,13 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 
 	case *pb.AgentResponse_Transcript:
 		// Audio transcript — update user message placeholder
-		slog.Info("[Web] Transcript received", "conversation", conversationID, "text", payload.Transcript.Text)
+		slog.Debug("[Web] Transcript received", "conversation", conversationID, "text", payload.Transcript.Text)
 		event := NewTranscriptEvent(payload.Transcript)
 		a.connManager.Broadcast(conversationID, event)
 
 	case *pb.AgentResponse_ThreadMetadata:
 		// Thread metadata
-		slog.Info("[Web] Thread metadata received", "metadata", payload.ThreadMetadata)
+		slog.Debug("[Web] Thread metadata received", "metadata", payload.ThreadMetadata)
 
 	default:
 		slog.Warn("[Web] Unhandled response payload type", "type", fmt.Sprintf("%T", response.Payload))

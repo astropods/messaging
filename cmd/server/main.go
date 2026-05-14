@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +20,21 @@ import (
 	"github.com/astropods/messaging/internal/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// parseLogLevel maps LOG_LEVEL strings to slog.Level. Unknown / empty values
+// fall back to Debug (the default).
+func parseLogLevel(s string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "info":
+		return slog.LevelInfo
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelDebug
+	}
+}
 
 // buildAuthorizer wires the per-deployment Authorizer used by adapters to
 // gate incoming requests. Two states:
@@ -43,6 +59,9 @@ func buildAuthorizer(cfg config.AuthzConfig) authz.Authorizer {
 }
 
 func main() {
+	// Initialise the default logger at Info until config is loaded; once we
+	// know LOG_LEVEL we swap in a handler with the configured level so debug
+	// telemetry can be turned on without a code change.
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	slog.Info("Starting Astro Messaging Service...")
 	slog.Info(version.Info())
@@ -53,6 +72,10 @@ func main() {
 		slog.Error("Failed to load configuration", "err", err)
 		os.Exit(1)
 	}
+
+	level := parseLogLevel(cfg.LogLevel)
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
+	slog.Info("Log level configured", "level", level.String())
 
 	ctx := context.Background()
 
