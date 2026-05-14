@@ -124,6 +124,8 @@ describe('proto-loader field mapping', () => {
     expect(fieldNames).toContain('channelName');
     expect(fieldNames).toContain('workspaceId');
     expect(fieldNames).toContain('platformData');
+    expect(fieldNames).toContain('trigger');
+    expect(fieldNames).toContain('botUserId');
   });
 
   it('should have AgentResponse with camelCase oneof fields', () => {
@@ -164,6 +166,8 @@ describe('proto-loader field mapping', () => {
       'channelName',
       'workspaceId',
       'platformData',
+      'trigger',
+      'botUserId',
     ];
 
     for (const field of tsInterfaceFields) {
@@ -343,6 +347,8 @@ describe('ConversationStream', () => {
           team_id: 'T999',
           bot_id: 'B123',
         },
+        trigger: 'TRIGGER_OBSERVED',
+        botUserId: 'UBOT123',
       };
 
       const msg = createMessage({ platform: 'slack', platformContext: pc });
@@ -356,6 +362,8 @@ describe('ConversationStream', () => {
       expect(writtenPC?.channelName).toBe('#general');
       expect(writtenPC?.workspaceId).toBe('T999');
       expect(writtenPC?.platformData).toEqual({ team_id: 'T999', bot_id: 'B123' });
+      expect(writtenPC?.trigger).toBe('TRIGGER_OBSERVED');
+      expect(writtenPC?.botUserId).toBe('UBOT123');
     });
 
     it('should preserve user fields', () => {

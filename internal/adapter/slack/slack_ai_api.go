@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -191,7 +192,7 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 		payload["thread_ts"] = threadID
 	}
 
-	fmt.Printf("[SlackAI] Posting message with feedback buttons to channel %s\n", channelID)
+	slog.Debug("[SlackAI] Posting message with feedback buttons", "channel", channelID)
 
 	var result struct {
 		OK        bool   `json:"ok"`
@@ -200,16 +201,16 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 	}
 
 	if err := c.postJSON(ctx, "chat.postMessage", payload, &result); err != nil {
-		fmt.Printf("[SlackAI] ERROR posting message: %v\n", err)
+		slog.Error("[SlackAI] Error posting message", "err", err)
 		return "", err
 	}
 
 	if !result.OK {
-		fmt.Printf("[SlackAI] Slack API returned error: %s\n", result.Error)
+		slog.Error("[SlackAI] Slack API returned error", "error", result.Error)
 		return "", fmt.Errorf("slack API error: %s", result.Error)
 	}
 
-	fmt.Printf("[SlackAI] ✓ Message posted successfully: timestamp=%s\n", result.Timestamp)
+	slog.Debug("[SlackAI] Message posted successfully", "timestamp", result.Timestamp)
 	return result.Timestamp, nil
 }
 

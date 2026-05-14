@@ -41,6 +41,19 @@ type SlackAdapter struct {
 	// actionableReactions is the set of emoji names forwarded to the agent.
 	// Built from config at initialization; empty map means no reactions are forwarded.
 	actionableReactions map[string]bool
+
+	// observeChannels is the set of channel IDs whose top-level messages are
+	// forwarded (built from config.ObserveChannelIDs at init).
+	observeChannels map[string]bool
+
+	// botUserID is the authed bot user (U…), resolved via auth.test at init when
+	// observe channels are configured. Used to drop top-level messages that
+	// contain <@botUserID> so they don't double-deliver with app_mention.
+	botUserID string
+
+	// msgDedup suppresses duplicate top-level deliveries (Slack retries) in
+	// observe channels.
+	msgDedup *slackMsgDedup
 }
 
 // SetAuthorizer wires the authorizer used to gate every incoming slack
@@ -72,7 +85,12 @@ var (
 // etc.). Empty string is acceptable for legacy callers — the server
 // falls back to the unscoped owning-account candidate.
 func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID string) error {
-	if a.authz != nil && msg != nil && msg.User != nil {
+	// Observe channels are passive watch channels — the user didn't address the
+	// bot, so per-user authz doesn't apply. Operators opt into this by listing
+	// the channel in observe_channel_ids.
+	observed := msg != nil && msg.PlatformContext != nil && a.observeChannels[msg.PlatformContext.ChannelId]
+
+	if !observed && a.authz != nil && msg != nil && msg.User != nil {
 		allowed, err := a.authz.Allowed(ctx, authz.IdentityTypeSlack, msg.User.Id, authz.AdapterSlack, teamID)
 		if err != nil {
 			slog.Warn("[Slack] authz check failed",
@@ -130,8 +148,27 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 		a.actionableReactions[r] = true
 	}
 
-	slog.Info(fmt.Sprintf("[Slack] Adapter initialized (Socket Mode: %v, actionable reactions: %v, allowed channels: %v, allowed user IDs: %v)",
-		config.SocketMode, config.ActionableReactions, config.AllowedChannelIDs, config.AllowedUserIDs))
+	a.observeChannels = make(map[string]bool, len(config.ObserveChannelIDs))
+	for _, id := range config.ObserveChannelIDs {
+		if id != "" {
+			a.observeChannels[id] = true
+		}
+	}
+	if len(a.observeChannels) > 0 {
+		a.msgDedup = newSlackMsgDedup(512)
+	}
+	// Resolve the bot user id once at init so every outbound Message can carry
+	// it on PlatformContext (agents may need it to detect "I was @-mentioned"
+	// on paths where the adapter strips the mention or doesn't see it).
+	if auth, err := a.client.AuthTestContext(ctx); err != nil {
+		slog.Warn("[Slack] AuthTest failed during init; bot_user_id will be empty", "err", err)
+	} else if auth.UserID != "" {
+		a.botUserID = auth.UserID
+		slog.Info("[Slack] resolved bot user id from auth.test", "bot_user_id", a.botUserID)
+	}
+
+	slog.Info(fmt.Sprintf("[Slack] Adapter initialized (Socket Mode: %v, observe channels: %v, actionable reactions: %v, allowed channels: %v, allowed user IDs: %v)",
+		config.SocketMode, config.ObserveChannelIDs, config.ActionableReactions, config.AllowedChannelIDs, config.AllowedUserIDs))
 	return nil
 }
 
@@ -265,27 +302,60 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		return
 	}
 
-	// In public/private channels, only process thread replies (follow-ups).
-	// Top-level channel messages are handled via app_mention events to avoid duplicates.
-	if ev.Channel != "" && ev.Channel[0] != 'D' {
-		if ev.ThreadTimeStamp == "" {
+	isDM := ev.Channel != "" && ev.Channel[0] == 'D'
+	isChannel := ev.Channel != "" && ev.Channel[0] != 'D'
+	topLevelInChannel := isChannel && ev.ThreadTimeStamp == ""
+	observe := topLevelInChannel && a.observeChannels[ev.Channel]
+
+	// In channels, top-level messages are usually dropped (handled via app_mention).
+	// Observe channels forward them, except when the text @-mentions the bot
+	// (those still flow through app_mention to avoid double-delivery).
+	if topLevelInChannel {
+		if !observe {
 			slog.Debug(fmt.Sprintf("[Slack] Ignoring top-level message in channel %s (will handle via app_mention)", ev.Channel))
 			return
 		}
+		if a.botUserID != "" && strings.Contains(ev.Text, "<@"+a.botUserID+">") {
+			slog.Debug("[Slack] Skipping observed top-level message: contains bot mention (handled via app_mention)",
+				"channel_id", ev.Channel, "message_ts", ev.TimeStamp, "user_id", ev.User)
+			metrics.MessagesDropped.WithLabelValues("slack", "app_mention_dedup").Inc()
+			return
+		}
+		if a.msgDedup != nil {
+			key := ev.Channel + ":" + ev.TimeStamp
+			if ok, dupAge := a.msgDedup.shouldDeliver(key); !ok {
+				slog.Debug("[Slack] Dedup: skipping duplicate observed message",
+					"dedup_key", key, "channel_id", ev.Channel, "message_ts", ev.TimeStamp,
+					"user_id", ev.User, "since_first_delivery", dupAge)
+				return
+			}
+		}
+		slog.Debug(fmt.Sprintf("[Slack] Processing observed top-level message in channel %s", ev.Channel))
+	} else if isChannel {
 		slog.Debug(fmt.Sprintf("[Slack] Processing thread reply in channel %s, thread=%s", ev.Channel, ev.ThreadTimeStamp))
+	}
+
+	// threadID is the slack thread root for replies / observed top-level messages
+	// so the agent can post back into the right thread.
+	threadID := ev.ThreadTimeStamp
+	if observe {
+		threadID = ev.TimeStamp
 	}
 
 	// Allowlist: if configured, only allow messages from allowed channels or users
 	if !a.isAllowed(ev.Channel, ev.User) {
 		slog.Debug(fmt.Sprintf("[Slack] Message from disallowed channel=%s or user=%s", ev.Channel, ev.User))
 		metrics.MessagesDropped.WithLabelValues("slack", "allowlist").Inc()
-		a.sendNotEnabledMessage(ctx, ev.Channel, ev.ThreadTimeStamp)
+		a.sendNotEnabledMessage(ctx, ev.Channel, threadID)
 		return
 	}
 
 	eventType := "thread_reply"
-	if ev.Channel != "" && ev.Channel[0] == 'D' {
+	switch {
+	case isDM:
 		eventType = "dm"
+	case observe:
+		eventType = "observed_top"
 	}
 	metrics.SlackEvents.WithLabelValues(eventType).Inc()
 
@@ -293,8 +363,13 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 
 	// Build conversation ID
 	conversationID := ev.Channel
-	if ev.ThreadTimeStamp != "" {
-		conversationID = fmt.Sprintf("%s-%s", ev.Channel, ev.ThreadTimeStamp)
+	if threadID != "" {
+		conversationID = fmt.Sprintf("%s-%s", ev.Channel, threadID)
+	}
+
+	trigger := pb.PlatformContext_TRIGGER_DIRECT
+	if observe {
+		trigger = pb.PlatformContext_TRIGGER_OBSERVED
 	}
 
 	// Convert to pb.Message
@@ -307,7 +382,9 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		PlatformContext: &pb.PlatformContext{
 			MessageId: ev.TimeStamp,
 			ChannelId: ev.Channel,
-			ThreadId:  ev.ThreadTimeStamp,
+			ThreadId:  threadID,
+			Trigger:   trigger,
+			BotUserId: a.botUserID,
 		},
 		User: &pb.User{
 			Id: ev.User,
@@ -318,7 +395,7 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	if a.msgHandler != nil {
 		if err := a.dispatch(ctx, msg, teamID); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling message: %v", err))
-			a.sendErrorMessage(ctx, ev.Channel, ev.ThreadTimeStamp, err)
+			a.sendErrorMessage(ctx, ev.Channel, threadID, err)
 		}
 	}
 }
@@ -428,6 +505,8 @@ func (a *SlackAdapter) routeButtonClickToAgent(ctx context.Context, callback *sl
 		PlatformContext: &pb.PlatformContext{
 			ChannelId: channelID,
 			ThreadId:  threadTS,
+			Trigger:   pb.PlatformContext_TRIGGER_DIRECT,
+			BotUserId: a.botUserID,
 		},
 		User: &pb.User{Id: callback.User.ID},
 	}
@@ -472,6 +551,8 @@ func (a *SlackAdapter) handleSlashCommand(ctx context.Context, cmd slack.SlashCo
 		ConversationId: cmd.ChannelID,
 		PlatformContext: &pb.PlatformContext{
 			ChannelId: cmd.ChannelID,
+			Trigger:   pb.PlatformContext_TRIGGER_DIRECT,
+			BotUserId: a.botUserID,
 		},
 		User: &pb.User{
 			Id:       cmd.UserID,
@@ -547,6 +628,8 @@ func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEv
 		PlatformContext: &pb.PlatformContext{
 			ChannelId: channelID,
 			ThreadId:  threadTS,
+			Trigger:   pb.PlatformContext_TRIGGER_DIRECT,
+			BotUserId: a.botUserID,
 		},
 		User: &pb.User{Id: userID},
 	}
@@ -606,6 +689,8 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 			MessageId: ev.TimeStamp,
 			ChannelId: ev.Channel,
 			ThreadId:  threadID,
+			Trigger:   pb.PlatformContext_TRIGGER_DIRECT,
+			BotUserId: a.botUserID,
 		},
 		User: &pb.User{
 			Id: ev.User,
@@ -659,6 +744,8 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 			MessageId: ev.Item.Timestamp,
 			ChannelId: ev.Item.Channel,
 			ThreadId:  threadID,
+			Trigger:   pb.PlatformContext_TRIGGER_DIRECT,
+			BotUserId: a.botUserID,
 		},
 		User: &pb.User{
 			Id: ev.User,

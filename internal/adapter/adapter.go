@@ -75,6 +75,11 @@ type Config struct {
 	ActionableReactions []string // Emoji names forwarded to the agent; empty means no reactions
 	AllowedChannelIDs   []string // Channel IDs that may use the app (empty = allow all)
 	AllowedUserIDs      []string // User IDs that may use the app (empty = allow all)
+
+	// ObserveChannelIDs lists channel IDs where top-level (non-mention) messages
+	// are forwarded to the agent instead of being dropped. A message that already
+	// mentions the bot user is delivered via app_mention only (not duplicated).
+	ObserveChannelIDs []string
 }
 
 // RateLimitConfig configures rate limiting

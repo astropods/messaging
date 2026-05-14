@@ -23,6 +23,15 @@ export interface User {
   userData?: { [key: string]: string };
 }
 
+/**
+ * How a message reached the adapter. Lets agents distinguish between
+ * explicit invocations and passive observation.
+ */
+export type PlatformContextTrigger =
+  | 'TRIGGER_UNSPECIFIED' // Treat as direct (legacy default)
+  | 'TRIGGER_DIRECT'      // User addressed the bot (DM, @-mention, thread reply, button, reaction)
+  | 'TRIGGER_OBSERVED';   // Passive channel observation
+
 export interface PlatformContext {
   messageId: string;
   channelId: string;
@@ -30,6 +39,14 @@ export interface PlatformContext {
   channelName?: string;
   workspaceId?: string;
   platformData?: { [key: string]: string };
+  /** See PlatformContextTrigger. Adapters set this on every outbound message. */
+  trigger?: PlatformContextTrigger;
+  /**
+   * The adapter's own bot/app user ID in the source platform (e.g. Slack `U…`).
+   * Adapters strip the bot's @-mention from content before forwarding; this
+   * field lets the agent still detect "I was mentioned" in any path.
+   */
+  botUserId?: string;
 }
 
 export interface Attachment {

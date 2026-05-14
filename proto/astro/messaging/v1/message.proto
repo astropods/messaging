@@ -43,6 +43,22 @@ message PlatformContext {
   // Platform-specific data
   // Examples: Slack ts, Discord snowflake, Teams activity ID
   map<string, string> platform_data = 10;
+
+  // How the message reached the adapter. Lets agents distinguish between
+  // explicit invocations (user addressed the bot — DM, @-mention, thread
+  // reply, button click) and passive observation (the bot is watching a
+  // channel without being addressed).
+  enum Trigger {
+    TRIGGER_UNSPECIFIED = 0;             // Treat as direct (legacy default)
+    TRIGGER_DIRECT = 1;                  // User addressed the bot
+    TRIGGER_OBSERVED = 2;                // Passive channel observation
+  }
+  Trigger trigger = 11;
+
+  // The adapter's own bot/app user ID in the source platform (Slack U…, etc.).
+  // Adapters strip the bot's @-mention from content before forwarding; this
+  // field lets the agent still detect "I was mentioned" in any path.
+  string bot_user_id = 12;
 }
 
 // User information

@@ -5,7 +5,7 @@ Go messaging service that connects AI agents to messaging platforms via gRPC bid
 ## Features
 
 - **gRPC bidirectional streaming** — real-time message flow between agents and platforms
-- **Slack adapter** — Socket Mode, AI status indicators, suggested prompts, rate limiting
+- **Slack adapter** — Socket Mode, AI status indicators, suggested prompts, rate limiting, observe-channel mode
 - **Web adapter** — HTTP/SSE for browser-based clients
 - **Playground UI** — bundled browser-based chat interface, served from `/` when enabled
 - **Thread history** — tracks edits and deletions in memory
@@ -100,6 +100,16 @@ SLACK_APP_TOKEN=xapp-...
 SLACK_RATE_LIMIT_RPS=0.33     # 3s minimum between messages
 SLACK_RATE_LIMIT_BURST=10
 
+# Slack behavioural settings (JSON). All keys are optional.
+SLACK_CONFIG='{
+  "socket_mode": true,
+  "auto_thread": true,
+  "actionable_reactions": ["ticket"],
+  "allowed_channel_ids": [],
+  "allowed_user_ids": [],
+  "observe_channel_ids": []
+}'
+
 # gRPC
 GRPC_ENABLED=true
 GRPC_LISTEN_ADDR=:9090
@@ -141,8 +151,8 @@ Scrape endpoint: `http://<host>:9091/metrics`
 |--------|------|--------|-------------|
 | `messaging_messages_received_total` | Counter | `platform` | Messages that passed adapter filtering and reached the gRPC layer |
 | `messaging_messages_forwarded_total` | Counter | `platform` | Messages successfully sent to an agent stream |
-| `messaging_messages_dropped_total` | Counter | `platform`, `reason` | Messages dropped before reaching an agent (`no_agent`, `allowlist`, `bot_filtered`) |
-| `messaging_slack_events_total` | Counter | `event_type` | Slack events by type: `dm`, `thread_reply`, `mention`, `reaction` |
+| `messaging_messages_dropped_total` | Counter | `platform`, `reason` | Messages dropped before reaching an agent (`no_agent`, `allowlist`, `bot_filtered`, `app_mention_dedup`) |
+| `messaging_slack_events_total` | Counter | `event_type` | Slack events by type: `dm`, `thread_reply`, `mention`, `reaction`, `observed_top` |
 | `messaging_agent_responses_total` | Counter | `type` | Agent responses routed back to platform adapters |
 | `messaging_routing_errors_total` | Counter | `adapter` | Errors delivering agent responses to adapters |
 | `messaging_active_streams` | Gauge | — | Currently open bidirectional gRPC agent streams |
@@ -379,3 +389,20 @@ Uses PyPA trusted publishing — no token storage required.
 3. Add bot token scopes: `chat:write`, `channels:history`, `groups:history`, `im:history`, `app_mentions:read`
 4. Subscribe to events: `message.channels`, `message.groups`, `message.im`, `app_mention`
 5. Install to workspace
+
+### Observe channels
+
+By default the Slack adapter only forwards messages where the user addressed the bot (DMs, `@`-mentions, thread replies, button clicks, reactions). Set `observe_channel_ids` in `SLACK_CONFIG` to also forward every top-level message in specific channels — useful for watcher / classifier agents.
+
+```json
+{ "observe_channel_ids": ["C0123ABCDEF"] }
+```
+
+Behaviour in an observe channel:
+
+- Top-level messages are forwarded with `PlatformContext.trigger = TRIGGER_OBSERVED`.
+- Posts that `@`-mention the bot still flow through `app_mention` only (no double-delivery).
+- Slack retries / rapid duplicates are suppressed by an in-memory dedup (2-minute window).
+- Per-user authz is bypassed — the user did not address the bot, so operator-configured grants don't apply. Tighten `allowed_channel_ids` if you need a channel-level gate.
+
+Every outbound `pb.Message` from the Slack adapter also carries `PlatformContext.bot_user_id` (resolved once at init from `auth.test`). The adapter strips `<@bot>` from `app_mention` content; this field lets the agent still detect "I was mentioned" — including on observed traffic.
