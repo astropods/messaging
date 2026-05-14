@@ -110,7 +110,7 @@ type StorageConfig struct {
 // Load loads configuration from environment variables
 func Load() (*Config, error) {
 	cfg := &Config{
-		LogLevel: getEnv("LOG_LEVEL", "info"),
+		LogLevel: getEnv("LOG_LEVEL", "debug"),
 	}
 
 	// gRPC configuration

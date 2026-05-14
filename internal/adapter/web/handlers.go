@@ -73,6 +73,7 @@ func (h *Handlers) authenticate(w http.ResponseWriter, r *http.Request) *Session
 			return nil
 		}
 		if !allowed {
+			slog.Warn("[Web] authz denied", "user_id", session.UserID) //nolint:gosec // session.UserID is from a trusted ALB OIDC header
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return nil
 		}
@@ -142,7 +143,7 @@ func (h *Handlers) HandleCreateConversation(w http.ResponseWriter, r *http.Reque
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		slog.Error(fmt.Sprintf("[Web] Encode error on create conversation: %v", err))
 	}
-	slog.Info(fmt.Sprintf("[Web] Conversation created: id=%q, user=%q", conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
+	slog.Debug(fmt.Sprintf("[Web] Conversation created: id=%q, user=%q", conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
 }
 
 // HandleSendMessage handles POST /api/conversations/{id}/messages
@@ -199,7 +200,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	// Forward to gRPC handler
 	if h.msgHandler == nil {
-		slog.Info("[Web] No message handler registered")
+		slog.Warn("[Web] No message handler registered")
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -232,7 +233,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		slog.Error(fmt.Sprintf("[Web] Encode error on send message: %v", err))
 	}
-	slog.Info(fmt.Sprintf("[Web] Message sent: id=%q, conversation=%q, user=%q", messageID, conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
+	slog.Debug(fmt.Sprintf("[Web] Message sent: id=%q, conversation=%q, user=%q", messageID, conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
 }
 
 // HandleStream handles GET /api/conversations/{id}/stream (SSE)
@@ -287,15 +288,15 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprint(w, connectedEvent.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
 	flusher.Flush()
 
-	slog.Info(fmt.Sprintf("[Web] SSE stream started: connection=%q, conversation=%q, user=%q", connID, conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
+	slog.Debug(fmt.Sprintf("[Web] SSE stream started: connection=%q, conversation=%q, user=%q", connID, conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
 	// Event loop
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Info(fmt.Sprintf("[Web] SSE stream context cancelled: connection=%s", connID))
+			slog.Debug(fmt.Sprintf("[Web] SSE stream context cancelled: connection=%s", connID))
 			return
 		case <-conn.Done:
-			slog.Info(fmt.Sprintf("[Web] SSE stream closed: connection=%s", connID))
+			slog.Debug(fmt.Sprintf("[Web] SSE stream closed: connection=%s", connID))
 			return
 		case event := <-conn.EventChan:
 			_, _ = fmt.Fprint(w, event.Format())

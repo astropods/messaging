@@ -120,8 +120,8 @@ THREAD_HISTORY_MAX_SIZE=1000
 THREAD_HISTORY_MAX_MESSAGES=50
 THREAD_HISTORY_TTL_HOURS=24
 
-# Logging: debug, info, warn, error
-LOG_LEVEL=info
+# Logging: debug (default), info, warn, error
+LOG_LEVEL=debug
 ```
 
 ## Metrics

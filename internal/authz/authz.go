@@ -147,7 +147,11 @@ func (a *realAuthorizer) Allowed(ctx context.Context, identityType, identityID, 
 	}
 	a.cache.put(key, allowed)
 	if !allowed {
-		a.logger.Info("authorize denied",
+		// Warn (not Info): a denial is a security-relevant event worth
+		// surfacing at the default level — it's how operators catch missing
+		// grants and abuse. Identity ID/scope are deliberately omitted to
+		// avoid logging PII; deployment_id is already in the logger context.
+		a.logger.Warn("authorize denied",
 			"identity_type", identityType,
 			"adapter", adapter,
 		)

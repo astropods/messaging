@@ -59,7 +59,7 @@ func (cm *ConnectionManager) Add(conn *SSEConnection) {
 	cm.connections[conn.ConversationID][conn.ID] = conn
 	metrics.WebActiveConnections.Inc()
 
-	slog.Info(fmt.Sprintf("[Web] SSE connection added: id=%s, conversation=%s", conn.ID, conn.ConversationID))
+	slog.Debug(fmt.Sprintf("[Web] SSE connection added: id=%s, conversation=%s", conn.ID, conn.ConversationID))
 }
 
 // Remove unregisters an SSE connection
@@ -72,7 +72,7 @@ func (cm *ConnectionManager) Remove(conversationID, connID string) {
 			close(conn.Done)
 			delete(conns, connID)
 			metrics.WebActiveConnections.Dec()
-			slog.Info(fmt.Sprintf("[Web] SSE connection removed: id=%q, conversation=%q", connID, conversationID)) //nolint:gosec // G706 false positive: %q escapes control characters
+			slog.Debug(fmt.Sprintf("[Web] SSE connection removed: id=%q, conversation=%q", connID, conversationID)) //nolint:gosec // G706 false positive: %q escapes control characters
 		}
 		if len(conns) == 0 {
 			delete(cm.connections, conversationID)

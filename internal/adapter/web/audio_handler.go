@@ -61,7 +61,7 @@ func (h *Handlers) handleAudioSegmentStart(
 	config *AudioConfig,
 ) string {
 	if h.msgHandler == nil {
-		slog.Info("[Web] No message handler registered, dropping audio segment start")
+		slog.Warn("[Web] No message handler registered, dropping audio segment start")
 		return ""
 	}
 
@@ -231,7 +231,7 @@ func (h *Handlers) HandleAudioUpload(w http.ResponseWriter, r *http.Request) {
 		slog.Error(fmt.Sprintf("[Web] Encode error on audio upload response: %v", err))
 	}
 
-	slog.Info(fmt.Sprintf("[Web] Audio upload accepted: conversation=%q, file=%q, size=%d", //nolint:gosec // G706 false positive: %q escapes control characters
+	slog.Debug(fmt.Sprintf("[Web] Audio upload accepted: conversation=%q, file=%q, size=%d", //nolint:gosec // G706 false positive: %q escapes control characters
 		conversationID, header.Filename, len(audioData)))
 }
 
