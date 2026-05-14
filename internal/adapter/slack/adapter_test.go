@@ -197,8 +197,9 @@ func TestHandleMessage_ChannelMessagesObserverTagPrecedence(t *testing.T) {
 	a.observerChannels = map[string]bool{"C123456": true}
 	a.autoLinkSubstrings = []string{"https://example.com/"}
 	a.config = adapter.Config{
-		ChannelMessages:   true,
-		AllowedChannelIDs: []string{"C123456"},
+		ChannelMessages:       true,
+		AllowedChannelIDs:     []string{"C123456"},
+		ObserverPrependMarker: true,
 	}
 
 	ev := &slackevents.MessageEvent{
@@ -214,6 +215,43 @@ func TestHandleMessage_ChannelMessagesObserverTagPrecedence(t *testing.T) {
 	}
 	if !strings.HasPrefix(handler.last().Content, "[slack_observer]\n") {
 		t.Errorf("want observer tag to win, got %q", handler.last().Content)
+	}
+}
+
+// When ObserverPrependMarker is false, observer-channel forwards omit the
+// "[slack_observer]" line so agents that don't implement the observer/classifier
+// contract can treat the message as raw "[slack_meta] {…}\n<text>".
+func TestHandleMessage_ObserverPrependMarker_FalseSkipsObserverTag(t *testing.T) {
+	a, handler := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	a.observerChannels = map[string]bool{"C123456": true}
+	a.config = adapter.Config{
+		AllowedChannelIDs:     []string{"C123456"},
+		ObserverPrependMarker: false,
+	}
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "C123456",
+		User:      "U123",
+		Text:      "raw forward content",
+		TimeStamp: "9999999999.000001",
+	}
+	a.handleMessage(t.Context(), ev, "")
+
+	if handler.count() != 1 {
+		t.Fatalf("expected 1 message, got %d", handler.count())
+	}
+	got := handler.last().Content
+	if strings.Contains(got, "[slack_observer]") {
+		t.Errorf("expected no observer marker, got %q", got)
+	}
+	if !strings.HasPrefix(got, "[slack_meta]") {
+		t.Errorf("expected slack_meta prefix on raw observer forward, got %q", got)
+	}
+	if !strings.Contains(got, "raw forward content") {
+		t.Errorf("expected user text after meta, got %q", got)
 	}
 }
 

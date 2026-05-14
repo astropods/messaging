@@ -89,6 +89,7 @@ type SlackAdapterConfig struct {
 	ChannelMessages        *bool    `json:"channel_messages,omitempty"`
 	ReactionPrependThread  *bool    `json:"reaction_prepend_thread,omitempty"`
 	ObserverPrependThread  *bool    `json:"observer_prepend_thread,omitempty"`
+	ObserverPrependMarker  *bool    `json:"observer_prepend_marker,omitempty"`
 	ThreadMaxMessages      *int     `json:"thread_max_messages,omitempty"`
 	ThreadMaxRunes         *int     `json:"thread_max_runes,omitempty"`
 }
@@ -196,6 +197,7 @@ func Load() (*Config, error) {
 		ChannelMessages:        derefBool(cfg.Slack.AdapterConfig.ChannelMessages, false),
 		ReactionPrependThread:  derefBool(cfg.Slack.AdapterConfig.ReactionPrependThread, false),
 		ObserverPrependThread:  derefBool(cfg.Slack.AdapterConfig.ObserverPrependThread, false),
+		ObserverPrependMarker:  derefBool(cfg.Slack.AdapterConfig.ObserverPrependMarker, true),
 		ThreadMaxMessages:      derefInt(cfg.Slack.AdapterConfig.ThreadMaxMessages, 30),
 		ThreadMaxRunes:         derefInt(cfg.Slack.AdapterConfig.ThreadMaxRunes, 12000),
 		RateLimit: adapter.RateLimitConfig{

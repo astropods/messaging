@@ -516,7 +516,13 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		metaLine := a.formatSlackMetaLine(ctx, ev.Channel, threadIDForConv, ev.TimeStamp, "")
 		switch topBypassPath {
 		case "observer":
-			text = "[slack_observer]\n" + metaLine + text
+			// Marker is opt-out so agents that don't implement an observer/classifier
+			// contract can treat the message as raw "[slack_meta] {…}\n<text>".
+			if a.config.ObserverPrependMarker {
+				text = "[slack_observer]\n" + metaLine + text
+			} else {
+				text = metaLine + text
+			}
 		case "auto_link":
 			text = "[slack_auto_link]\n" + metaLine + text
 		case "channel_messages":

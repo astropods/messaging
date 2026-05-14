@@ -97,6 +97,12 @@ type Config struct {
 	ReactionPrependThread bool
 	// ObserverPrependThread prepends bounded thread context for observer-channel messages.
 	ObserverPrependThread bool
+	// ObserverPrependMarker controls whether observer-channel forwards include the
+	// leading "[slack_observer]" line. When false, the forward looks like a normal
+	// app_mention payload ("[slack_meta] {…}\n<text>"), letting agents that don't
+	// implement an observer/classifier contract treat top-level channel traffic as
+	// raw input. Defaults to true (preserves existing observer agent behavior).
+	ObserverPrependMarker bool
 	// ThreadMaxMessages caps Slack thread transcript length (0 = default 30).
 	ThreadMaxMessages int
 	// ThreadMaxRunes caps total runes in a prepended transcript (0 = default 12000).

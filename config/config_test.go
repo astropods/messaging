@@ -91,6 +91,29 @@ func TestLoad_SlackConfigJSON_DefaultsWhenAbsent(t *testing.T) {
 	if cfg.Slack.Config.ChannelMessages {
 		t.Errorf("adapter.Config.ChannelMessages default = %v, want false", cfg.Slack.Config.ChannelMessages)
 	}
+	if !cfg.Slack.Config.ObserverPrependMarker {
+		t.Errorf("adapter.Config.ObserverPrependMarker default = %v, want true", cfg.Slack.Config.ObserverPrependMarker)
+	}
+}
+
+// Operators can opt out of the "[slack_observer]" preamble when their agent
+// doesn't implement an observer/classifier contract.
+func TestLoad_SlackConfigJSON_ObserverPrependMarkerFalse(t *testing.T) {
+	t.Setenv("SLACK_ENABLED", "true")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
+	t.Setenv("SLACK_CONFIG", `{"observer_channels":["C1"],"observer_prepend_marker":false}`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Slack.Config.ObserverPrependMarker {
+		t.Errorf("adapter.Config.ObserverPrependMarker = %v, want false", cfg.Slack.Config.ObserverPrependMarker)
+	}
+	if len(cfg.Slack.Config.ObserverChannelIDs) != 1 || cfg.Slack.Config.ObserverChannelIDs[0] != "C1" {
+		t.Errorf("ObserverChannelIDs = %v, want [C1]", cfg.Slack.Config.ObserverChannelIDs)
+	}
 }
 
 func TestLoad_SlackConfigJSON_ChannelMessages(t *testing.T) {
