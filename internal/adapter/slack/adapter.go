@@ -389,7 +389,7 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		Id:             uuid.NewString(),
 		Timestamp:      timestamppb.New(parseSlackTimestamp(ev.TimeStamp)),
 		Platform:       "slack",
-		Content:        ev.Text,
+		Content:        renderBlocks(ev.Text, ev.Blocks),
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
 			MessageId:    ev.TimeStamp,
@@ -667,7 +667,10 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 	}
 
 	conversationID := fmt.Sprintf("%s-%s", ev.Channel, threadID)
-	text := stripMentions(ev.Text)
+	// Render any Block Kit content into the merged text, then strip bot
+	// mentions from the combined string — rich_text user elements get
+	// rendered as <@U…> by renderBlocks, so the same regex handles them.
+	text := stripMentions(renderBlocks(ev.Text, ev.Blocks))
 
 	slog.Debug(fmt.Sprintf("[Slack] Setting loading state: channel=%s, threadTS=%s", ev.Channel, threadID))
 	if err := a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "Assistant is thinking...", "thinking_face"); err != nil {
@@ -786,7 +789,7 @@ func (a *SlackAdapter) fetchReactionMessage(ctx context.Context, channelID, time
 			if m.ThreadTimestamp != "" && m.ThreadTimestamp != m.Timestamp {
 				parentThreadTs = m.ThreadTimestamp
 			}
-			return m.Text, parentThreadTs, true
+			return renderBlocks(m.Text, m.Blocks), parentThreadTs, true
 		}
 	}
 	return "", "", false
@@ -927,7 +930,7 @@ func (a *SlackAdapter) HydrateThread(ctx context.Context, conversationID string,
 				Id:       msg.User,
 				Username: msg.Username,
 			},
-			Content:   msg.Text,
+			Content:   renderBlocks(msg.Text, msg.Blocks),
 			Timestamp: timestamppb.New(parseSlackTimestamp(msg.Timestamp)),
 			WasEdited: msg.Edited != nil,
 			PlatformData: map[string]string{
