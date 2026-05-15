@@ -84,6 +84,11 @@ var (
 // raw value from the source event (MessageEvent.Team, SlashCommand.TeamID,
 // etc.). Empty string is acceptable for legacy callers — the server
 // falls back to the unscoped owning-account candidate.
+//
+// When the server resolves the slack user to a linked WorkOS user, dispatch
+// rewrites msg.User.Id to that canonical WorkOS user_id and preserves the
+// raw slack id under platform_data["slack_user_id"]. Downstream consumers
+// (agents, observability) then see the same identity shape as web traffic.
 func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID string) error {
 	// Observe channels are passive watch channels — the user didn't address the
 	// bot, so per-user authz doesn't apply. Operators opt into this by listing
@@ -91,22 +96,41 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 	observed := msg != nil && msg.PlatformContext != nil && a.observeChannels[msg.PlatformContext.ChannelId]
 
 	if !observed && a.authz != nil && msg != nil && msg.User != nil {
-		allowed, err := a.authz.Allowed(ctx, authz.IdentityTypeSlack, msg.User.Id, authz.AdapterSlack, teamID)
+		res, err := a.authz.Authorize(ctx, authz.IdentityTypeSlack, msg.User.Id, authz.AdapterSlack, teamID)
 		if err != nil {
 			slog.Warn("[Slack] authz check failed",
 				"user_id", msg.User.Id, "err", err)
 			return errAuthzUnavailable
 		}
-		if !allowed {
+		if !res.Allowed {
 			slog.Warn("[Slack] message denied by authz",
 				"user_id", msg.User.Id)
 			return errAuthzDenied
+		}
+		if res.UserID != "" && res.UserID != msg.User.Id {
+			rewriteToWorkOSUser(msg, res.UserID)
 		}
 	}
 	if a.msgHandler == nil {
 		return nil
 	}
 	return a.msgHandler(ctx, msg)
+}
+
+// rewriteToWorkOSUser replaces the slack-native user id on msg with the
+// resolved WorkOS user_id and stashes the original under
+// platform_data["slack_user_id"] so platform-specific call sites (e.g. sending
+// a DM back to the slack user) can still recover it.
+func rewriteToWorkOSUser(msg *pb.Message, workosUserID string) {
+	slackUserID := msg.User.Id
+	msg.User.Id = workosUserID
+	if msg.PlatformContext == nil {
+		msg.PlatformContext = &pb.PlatformContext{}
+	}
+	if msg.PlatformContext.PlatformData == nil {
+		msg.PlatformContext.PlatformData = map[string]string{}
+	}
+	msg.PlatformContext.PlatformData["slack_user_id"] = slackUserID
 }
 
 // New creates a new Slack adapter

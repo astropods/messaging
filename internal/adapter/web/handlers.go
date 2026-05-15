@@ -64,7 +64,9 @@ func (h *Handlers) authenticate(w http.ResponseWriter, r *http.Request) *Session
 
 	if h.authz != nil {
 		// Web identity is a globally-unique WorkOS user_id, so no scope.
-		allowed, err := h.authz.Allowed(ctx, authz.IdentityTypeUser, session.UserID, authz.AdapterWeb, "")
+		// The resolved user_id is the same value we sent in — no need to
+		// thread it back through the handler.
+		res, err := h.authz.Authorize(ctx, authz.IdentityTypeUser, session.UserID, authz.AdapterWeb, "")
 		if err != nil {
 			// Fail closed on authz transport errors — better to return a 503
 			// than to silently drop the check.
@@ -72,7 +74,7 @@ func (h *Handlers) authenticate(w http.ResponseWriter, r *http.Request) *Session
 			http.Error(w, "Authorization unavailable", http.StatusServiceUnavailable)
 			return nil
 		}
-		if !allowed {
+		if !res.Allowed {
 			slog.Warn("[Web] authz denied", "user_id", session.UserID) //nolint:gosec // session.UserID is from a trusted ALB OIDC header
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return nil

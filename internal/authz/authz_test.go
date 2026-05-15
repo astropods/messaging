@@ -33,7 +33,11 @@ func (f *fakeHTTPClient) Do(req *http.Request) (*http.Response, error) {
 }
 
 func okResp(allowed bool) *http.Response {
-	body, _ := json.Marshal(authorizeResponse{Allowed: allowed})
+	return okRespWithUser(allowed, "")
+}
+
+func okRespWithUser(allowed bool, userID string) *http.Response {
+	body, _ := json.Marshal(authorizeResponse{Allowed: allowed, UserID: userID})
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(strings.NewReader(string(body))),
@@ -62,18 +66,21 @@ func newTestAuthorizer(t *testing.T, anyoneAdapters []string, fn func(*http.Requ
 
 // Adapter listed in anyone_adapters → no server call, allowed immediately,
 // no identity required.
-func TestAllowed_AnyoneFastPath_NoServerCall(t *testing.T) {
+func TestAuthorize_AnyoneFastPath_NoServerCall(t *testing.T) {
 	a, stub := newTestAuthorizer(t, []string{"web"}, func(r *http.Request) (*http.Response, error) {
 		t.Errorf("unexpected server call: %s", r.URL)
 		return nil, errors.New("should not call")
 	})
 
-	allowed, err := a.Allowed(context.Background(), "", "", "web", "")
+	res, err := a.Authorize(context.Background(), "", "", "web", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !allowed {
+	if !res.Allowed {
 		t.Error("expected allowed=true via anyone fast path")
+	}
+	if res.UserID != "" {
+		t.Errorf("anyone-bypass must not resolve a user_id, got %q", res.UserID)
 	}
 	if stub.callCount.Load() != 0 {
 		t.Errorf("expected 0 HTTP calls, got %d", stub.callCount.Load())
@@ -81,7 +88,7 @@ func TestAllowed_AnyoneFastPath_NoServerCall(t *testing.T) {
 }
 
 // Adapter not in anyone_adapters → server call; result returned + cached.
-func TestAllowed_ServerCall_AndCache(t *testing.T) {
+func TestAuthorize_ServerCall_AndCache(t *testing.T) {
 	a, stub := newTestAuthorizer(t, nil, func(r *http.Request) (*http.Response, error) {
 		// Verify request shape.
 		if got := r.Header.Get("Authorization"); got != "Bearer stub-token" {
@@ -96,16 +103,19 @@ func TestAllowed_ServerCall_AndCache(t *testing.T) {
 		if got := r.URL.Query().Get("adapter"); got != "web" {
 			t.Errorf("adapter: got %q", got)
 		}
-		return okResp(true), nil
+		return okRespWithUser(true, "alice"), nil
 	})
 
 	for i := 0; i < 3; i++ {
-		allowed, err := a.Allowed(context.Background(), "user", "alice", "web", "")
+		res, err := a.Authorize(context.Background(), "user", "alice", "web", "")
 		if err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
-		if !allowed {
+		if !res.Allowed {
 			t.Errorf("call %d: expected allowed=true", i)
+		}
+		if res.UserID != "alice" {
+			t.Errorf("call %d: expected userID=alice, got %q", i, res.UserID)
 		}
 	}
 	if got := stub.callCount.Load(); got != 1 {
@@ -114,17 +124,17 @@ func TestAllowed_ServerCall_AndCache(t *testing.T) {
 }
 
 // Denied results are cached just like allowed ones.
-func TestAllowed_DeniedIsCached(t *testing.T) {
+func TestAuthorize_DeniedIsCached(t *testing.T) {
 	a, stub := newTestAuthorizer(t, nil, func(r *http.Request) (*http.Response, error) {
 		return okResp(false), nil
 	})
 
 	for i := 0; i < 3; i++ {
-		allowed, err := a.Allowed(context.Background(), "user", "bob", "web", "")
+		res, err := a.Authorize(context.Background(), "user", "bob", "web", "")
 		if err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
-		if allowed {
+		if res.Allowed {
 			t.Errorf("call %d: expected allowed=false", i)
 		}
 	}
@@ -133,19 +143,41 @@ func TestAllowed_DeniedIsCached(t *testing.T) {
 	}
 }
 
+// Server-resolved WorkOS user_id for slack identities round-trips through
+// the client and the cache, so callers can rewrite msg.User.Id without an
+// extra round-trip on subsequent messages.
+func TestAuthorize_SlackResolvedUserIDFlowsThroughCache(t *testing.T) {
+	a, stub := newTestAuthorizer(t, nil, func(r *http.Request) (*http.Response, error) {
+		return okRespWithUser(true, "user_workos_42"), nil
+	})
+
+	for i := 0; i < 3; i++ {
+		res, err := a.Authorize(context.Background(), "slack", "U01", "slack", "T1")
+		if err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
+		if !res.Allowed || res.UserID != "user_workos_42" {
+			t.Errorf("call %d: expected allowed=true userID=user_workos_42; got %+v", i, res)
+		}
+	}
+	if got := stub.callCount.Load(); got != 1 {
+		t.Errorf("expected 1 HTTP call; cache must replay user_id, got %d", got)
+	}
+}
+
 // Transport errors fail closed (deny) and are NOT cached — the next call
 // should retry rather than locking the principal out for the full TTL.
-func TestAllowed_TransportError_FailClosedNotCached(t *testing.T) {
+func TestAuthorize_TransportError_FailClosedNotCached(t *testing.T) {
 	a, stub := newTestAuthorizer(t, nil, func(r *http.Request) (*http.Response, error) {
 		return nil, errors.New("connection refused")
 	})
 
 	for i := 0; i < 2; i++ {
-		allowed, err := a.Allowed(context.Background(), "user", "alice", "web", "")
+		res, err := a.Authorize(context.Background(), "user", "alice", "web", "")
 		if err == nil {
 			t.Errorf("call %d: expected error", i)
 		}
-		if allowed {
+		if res.Allowed {
 			t.Errorf("call %d: expected allowed=false on error", i)
 		}
 	}
@@ -156,7 +188,7 @@ func TestAllowed_TransportError_FailClosedNotCached(t *testing.T) {
 
 // 5xx from the server is treated like a transport error: error returned,
 // fail closed, no cache.
-func TestAllowed_ServerError_FailClosed(t *testing.T) {
+func TestAuthorize_ServerError_FailClosed(t *testing.T) {
 	a, _ := newTestAuthorizer(t, nil, func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusInternalServerError,
@@ -164,25 +196,25 @@ func TestAllowed_ServerError_FailClosed(t *testing.T) {
 		}, nil
 	})
 
-	allowed, err := a.Allowed(context.Background(), "user", "alice", "web", "")
+	res, err := a.Authorize(context.Background(), "user", "alice", "web", "")
 	if err == nil {
 		t.Error("expected error on 500")
 	}
-	if allowed {
+	if res.Allowed {
 		t.Error("expected allowed=false on 500")
 	}
 }
 
 // identity_scope is sent as a query param when non-empty and is part of
 // the cache key — same identityID in two scopes must miss separately.
-func TestAllowed_IdentityScopeSentAndScopedInCache(t *testing.T) {
+func TestAuthorize_IdentityScopeSentAndScopedInCache(t *testing.T) {
 	var seenScope string
 	a, stub := newTestAuthorizer(t, nil, func(r *http.Request) (*http.Response, error) {
 		seenScope = r.URL.Query().Get("identity_scope")
 		return okResp(true), nil
 	})
 
-	if _, err := a.Allowed(context.Background(), "slack", "U01", "slack", "T1"); err != nil {
+	if _, err := a.Authorize(context.Background(), "slack", "U01", "slack", "T1"); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 	if seenScope != "T1" {
@@ -191,7 +223,7 @@ func TestAllowed_IdentityScopeSentAndScopedInCache(t *testing.T) {
 
 	// Same identity, different scope → cache must miss; the server gets a
 	// second call with the new scope.
-	if _, err := a.Allowed(context.Background(), "slack", "U01", "slack", "T2"); err != nil {
+	if _, err := a.Authorize(context.Background(), "slack", "U01", "slack", "T2"); err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 	if seenScope != "T2" {
@@ -204,10 +236,15 @@ func TestAllowed_IdentityScopeSentAndScopedInCache(t *testing.T) {
 
 // AllowAll / DenyAll do what they say.
 func TestAllowAll_DenyAll(t *testing.T) {
-	if ok, _ := AllowAll().Allowed(context.Background(), "", "", "web", ""); !ok {
+	res, _ := AllowAll().Authorize(context.Background(), "user", "alice", "web", "")
+	if !res.Allowed {
 		t.Error("AllowAll should allow")
 	}
-	if ok, _ := DenyAll().Allowed(context.Background(), "", "", "web", ""); ok {
+	if res.UserID != "alice" {
+		t.Errorf("AllowAll should echo identityID as userID, got %q", res.UserID)
+	}
+	res, _ = DenyAll().Authorize(context.Background(), "", "", "web", "")
+	if res.Allowed {
 		t.Error("DenyAll should deny")
 	}
 }
@@ -233,7 +270,8 @@ func TestNewAuthorizer_HappyPath(t *testing.T) {
 		t.Fatalf("NewAuthorizer: %v", err)
 	}
 	// anyone_adapters=["web"] → web allowed without server call
-	if ok, err := a.Allowed(context.Background(), "", "", "web", ""); !ok || err != nil {
-		t.Errorf("expected allow on web; got ok=%v err=%v", ok, err)
+	res, err := a.Authorize(context.Background(), "", "", "web", "")
+	if err != nil || !res.Allowed {
+		t.Errorf("expected allow on web; got %+v err=%v", res, err)
 	}
 }
