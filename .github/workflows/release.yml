@@ -2,7 +2,7 @@ name: Build Latest
 
 # Manual promotion of an existing astropods/messaging:<sha> multi-arch
 # manifest (built by the Build Next workflow on every push to main)
-# to the stable :latest tag plus an optional version tag.
+# to the stable :latest tag.
 #
 # No rebuild happens here — docker buildx imagetools create is a pure
 # manifest retag, so :latest is byte-identical to the :next or :<sha>
@@ -13,9 +13,6 @@ on:
     inputs:
       sha:
         description: "Source commit SHA to promote (defaults to HEAD of main)"
-        required: false
-      version:
-        description: "Optional version tag to also apply (e.g. v0.0.5). Leave empty to only update :latest."
         required: false
 
 concurrency:
@@ -33,21 +30,15 @@ jobs:
       contents: read
 
     steps:
-      - name: Resolve source SHA and version
+      - name: Resolve source SHA
         id: resolve
         run: |
           SHA="${{ inputs.sha }}"
           if [ -z "$SHA" ]; then
             SHA="${{ github.sha }}"
           fi
-          VERSION="${{ inputs.version }}"
-          echo "sha=$SHA"        >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if [ -n "$VERSION" ]; then
-            echo "Promoting $IMAGE:$SHA → $IMAGE:latest and $IMAGE:$VERSION"
-          else
-            echo "Promoting $IMAGE:$SHA → $IMAGE:latest"
-          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Promoting $IMAGE:$SHA → $IMAGE:latest"
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -65,11 +56,7 @@ jobs:
 
       - name: Promote to :latest
         run: |
-          TAGS=( -t "$IMAGE:latest" )
-          if [ -n "${{ steps.resolve.outputs.version }}" ]; then
-            TAGS+=( -t "$IMAGE:${{ steps.resolve.outputs.version }}" )
-          fi
           docker buildx imagetools create \
-            "${TAGS[@]}" \
+            -t "$IMAGE:latest" \
             "$IMAGE:${{ steps.resolve.outputs.sha }}"
-          echo "::notice::Promoted $IMAGE:${{ steps.resolve.outputs.sha }} → $IMAGE:latest${{ steps.resolve.outputs.version && format(' and $IMAGE:{0}', steps.resolve.outputs.version) || '' }}"
+          echo "::notice::Promoted $IMAGE:${{ steps.resolve.outputs.sha }} → $IMAGE:latest"
