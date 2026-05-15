@@ -88,6 +88,25 @@ func TestLoad_SlackConfigJSON_DefaultsWhenAbsent(t *testing.T) {
 	if len(cfg.Slack.Config.AllowedUserIDs) != 0 {
 		t.Errorf("AllowedUserIDs default = %v, want empty", cfg.Slack.Config.AllowedUserIDs)
 	}
+	if len(cfg.Slack.Config.ObserveChannelIDs) != 0 {
+		t.Errorf("ObserveChannelIDs default = %v, want empty", cfg.Slack.Config.ObserveChannelIDs)
+	}
+}
+
+func TestLoad_SlackConfigJSON_ObserveChannelIDs(t *testing.T) {
+	t.Setenv("SLACK_ENABLED", "true")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
+	t.Setenv("SLACK_CONFIG", `{"observe_channel_ids":["C1","C2"]}`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	got := cfg.Slack.Config.ObserveChannelIDs
+	if len(got) != 2 || got[0] != "C1" || got[1] != "C2" {
+		t.Errorf("ObserveChannelIDs = %v, want [C1 C2]", got)
+	}
 }
 
 func TestLoad_SlackConfigJSON_PartialJSON(t *testing.T) {

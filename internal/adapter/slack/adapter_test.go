@@ -130,8 +130,86 @@ func TestHandleMessage_ChannelTopLevelIgnored(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_ObserveChannel_TopLevelForwarded(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.observeChannels = map[string]bool{"C123456": true}
+	a.msgDedup = newSlackMsgDedup(8)
+	a.botUserID = "UBOTTEST"
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "C123456",
+		User:      "U123",
+		Text:      "hello everyone",
+		TimeStamp: "9999999999.000001",
+	}
+	a.handleMessage(t.Context(), ev, "")
+
+	if handler.count() != 1 {
+		t.Fatalf("expected observed top-level to forward, got %d", handler.count())
+	}
+	msg := handler.last()
+	if msg.PlatformContext.ThreadId != "9999999999.000001" {
+		t.Errorf("expected ThreadId == TimeStamp, got %q", msg.PlatformContext.ThreadId)
+	}
+	if msg.ConversationId != "C123456-9999999999.000001" {
+		t.Errorf("expected conv id 'C123456-9999999999.000001', got %q", msg.ConversationId)
+	}
+	if msg.Content != "hello everyone" {
+		t.Errorf("expected raw text, got %q", msg.Content)
+	}
+	if msg.PlatformContext.Trigger != pb.PlatformContext_TRIGGER_OBSERVED {
+		t.Errorf("expected Trigger=TRIGGER_OBSERVED, got %v", msg.PlatformContext.Trigger)
+	}
+	if msg.PlatformContext.BotUserId != "UBOTTEST" {
+		t.Errorf("expected BotUserId='UBOTTEST', got %q", msg.PlatformContext.BotUserId)
+	}
+}
+
+func TestHandleMessage_ObserveChannel_BotMentionDropped(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.observeChannels = map[string]bool{"C123456": true}
+	a.botUserID = "UBOTTEST"
+	a.msgDedup = newSlackMsgDedup(8)
+	before := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "app_mention_dedup"))
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "C123456",
+		User:      "U123",
+		Text:      "<@UBOTTEST> please help",
+		TimeStamp: "8888888888.000001",
+	}
+	a.handleMessage(t.Context(), ev, "")
+
+	if handler.count() != 0 {
+		t.Fatalf("expected bot-mention text to be skipped (app_mention will handle), got %d", handler.count())
+	}
+	if got := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "app_mention_dedup")) - before; got != 1 {
+		t.Errorf("expected app_mention_dedup +1, got +%v", got)
+	}
+}
+
+func TestHandleMessage_ObserveChannel_DuplicateSuppressed(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.observeChannels = map[string]bool{"C123456": true}
+	a.msgDedup = newSlackMsgDedup(8)
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "C123456",
+		User:      "U123",
+		Text:      "hi",
+		TimeStamp: "7777777777.000001",
+	}
+	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "")
+
+	if handler.count() != 1 {
+		t.Fatalf("expected dedup to drop second delivery, got %d", handler.count())
+	}
+}
+
 func TestHandleMessage_ChannelThreadReplyProcessed(t *testing.T) {
 	a, handler := newTestAdapter()
+	a.botUserID = "UBOTTEST"
 
 	ev := &slackevents.MessageEvent{
 		Channel:         "C123456",
@@ -153,6 +231,12 @@ func TestHandleMessage_ChannelThreadReplyProcessed(t *testing.T) {
 	}
 	if msg.Content != "thread reply without mention" {
 		t.Errorf("expected content 'thread reply without mention', got %q", msg.Content)
+	}
+	if msg.PlatformContext.Trigger != pb.PlatformContext_TRIGGER_DIRECT {
+		t.Errorf("expected Trigger=TRIGGER_DIRECT for thread reply, got %v", msg.PlatformContext.Trigger)
+	}
+	if msg.PlatformContext.BotUserId != "UBOTTEST" {
+		t.Errorf("expected BotUserId='UBOTTEST', got %q", msg.PlatformContext.BotUserId)
 	}
 }
 
@@ -502,6 +586,30 @@ func TestDispatch_AuthzDenied_ReturnsDeniedSentinel(t *testing.T) {
 	}
 	if handler.count() != 0 {
 		t.Errorf("msgHandler should not be invoked on deny; got %d call(s)", handler.count())
+	}
+}
+
+// Observe channels are passive watch channels — the user didn't address the
+// bot, so dispatch must skip the per-user authz check.
+func TestDispatch_ObserveChannel_SkipsAuthz(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.observeChannels = map[string]bool{"C123456": true}
+	az := &denyAuthorizer{}
+	a.SetAuthorizer(az)
+
+	msg := &pb.Message{
+		User:            &pb.User{Id: "U123"},
+		PlatformContext: &pb.PlatformContext{ChannelId: "C123456"},
+	}
+
+	if err := a.dispatch(t.Context(), msg, ""); err != nil {
+		t.Fatalf("expected nil err for observed message, got %v", err)
+	}
+	if az.calls != 0 {
+		t.Errorf("authorizer should not be called for observe channel, got %d call(s)", az.calls)
+	}
+	if handler.count() != 1 {
+		t.Errorf("msgHandler should be invoked for observed message; got %d", handler.count())
 	}
 }
 

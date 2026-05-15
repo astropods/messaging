@@ -26,6 +26,13 @@ sdk/node/dist/
 sdk/node/proto/
 sdk/node/bun.lock
 
+# Python (SDK) — local virtualenv & build artifacts
+sdk/python/.venv/
+sdk/python/build/
+sdk/python/dist/
+sdk/python/*.egg-info/
+**/__pycache__/
+
 # IDE
 .idea/
 .vscode/

@@ -320,7 +320,7 @@ func (s *Server) HealthCheck(ctx context.Context, req *pb.HealthCheckRequest) (*
 // HandleIncomingMessage is called by adapters when a message arrives from a platform.
 // This routes the message to the agent via gRPC stream.
 func (s *Server) HandleIncomingMessage(ctx context.Context, msg *pb.Message) error {
-	slog.Debug("[gRPC] Incoming platform message", "id", msg.Id, "platform", msg.Platform)
+	logIncomingMessage(msg)
 	metrics.MessagesReceived.WithLabelValues(msg.Platform).Inc()
 	start := time.Now()
 
@@ -579,4 +579,32 @@ func buildConversationID(platform, channelID, threadID string) string {
 		return fmt.Sprintf("%s-%s-%s", platform, channelID, threadID)
 	}
 	return fmt.Sprintf("%s-%s", platform, channelID)
+}
+
+// logIncomingMessage is the one place where every adapter-originated message
+// is logged on its way to the agent. Logging here (not in each adapter)
+// guarantees a single, uniform record per inbound message regardless of
+// platform — Slack, Web, or any future adapter — so debugging is consistent
+// across the system. Logs at Debug; PlatformContext fields and the user id
+// are emitted as structured attributes.
+func logIncomingMessage(msg *pb.Message) {
+	if msg == nil {
+		return
+	}
+	attrs := []any{
+		"id", msg.Id,
+		"platform", msg.Platform,
+		"conversation_id", msg.ConversationId,
+		"user_id", msg.User.GetId(),
+	}
+	if pc := msg.PlatformContext; pc != nil {
+		attrs = append(attrs,
+			"channel_id", pc.ChannelId,
+			"thread_id", pc.ThreadId,
+			"message_id", pc.MessageId,
+			"trigger", pc.Trigger.String(),
+			"bot_user_id", pc.BotUserId,
+		)
+	}
+	slog.Debug("[gRPC] Incoming platform message", attrs...)
 }
