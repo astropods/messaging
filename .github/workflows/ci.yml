@@ -52,7 +52,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.25"
           cache-dependency-path: go.sum
 
       - name: Install dependencies
@@ -108,7 +108,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.25"
           cache-dependency-path: go.sum
 
       - name: Download dependencies

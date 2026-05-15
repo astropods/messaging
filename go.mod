@@ -1,13 +1,13 @@
 module github.com/astropods/messaging
 
-go 1.24.0
+go 1.25
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.17.2
-	github.com/slack-go/slack v0.12.3
+	github.com/slack-go/slack v0.23.1
 	google.golang.org/grpc v1.78.0
 	google.golang.org/protobuf v1.36.11
 )

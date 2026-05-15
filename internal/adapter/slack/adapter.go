@@ -219,8 +219,12 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 		slog.Info("[Slack] Connected to Slack via Socket Mode")
 
 	case socketmode.EventTypeEventsAPI:
-		// Acknowledge the event
-		a.socketClient.Ack(*evt.Request)
+		// Acknowledge the event. An Ack failure here is non-fatal: Slack will
+		// retry the event, and the duplicate is suppressed downstream by the
+		// observe-channel dedup. Log so an outage is still visible.
+		if err := a.socketClient.Ack(*evt.Request); err != nil {
+			slog.Warn("[Slack] Ack failed for events API", "err", err)
+		}
 
 		// Handle the inner event
 		eventsAPIEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
@@ -232,8 +236,11 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 		a.handleInnerEvent(ctx, eventsAPIEvent.InnerEvent, eventsAPIEvent.TeamID)
 
 	case socketmode.EventTypeInteractive:
-		// Acknowledge interactive events (buttons, modals, etc.)
-		a.socketClient.Ack(*evt.Request)
+		// Acknowledge interactive events (buttons, modals, etc.) — Slack
+		// retries on failure, so a missed Ack is non-fatal.
+		if err := a.socketClient.Ack(*evt.Request); err != nil {
+			slog.Warn("[Slack] Ack failed for interactive event", "err", err)
+		}
 
 		// Handle block actions (feedback buttons, etc.)
 		callback, ok := evt.Data.(slack.InteractionCallback)
@@ -245,7 +252,10 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 
 	case socketmode.EventTypeSlashCommand:
 		// Acknowledge slash commands before any processing (3-second window).
-		a.socketClient.Ack(*evt.Request)
+		// Slack retries on Ack failure, so logging and continuing is correct.
+		if err := a.socketClient.Ack(*evt.Request); err != nil {
+			slog.Warn("[Slack] Ack failed for slash command", "err", err)
+		}
 		cmd, ok := evt.Data.(slack.SlashCommand)
 		if !ok {
 			slog.Warn("[Slack] Slash command: could not parse payload")
@@ -280,12 +290,11 @@ func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackeve
 	case *slackevents.ReactionAddedEvent:
 		a.handleReactionAdded(ctx, ev, teamID)
 
+	case *slackevents.AssistantThreadStartedEvent:
+		a.handleAssistantThreadStarted(ctx, ev, teamID)
+
 	default:
-		if innerEvent.Type == "assistant_thread_started" {
-			a.handleAssistantThreadStarted(ctx, innerEvent, teamID)
-		} else {
-			slog.Debug(fmt.Sprintf("[Slack] Unhandled inner event type: %s", innerEvent.Type))
-		}
+		slog.Debug(fmt.Sprintf("[Slack] Unhandled inner event type: %s", innerEvent.Type))
 	}
 }
 
@@ -583,34 +592,9 @@ func (a *SlackAdapter) handleSlashCommand(ctx context.Context, cmd slack.SlashCo
 // handleAssistantThreadStarted handles the Slack AI assistant_thread_started event,
 // which fires when a user opens a new assistant thread. The event is forwarded to
 // the agent as an incoming message so the agent can respond with SuggestedPrompts.
-//
-// Note: slack-go v0.12.3 does not have a typed struct for this event; the raw
-// JSON is extracted from the InnerEvent.Data field via json.RawMessage. Upgrading
-// to slack-go ≥0.13 will allow using the typed slackevents.AssistantThreadStartedEvent
-// instead and this fallback can be removed.
-func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEvent slackevents.EventsAPIInnerEvent, teamID string) {
-	type payload struct {
-		AssistantThread struct {
-			UserID    string `json:"user_id"`
-			ChannelID string `json:"channel_id"`
-			ThreadTs  string `json:"thread_ts"`
-		} `json:"assistant_thread"`
-	}
-
-	rawData, ok := innerEvent.Data.(json.RawMessage)
-	if !ok {
-		slog.Warn("[Slack] assistant_thread_started: event data unavailable; upgrade slack-go to ≥0.13 for typed support")
-		return
-	}
-
-	var ev payload
-	if err := json.Unmarshal(rawData, &ev); err != nil {
-		slog.Error(fmt.Sprintf("[Slack] assistant_thread_started: parse error: %v", err))
-		return
-	}
-
+func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, ev *slackevents.AssistantThreadStartedEvent, teamID string) {
 	channelID := ev.AssistantThread.ChannelID
-	threadTS := ev.AssistantThread.ThreadTs
+	threadTS := ev.AssistantThread.ThreadTimeStamp
 	userID := ev.AssistantThread.UserID
 	if channelID == "" || threadTS == "" {
 		slog.Warn(fmt.Sprintf("[Slack] assistant_thread_started: missing channel (%q) or thread TS (%q)", channelID, threadTS))
