@@ -43,7 +43,7 @@ messaging/
 
 ### Prerequisites
 
-- Go 1.24+
+- Go 1.25+
 - Slack app with Socket Mode enabled (bot token + app token)
 
 ### Run locally
