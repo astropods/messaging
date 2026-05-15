@@ -905,3 +905,144 @@ func newFakeSlackServer(t *testing.T, replyText string) *fakeSlackServer {
 	fs.Server = httptest.NewServer(mux)
 	return fs
 }
+
+// TestHandleMessage_BlockKitContentReachesAgent verifies that block-only
+// content (header + section + fields) posted via an app shows up in
+// pb.Message.Content alongside the fallback text.
+func TestHandleMessage_BlockKitContentReachesAgent(t *testing.T) {
+	a, handler := newTestAdapter()
+
+	blocks := blocksFromJSON(t, `[
+		{"type":"header","text":{"type":"plain_text","text":"Deploy Status"}},
+		{"type":"section",
+		 "text":{"type":"mrkdwn","text":"All green."},
+		 "fields":[
+			{"type":"mrkdwn","text":"*Service:* api"},
+			{"type":"mrkdwn","text":"*Version:* v1.2.3"}
+		 ]}
+	]`)
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "D123456",
+		User:      "U123",
+		Text:      "summary fallback",
+		TimeStamp: "1234567890.000001",
+		Blocks:    blocks,
+	}
+
+	a.handleMessage(t.Context(), ev, "T1")
+
+	if handler.count() != 1 {
+		t.Fatalf("expected 1 message, got %d", handler.count())
+	}
+	got := handler.last().Content
+	for _, want := range []string{"summary fallback", "Deploy Status", "All green.", "*Service:* api", "*Version:* v1.2.3"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("content %q missing %q", got, want)
+		}
+	}
+}
+
+// TestHandleMessage_UserRichTextNotDuplicated verifies that for a
+// user-typed message — where Slack auto-derives text from rich_text —
+// the agent receives a single un-duplicated rendering.
+func TestHandleMessage_UserRichTextNotDuplicated(t *testing.T) {
+	a, handler := newTestAdapter()
+
+	blocks := blocksFromJSON(t, `[
+		{"type":"rich_text","elements":[
+			{"type":"rich_text_section","elements":[
+				{"type":"text","text":"hello world"}
+			]}
+		]}
+	]`)
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "D123456",
+		User:      "U123",
+		Text:      "hello world",
+		TimeStamp: "1234567890.000001",
+		Blocks:    blocks,
+	}
+
+	a.handleMessage(t.Context(), ev, "T1")
+
+	if handler.count() != 1 {
+		t.Fatalf("expected 1 message, got %d", handler.count())
+	}
+	if got := handler.last().Content; got != "hello world" {
+		t.Errorf("got %q, want %q", got, "hello world")
+	}
+}
+
+// TestHandleAppMention_BlockKitMergedAndMentionsStripped verifies that
+// a section block carrying real content is merged in, and any bot
+// mention (in text or rendered from a rich_text user element) is
+// stripped from the combined string.
+func TestHandleAppMention_BlockKitMergedAndMentionsStripped(t *testing.T) {
+	a, handler := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	a.aiClient = &SlackAIClient{
+		botToken:   "xoxb-fake",
+		httpClient: srv.Client(),
+		baseURL:    srv.URL,
+	}
+
+	blocks := blocksFromJSON(t, `[
+		{"type":"rich_text","elements":[
+			{"type":"rich_text_section","elements":[
+				{"type":"user","user_id":"UBOT"},
+				{"type":"text","text":" please summarize this report"}
+			]}
+		]},
+		{"type":"section","text":{"type":"mrkdwn","text":"Q3 revenue: $5M"}}
+	]`)
+
+	ev := &slackevents.AppMentionEvent{
+		Channel:   "C123456",
+		User:      "U123",
+		Text:      "<@UBOT> please summarize this report",
+		TimeStamp: "1234567890.000001",
+		Blocks:    blocks,
+	}
+
+	a.handleAppMention(t.Context(), ev, "T1")
+
+	if handler.count() != 1 {
+		t.Fatalf("expected 1 message, got %d", handler.count())
+	}
+	got := handler.last().Content
+	if strings.Contains(got, "<@UBOT>") {
+		t.Errorf("expected bot mention stripped, got %q", got)
+	}
+	if !strings.Contains(got, "please summarize this report") {
+		t.Errorf("expected mention text to survive, got %q", got)
+	}
+	if !strings.Contains(got, "Q3 revenue: $5M") {
+		t.Errorf("expected section text included, got %q", got)
+	}
+}
+
+// TestHandleMessage_NoBlocksPreservesText guards the common case where
+// no blocks are present: behavior must match pre-renderBlocks exactly.
+func TestHandleMessage_NoBlocksPreservesText(t *testing.T) {
+	a, handler := newTestAdapter()
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "D123456",
+		User:      "U123",
+		Text:      "plain text only",
+		TimeStamp: "1234567890.000001",
+	}
+
+	a.handleMessage(t.Context(), ev, "T1")
+
+	if handler.count() != 1 {
+		t.Fatalf("expected 1 message, got %d", handler.count())
+	}
+	if got := handler.last().Content; got != "plain text only" {
+		t.Errorf("got %q, want %q", got, "plain text only")
+	}
+}
