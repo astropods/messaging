@@ -121,10 +121,11 @@ describe('proto-loader field mapping', () => {
     expect(fieldNames).toContain('messageId');
     expect(fieldNames).toContain('channelId');
     expect(fieldNames).toContain('threadId');
+    expect(fieldNames).toContain('threadRootId');
     expect(fieldNames).toContain('channelName');
     expect(fieldNames).toContain('workspaceId');
     expect(fieldNames).toContain('platformData');
-    expect(fieldNames).toContain('trigger');
+    expect(fieldNames).toContain('eventKind');
     expect(fieldNames).toContain('botUserId');
   });
 
@@ -163,10 +164,11 @@ describe('proto-loader field mapping', () => {
       'messageId',
       'channelId',
       'threadId',
+      'threadRootId',
       'channelName',
       'workspaceId',
       'platformData',
-      'trigger',
+      'eventKind',
       'botUserId',
     ];
 
@@ -341,13 +343,14 @@ describe('ConversationStream', () => {
         messageId: 'msg-slack-ts',
         channelId: 'C123456',
         threadId: '1234567890.000001',
+        threadRootId: '1234567890.000001',
         channelName: '#general',
         workspaceId: 'T999',
         platformData: {
           team_id: 'T999',
           bot_id: 'B123',
         },
-        trigger: 'TRIGGER_OBSERVED',
+        eventKind: 'EVENT_KIND_APP_MENTION',
         botUserId: 'UBOT123',
       };
 
@@ -359,10 +362,11 @@ describe('ConversationStream', () => {
       expect(writtenPC?.messageId).toBe('msg-slack-ts');
       expect(writtenPC?.channelId).toBe('C123456');
       expect(writtenPC?.threadId).toBe('1234567890.000001');
+      expect(writtenPC?.threadRootId).toBe('1234567890.000001');
       expect(writtenPC?.channelName).toBe('#general');
       expect(writtenPC?.workspaceId).toBe('T999');
       expect(writtenPC?.platformData).toEqual({ team_id: 'T999', bot_id: 'B123' });
-      expect(writtenPC?.trigger).toBe('TRIGGER_OBSERVED');
+      expect(writtenPC?.eventKind).toBe('EVENT_KIND_APP_MENTION');
       expect(writtenPC?.botUserId).toBe('UBOT123');
     });
 

@@ -44,21 +44,36 @@ message PlatformContext {
   // Examples: Slack ts, Discord snowflake, Teams activity ID
   map<string, string> platform_data = 10;
 
-  // How the message reached the adapter. Lets agents distinguish between
-  // explicit invocations (user addressed the bot — DM, @-mention, thread
-  // reply, button click) and passive observation (the bot is watching a
-  // channel without being addressed).
-  enum Trigger {
-    TRIGGER_UNSPECIFIED = 0;             // Treat as direct (legacy default)
-    TRIGGER_DIRECT = 1;                  // User addressed the bot
-    TRIGGER_OBSERVED = 2;                // Passive channel observation
-  }
-  Trigger trigger = 11;
-
   // The adapter's own bot/app user ID in the source platform (Slack U…, etc.).
   // Adapters strip the bot's @-mention from content before forwarding; this
   // field lets the agent still detect "I was mentioned" in any path.
   string bot_user_id = 12;
+
+  // EventKind is the fine-grained source event that produced this message.
+  // Trigger answers "did the user address the bot?" (coarse: DIRECT/OBSERVED);
+  // EventKind answers "how?" so the agent can branch on app-mention vs
+  // thread-reply vs reaction vs button without inspecting content. Platform-
+  // specific values (REACTION, BUTTON_CLICK, SLASH_COMMAND, ASSISTANT_THREAD_STARTED)
+  // are no-ops on platforms that don't have the concept.
+  enum EventKind {
+    EVENT_KIND_UNSPECIFIED              = 0;
+    EVENT_KIND_DM                       = 1; // 1:1 / private chat (DM, web chat session)
+    EVENT_KIND_APP_MENTION              = 2; // bot was @-mentioned (channel or thread)
+    EVENT_KIND_THREAD_REPLY             = 3; // reply in a channel thread, no @-mention
+    EVENT_KIND_OBSERVED                 = 4; // observe-channel forward
+    EVENT_KIND_REACTION                 = 5;
+    EVENT_KIND_BUTTON_CLICK             = 6;
+    EVENT_KIND_SLASH_COMMAND            = 7;
+    EVENT_KIND_ASSISTANT_THREAD_STARTED = 8;
+  }
+  EventKind event_kind = 13;
+
+  // ThreadRootId is the parent thread's root timestamp when this message is
+  // a reply in an existing thread; empty for top-level messages. Use this to
+  // tell "in a thread or not" — distinct from `thread_id` which is the agent's
+  // reply target (also populated for top-level invocations where the agent's
+  // response should open a new thread under the user's message).
+  string thread_root_id = 14;
 }
 
 // User information

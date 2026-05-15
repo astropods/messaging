@@ -601,8 +601,9 @@ func logIncomingMessage(msg *pb.Message) {
 		attrs = append(attrs,
 			"channel_id", pc.ChannelId,
 			"thread_id", pc.ThreadId,
+			"thread_root_id", pc.ThreadRootId,
 			"message_id", pc.MessageId,
-			"trigger", pc.Trigger.String(),
+			"event_kind", pc.EventKind.String(),
 			"bot_user_id", pc.BotUserId,
 		)
 	}

@@ -187,6 +187,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		PlatformContext: &pb.PlatformContext{
 			MessageId: messageID,
 			ChannelId: conversationID,
+			EventKind: pb.PlatformContext_EVENT_KIND_DM,
 		},
 		User: &pb.User{
 			Id:        session.UserID,

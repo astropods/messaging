@@ -367,9 +367,12 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		conversationID = fmt.Sprintf("%s-%s", ev.Channel, threadID)
 	}
 
-	trigger := pb.PlatformContext_TRIGGER_DIRECT
-	if observe {
-		trigger = pb.PlatformContext_TRIGGER_OBSERVED
+	eventKind := pb.PlatformContext_EVENT_KIND_THREAD_REPLY
+	switch {
+	case observe:
+		eventKind = pb.PlatformContext_EVENT_KIND_OBSERVED
+	case isDM:
+		eventKind = pb.PlatformContext_EVENT_KIND_DM
 	}
 
 	// Convert to pb.Message
@@ -380,11 +383,12 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		Content:        ev.Text,
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
-			MessageId: ev.TimeStamp,
-			ChannelId: ev.Channel,
-			ThreadId:  threadID,
-			Trigger:   trigger,
-			BotUserId: a.botUserID,
+			MessageId:    ev.TimeStamp,
+			ChannelId:    ev.Channel,
+			ThreadId:     threadID,
+			ThreadRootId: ev.ThreadTimeStamp, // empty for top-level (DM and observed)
+			EventKind:    eventKind,
+			BotUserId:    a.botUserID,
 		},
 		User: &pb.User{
 			Id: ev.User,
@@ -496,6 +500,10 @@ func (a *SlackAdapter) routeButtonClickToAgent(ctx context.Context, callback *sl
 		return
 	}
 
+	// The button lives on a specific message; if that message is itself a
+	// thread reply, ThreadTimestamp gives us the parent thread root.
+	threadRootID := callback.Message.ThreadTimestamp
+
 	msg := &pb.Message{
 		Id:             uuid.NewString(),
 		Timestamp:      timestamppb.New(time.Now()),
@@ -503,10 +511,12 @@ func (a *SlackAdapter) routeButtonClickToAgent(ctx context.Context, callback *sl
 		Content:        string(content),
 		ConversationId: fmt.Sprintf("%s-%s", channelID, threadTS),
 		PlatformContext: &pb.PlatformContext{
-			ChannelId: channelID,
-			ThreadId:  threadTS,
-			Trigger:   pb.PlatformContext_TRIGGER_DIRECT,
-			BotUserId: a.botUserID,
+			MessageId:    callback.Message.Timestamp,
+			ChannelId:    channelID,
+			ThreadId:     threadTS,
+			ThreadRootId: threadRootID,
+			EventKind: pb.PlatformContext_EVENT_KIND_BUTTON_CLICK,
+			BotUserId:    a.botUserID,
 		},
 		User: &pb.User{Id: callback.User.ID},
 	}
@@ -551,7 +561,7 @@ func (a *SlackAdapter) handleSlashCommand(ctx context.Context, cmd slack.SlashCo
 		ConversationId: cmd.ChannelID,
 		PlatformContext: &pb.PlatformContext{
 			ChannelId: cmd.ChannelID,
-			Trigger:   pb.PlatformContext_TRIGGER_DIRECT,
+			EventKind: pb.PlatformContext_EVENT_KIND_SLASH_COMMAND,
 			BotUserId: a.botUserID,
 		},
 		User: &pb.User{
@@ -626,10 +636,12 @@ func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, innerEv
 		Content:        string(content),
 		ConversationId: fmt.Sprintf("%s-%s", channelID, threadTS),
 		PlatformContext: &pb.PlatformContext{
-			ChannelId: channelID,
-			ThreadId:  threadTS,
-			Trigger:   pb.PlatformContext_TRIGGER_DIRECT,
-			BotUserId: a.botUserID,
+			MessageId:    threadTS,
+			ChannelId:    channelID,
+			ThreadId:     threadTS,
+			ThreadRootId: threadTS,
+			EventKind: pb.PlatformContext_EVENT_KIND_ASSISTANT_THREAD_STARTED,
+			BotUserId:    a.botUserID,
 		},
 		User: &pb.User{Id: userID},
 	}
@@ -686,11 +698,12 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 		Content:        text,
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
-			MessageId: ev.TimeStamp,
-			ChannelId: ev.Channel,
-			ThreadId:  threadID,
-			Trigger:   pb.PlatformContext_TRIGGER_DIRECT,
-			BotUserId: a.botUserID,
+			MessageId:    ev.TimeStamp,
+			ChannelId:    ev.Channel,
+			ThreadId:     threadID,
+			ThreadRootId: ev.ThreadTimeStamp, // empty for top-level mentions
+			EventKind: pb.PlatformContext_EVENT_KIND_APP_MENTION,
+			BotUserId:    a.botUserID,
 		},
 		User: &pb.User{
 			Id: ev.User,
@@ -722,13 +735,18 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 
 	metrics.SlackEvents.WithLabelValues("reaction").Inc()
 
-	originalText := a.fetchMessageText(ctx, ev.Item.Channel, ev.Item.Timestamp)
-	if originalText == "" {
+	originalText, parentThreadTs, ok := a.fetchReactionMessage(ctx, ev.Item.Channel, ev.Item.Timestamp)
+	if !ok || originalText == "" {
 		slog.Debug("[Slack] Could not fetch original message for reaction, skipping")
 		return
 	}
 
-	threadID := ev.Item.Timestamp
+	// Reply target: if the reacted message is already in a thread, post into
+	// that thread; otherwise the agent's reply opens a new thread under it.
+	threadID := parentThreadTs
+	if threadID == "" {
+		threadID = ev.Item.Timestamp
+	}
 	conversationID := fmt.Sprintf("%s-%s", ev.Item.Channel, threadID)
 
 	content := fmt.Sprintf("[reaction :%s: added by <@%s> on message]\n%s",
@@ -741,11 +759,12 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 		Content:        content,
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
-			MessageId: ev.Item.Timestamp,
-			ChannelId: ev.Item.Channel,
-			ThreadId:  threadID,
-			Trigger:   pb.PlatformContext_TRIGGER_DIRECT,
-			BotUserId: a.botUserID,
+			MessageId:    ev.Item.Timestamp,
+			ChannelId:    ev.Item.Channel,
+			ThreadId:     threadID,
+			ThreadRootId: parentThreadTs, // empty when reaction is on a top-level message
+			EventKind: pb.PlatformContext_EVENT_KIND_REACTION,
+			BotUserId:    a.botUserID,
 		},
 		User: &pb.User{
 			Id: ev.User,
@@ -760,24 +779,33 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 	}
 }
 
-// fetchMessageText retrieves the text of a single message by channel + timestamp.
-func (a *SlackAdapter) fetchMessageText(ctx context.Context, channelID, timestamp string) string {
+// fetchReactionMessage loads the reacted message text and (when present) its
+// parent thread timestamp. The parent thread ts is what lets handleReactionAdded
+// populate PlatformContext.ThreadRootId so the agent can distinguish a reaction
+// on a top-level message from a reaction on a reply in an existing thread.
+func (a *SlackAdapter) fetchReactionMessage(ctx context.Context, channelID, timestamp string) (text string, parentThreadTs string, ok bool) {
 	msgs, _, _, err := a.client.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
 		ChannelID: channelID,
 		Timestamp: timestamp,
 		Limit:     1,
-		Inclusive:  true,
+		Inclusive: true,
 	})
 	if err != nil {
 		slog.Error(fmt.Sprintf("[Slack] Failed to fetch message %s in %s: %v", timestamp, channelID, err))
-		return ""
+		return "", "", false
 	}
 	for _, m := range msgs {
 		if m.Timestamp == timestamp {
-			return m.Text
+			// ThreadTimestamp is set on thread replies; on a thread root it
+			// equals the message's own ts, which is not "in an existing
+			// thread" — so suppress that case.
+			if m.ThreadTimestamp != "" && m.ThreadTimestamp != m.Timestamp {
+				parentThreadTs = m.ThreadTimestamp
+			}
+			return m.Text, parentThreadTs, true
 		}
 	}
-	return ""
+	return "", "", false
 }
 
 // sendErrorMessage posts user-facing errors to Slack. Infrastructure errors

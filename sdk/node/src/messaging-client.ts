@@ -24,13 +24,20 @@ export interface User {
 }
 
 /**
- * How a message reached the adapter. Lets agents distinguish between
- * explicit invocations and passive observation.
+ * Fine-grained source-event taxonomy. Agents can branch on this without
+ * inspecting content (e.g. `EVENT_KIND_APP_MENTION` detects "@-mention"
+ * even though the adapter strips the `<@bot>` token from text).
  */
-export type PlatformContextTrigger =
-  | 'TRIGGER_UNSPECIFIED' // Treat as direct (legacy default)
-  | 'TRIGGER_DIRECT'      // User addressed the bot (DM, @-mention, thread reply, button, reaction)
-  | 'TRIGGER_OBSERVED';   // Passive channel observation
+export type PlatformContextEventKind =
+  | 'EVENT_KIND_UNSPECIFIED'
+  | 'EVENT_KIND_DM'                       // 1:1 / private chat (Slack DM, web chat session)
+  | 'EVENT_KIND_APP_MENTION'              // bot was @-mentioned (channel or thread)
+  | 'EVENT_KIND_THREAD_REPLY'             // reply in a channel thread, no @-mention
+  | 'EVENT_KIND_OBSERVED'                 // observe-channel forward
+  | 'EVENT_KIND_REACTION'
+  | 'EVENT_KIND_BUTTON_CLICK'
+  | 'EVENT_KIND_SLASH_COMMAND'
+  | 'EVENT_KIND_ASSISTANT_THREAD_STARTED';
 
 export interface PlatformContext {
   messageId: string;
@@ -39,14 +46,21 @@ export interface PlatformContext {
   channelName?: string;
   workspaceId?: string;
   platformData?: { [key: string]: string };
-  /** See PlatformContextTrigger. Adapters set this on every outbound message. */
-  trigger?: PlatformContextTrigger;
   /**
    * The adapter's own bot/app user ID in the source platform (e.g. Slack `U…`).
    * Adapters strip the bot's @-mention from content before forwarding; this
    * field lets the agent still detect "I was mentioned" in any path.
    */
   botUserId?: string;
+  /** See PlatformContextEventKind. */
+  eventKind?: PlatformContextEventKind;
+  /**
+   * Parent thread root timestamp when this message is a reply *inside* an
+   * existing thread. Empty for top-level messages. Distinct from `threadId`,
+   * which is the agent's reply target (set even for top-level messages whose
+   * response should open a new thread).
+   */
+  threadRootId?: string;
 }
 
 export interface Attachment {
