@@ -1,44 +1,46 @@
 name: Build Latest
 
-# Manual promotion of an existing astropods/messaging:<sha> multi-arch
-# manifest (built by the Build Next workflow on every push to main)
-# to the stable :latest tag.
-#
-# No rebuild happens here — docker buildx imagetools create is a pure
-# manifest retag, so :latest is byte-identical to the :next or :<sha>
-# image that was already in production.
+# Manual rebuild from the dispatched ref, producing the stable
+# astropods/messaging:latest multi-arch image (and a :<sha> tag for
+# traceability). Use the "Use workflow from" picker to select the ref
+# (typically main).
 
 on:
   workflow_dispatch:
-    inputs:
-      sha:
-        description: "Source commit SHA to promote (defaults to HEAD of main)"
-        required: false
 
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
 env:
-  IMAGE: astropods/messaging
+  SERVICE: messaging
 
 jobs:
-  promote:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  build:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
     permissions:
       contents: read
 
     steps:
-      - name: Resolve source SHA
-        id: resolve
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Prepare
         run: |
-          SHA="${{ inputs.sha }}"
-          if [ -z "$SHA" ]; then
-            SHA="${{ github.sha }}"
-          fi
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "Promoting $IMAGE:$SHA → $IMAGE:latest"
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+          echo "VERSION=$(cat VERSION)" >> $GITHUB_ENV
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -49,14 +51,65 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Verify source image exists
-        run: |
-          docker buildx imagetools inspect "$IMAGE:${{ steps.resolve.outputs.sha }}" >/dev/null \
-            || (echo "::error::Source image $IMAGE:${{ steps.resolve.outputs.sha }} not found on Docker Hub. Run the Build Next workflow against this commit first." && exit 1)
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=astropods/${{ env.SERVICE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ env.SERVICE }}-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ env.SERVICE }}-${{ env.PLATFORM_PAIR }}
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
 
-      - name: Promote to :latest
+      - name: Export digest
         run: |
+          mkdir -p ${{ runner.temp }}/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digests
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create manifest and push
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          IMAGE="astropods/${{ env.SERVICE }}"
           docker buildx imagetools create \
             -t "$IMAGE:latest" \
-            "$IMAGE:${{ steps.resolve.outputs.sha }}"
-          echo "::notice::Promoted $IMAGE:${{ steps.resolve.outputs.sha }} → $IMAGE:latest"
+            -t "$IMAGE:${{ github.sha }}" \
+            $(printf "$IMAGE@sha256:%s " *)
+          echo "::notice::Docker Hub: $IMAGE:latest ($IMAGE:${{ github.sha }})"
