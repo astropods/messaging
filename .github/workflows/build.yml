@@ -1,4 +1,4 @@
-name: Build & Push
+name: Build Next
 
 # `next` = bleeding-edge image built from every push to main.
 # Manual dispatch remains available for ad-hoc rebuilds without a commit.
