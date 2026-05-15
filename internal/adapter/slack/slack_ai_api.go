@@ -21,15 +21,19 @@ const (
 type SlackAIClient struct {
 	botToken   string
 	devMode    bool
+	agentID    string
 	httpClient *http.Client
 	baseURL    string // defaults to slackAPIBaseURL
 }
 
-// NewSlackAIClient creates a new Slack AI API client
-func NewSlackAIClient(botToken string, devMode bool) *SlackAIClient {
+// NewSlackAIClient creates a new Slack AI API client. agentID is the value of
+// ASTRO_AGENT_ID at startup (may be empty) and is rendered in the message
+// footer so users can identify which agent replied.
+func NewSlackAIClient(botToken string, devMode bool, agentID string) *SlackAIClient {
 	return &SlackAIClient{
 		botToken:   botToken,
 		devMode:    devMode,
+		agentID:    agentID,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		baseURL:    slackAPIBaseURL,
 	}
@@ -141,13 +145,13 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 		})
 	}
 
-	if c.devMode {
+	if footer := buildFooterText(c.devMode, c.agentID); footer != "" {
 		blocks = append(blocks, map[string]interface{}{
 			"type": "context",
 			"elements": []map[string]interface{}{
 				{
 					"type": "mrkdwn",
-					"text": ":test_tube: Sent from dev environment",
+					"text": footer,
 				},
 			},
 		})
@@ -221,6 +225,24 @@ var (
 	reTableRow     = regexp.MustCompile(`(?m)^\|(.+)\|$`)
 	reTableSep     = regexp.MustCompile(`(?m)^\|[-| :]+\|$`)
 )
+
+// buildFooterText returns the context-block footer text for a Slack message,
+// or "" if no footer should be rendered. In dev mode the message is flagged
+// explicitly; outside dev mode the footer only appears when agentID is
+// set so agents identify themselves to the user.
+func buildFooterText(devMode bool, agentID string) string {
+	if devMode {
+		footer := ":test_tube: Sent from dev environment"
+		if agentID != "" {
+			footer += fmt.Sprintf(" — Agent ID: `%s`", agentID)
+		}
+		return footer
+	}
+	if agentID != "" {
+		return fmt.Sprintf("Agent ID: `%s`", agentID)
+	}
+	return ""
+}
 
 // markdownToMrkdwn converts standard Markdown to Slack mrkdwn.
 // Handles links, bold, headings, and tables (rendered as code blocks).
