@@ -157,8 +157,11 @@ func TestHandleMessage_ObserveChannel_TopLevelForwarded(t *testing.T) {
 	if msg.Content != "hello everyone" {
 		t.Errorf("expected raw text, got %q", msg.Content)
 	}
-	if msg.PlatformContext.Trigger != pb.PlatformContext_TRIGGER_OBSERVED {
-		t.Errorf("expected Trigger=TRIGGER_OBSERVED, got %v", msg.PlatformContext.Trigger)
+	if msg.PlatformContext.EventKind != pb.PlatformContext_EVENT_KIND_OBSERVED {
+		t.Errorf("expected EventKind=EVENT_KIND_OBSERVED, got %v", msg.PlatformContext.EventKind)
+	}
+	if msg.PlatformContext.ThreadRootId != "" {
+		t.Errorf("expected ThreadRootId empty for top-level observed, got %q", msg.PlatformContext.ThreadRootId)
 	}
 	if msg.PlatformContext.BotUserId != "UBOTTEST" {
 		t.Errorf("expected BotUserId='UBOTTEST', got %q", msg.PlatformContext.BotUserId)
@@ -232,12 +235,56 @@ func TestHandleMessage_ChannelThreadReplyProcessed(t *testing.T) {
 	if msg.Content != "thread reply without mention" {
 		t.Errorf("expected content 'thread reply without mention', got %q", msg.Content)
 	}
-	if msg.PlatformContext.Trigger != pb.PlatformContext_TRIGGER_DIRECT {
-		t.Errorf("expected Trigger=TRIGGER_DIRECT for thread reply, got %v", msg.PlatformContext.Trigger)
+	if msg.PlatformContext.EventKind != pb.PlatformContext_EVENT_KIND_THREAD_REPLY {
+		t.Errorf("expected EventKind=EVENT_KIND_THREAD_REPLY, got %v", msg.PlatformContext.EventKind)
+	}
+	if msg.PlatformContext.ThreadRootId != "1234567890.000001" {
+		t.Errorf("expected ThreadRootId='1234567890.000001', got %q", msg.PlatformContext.ThreadRootId)
 	}
 	if msg.PlatformContext.BotUserId != "UBOTTEST" {
 		t.Errorf("expected BotUserId='UBOTTEST', got %q", msg.PlatformContext.BotUserId)
 	}
+}
+
+// EVENT_KIND_DM is set on every direct-message ingress (top-level and thread).
+// ThreadRootId is empty on a top-level DM, non-empty on a reply.
+func TestHandleMessage_DM_EventKindAndThreadRoot(t *testing.T) {
+	t.Run("top-level", func(t *testing.T) {
+		a, handler := newTestAdapter()
+		ev := &slackevents.MessageEvent{
+			Channel: "D123", User: "U1", Text: "hi", TimeStamp: "11.000001",
+		}
+		a.handleMessage(t.Context(), ev, "")
+		if handler.count() != 1 {
+			t.Fatalf("expected forward, got %d", handler.count())
+		}
+		pc := handler.last().PlatformContext
+		if pc.EventKind != pb.PlatformContext_EVENT_KIND_DM {
+			t.Errorf("expected EVENT_KIND_DM, got %v", pc.EventKind)
+		}
+		if pc.ThreadRootId != "" {
+			t.Errorf("expected empty ThreadRootId for top-level DM, got %q", pc.ThreadRootId)
+		}
+	})
+
+	t.Run("thread reply", func(t *testing.T) {
+		a, handler := newTestAdapter()
+		ev := &slackevents.MessageEvent{
+			Channel: "D123", User: "U1", Text: "follow-up",
+			TimeStamp: "12.000001", ThreadTimeStamp: "11.000001",
+		}
+		a.handleMessage(t.Context(), ev, "")
+		if handler.count() != 1 {
+			t.Fatalf("expected forward, got %d", handler.count())
+		}
+		pc := handler.last().PlatformContext
+		if pc.EventKind != pb.PlatformContext_EVENT_KIND_DM {
+			t.Errorf("expected EVENT_KIND_DM, got %v", pc.EventKind)
+		}
+		if pc.ThreadRootId != "11.000001" {
+			t.Errorf("expected ThreadRootId='11.000001', got %q", pc.ThreadRootId)
+		}
+	})
 }
 
 func TestHandleMessage_BotMessageIgnored(t *testing.T) {

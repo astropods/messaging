@@ -22,56 +22,76 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// How the message reached the adapter. Lets agents distinguish between
-// explicit invocations (user addressed the bot — DM, @-mention, thread
-// reply, button click) and passive observation (the bot is watching a
-// channel without being addressed).
-type PlatformContext_Trigger int32
+// EventKind is the fine-grained source event that produced this message.
+// Trigger answers "did the user address the bot?" (coarse: DIRECT/OBSERVED);
+// EventKind answers "how?" so the agent can branch on app-mention vs
+// thread-reply vs reaction vs button without inspecting content. Platform-
+// specific values (REACTION, BUTTON_CLICK, SLASH_COMMAND, ASSISTANT_THREAD_STARTED)
+// are no-ops on platforms that don't have the concept.
+type PlatformContext_EventKind int32
 
 const (
-	PlatformContext_TRIGGER_UNSPECIFIED PlatformContext_Trigger = 0 // Treat as direct (legacy default)
-	PlatformContext_TRIGGER_DIRECT      PlatformContext_Trigger = 1 // User addressed the bot
-	PlatformContext_TRIGGER_OBSERVED    PlatformContext_Trigger = 2 // Passive channel observation
+	PlatformContext_EVENT_KIND_UNSPECIFIED              PlatformContext_EventKind = 0
+	PlatformContext_EVENT_KIND_DM                       PlatformContext_EventKind = 1 // 1:1 / private chat (DM, web chat session)
+	PlatformContext_EVENT_KIND_APP_MENTION              PlatformContext_EventKind = 2 // bot was @-mentioned (channel or thread)
+	PlatformContext_EVENT_KIND_THREAD_REPLY             PlatformContext_EventKind = 3 // reply in a channel thread, no @-mention
+	PlatformContext_EVENT_KIND_OBSERVED                 PlatformContext_EventKind = 4 // observe-channel forward
+	PlatformContext_EVENT_KIND_REACTION                 PlatformContext_EventKind = 5
+	PlatformContext_EVENT_KIND_BUTTON_CLICK             PlatformContext_EventKind = 6
+	PlatformContext_EVENT_KIND_SLASH_COMMAND            PlatformContext_EventKind = 7
+	PlatformContext_EVENT_KIND_ASSISTANT_THREAD_STARTED PlatformContext_EventKind = 8
 )
 
-// Enum value maps for PlatformContext_Trigger.
+// Enum value maps for PlatformContext_EventKind.
 var (
-	PlatformContext_Trigger_name = map[int32]string{
-		0: "TRIGGER_UNSPECIFIED",
-		1: "TRIGGER_DIRECT",
-		2: "TRIGGER_OBSERVED",
+	PlatformContext_EventKind_name = map[int32]string{
+		0: "EVENT_KIND_UNSPECIFIED",
+		1: "EVENT_KIND_DM",
+		2: "EVENT_KIND_APP_MENTION",
+		3: "EVENT_KIND_THREAD_REPLY",
+		4: "EVENT_KIND_OBSERVED",
+		5: "EVENT_KIND_REACTION",
+		6: "EVENT_KIND_BUTTON_CLICK",
+		7: "EVENT_KIND_SLASH_COMMAND",
+		8: "EVENT_KIND_ASSISTANT_THREAD_STARTED",
 	}
-	PlatformContext_Trigger_value = map[string]int32{
-		"TRIGGER_UNSPECIFIED": 0,
-		"TRIGGER_DIRECT":      1,
-		"TRIGGER_OBSERVED":    2,
+	PlatformContext_EventKind_value = map[string]int32{
+		"EVENT_KIND_UNSPECIFIED":              0,
+		"EVENT_KIND_DM":                       1,
+		"EVENT_KIND_APP_MENTION":              2,
+		"EVENT_KIND_THREAD_REPLY":             3,
+		"EVENT_KIND_OBSERVED":                 4,
+		"EVENT_KIND_REACTION":                 5,
+		"EVENT_KIND_BUTTON_CLICK":             6,
+		"EVENT_KIND_SLASH_COMMAND":            7,
+		"EVENT_KIND_ASSISTANT_THREAD_STARTED": 8,
 	}
 )
 
-func (x PlatformContext_Trigger) Enum() *PlatformContext_Trigger {
-	p := new(PlatformContext_Trigger)
+func (x PlatformContext_EventKind) Enum() *PlatformContext_EventKind {
+	p := new(PlatformContext_EventKind)
 	*p = x
 	return p
 }
 
-func (x PlatformContext_Trigger) String() string {
+func (x PlatformContext_EventKind) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (PlatformContext_Trigger) Descriptor() protoreflect.EnumDescriptor {
+func (PlatformContext_EventKind) Descriptor() protoreflect.EnumDescriptor {
 	return file_astro_messaging_v1_message_proto_enumTypes[0].Descriptor()
 }
 
-func (PlatformContext_Trigger) Type() protoreflect.EnumType {
+func (PlatformContext_EventKind) Type() protoreflect.EnumType {
 	return &file_astro_messaging_v1_message_proto_enumTypes[0]
 }
 
-func (x PlatformContext_Trigger) Number() protoreflect.EnumNumber {
+func (x PlatformContext_EventKind) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use PlatformContext_Trigger.Descriptor instead.
-func (PlatformContext_Trigger) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use PlatformContext_EventKind.Descriptor instead.
+func (PlatformContext_EventKind) EnumDescriptor() ([]byte, []int) {
 	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{1, 0}
 }
 
@@ -253,12 +273,18 @@ type PlatformContext struct {
 	WorkspaceId string `protobuf:"bytes,5,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"` // Slack workspace, Discord guild, etc.
 	// Platform-specific data
 	// Examples: Slack ts, Discord snowflake, Teams activity ID
-	PlatformData map[string]string       `protobuf:"bytes,10,rep,name=platform_data,json=platformData,proto3" json:"platform_data,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Trigger      PlatformContext_Trigger `protobuf:"varint,11,opt,name=trigger,proto3,enum=astro.messaging.v1.PlatformContext_Trigger" json:"trigger,omitempty"`
+	PlatformData map[string]string `protobuf:"bytes,10,rep,name=platform_data,json=platformData,proto3" json:"platform_data,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// The adapter's own bot/app user ID in the source platform (Slack U…, etc.).
 	// Adapters strip the bot's @-mention from content before forwarding; this
 	// field lets the agent still detect "I was mentioned" in any path.
-	BotUserId     string `protobuf:"bytes,12,opt,name=bot_user_id,json=botUserId,proto3" json:"bot_user_id,omitempty"`
+	BotUserId string                    `protobuf:"bytes,12,opt,name=bot_user_id,json=botUserId,proto3" json:"bot_user_id,omitempty"`
+	EventKind PlatformContext_EventKind `protobuf:"varint,13,opt,name=event_kind,json=eventKind,proto3,enum=astro.messaging.v1.PlatformContext_EventKind" json:"event_kind,omitempty"`
+	// ThreadRootId is the parent thread's root timestamp when this message is
+	// a reply in an existing thread; empty for top-level messages. Use this to
+	// tell "in a thread or not" — distinct from `thread_id` which is the agent's
+	// reply target (also populated for top-level invocations where the agent's
+	// response should open a new thread under the user's message).
+	ThreadRootId  string `protobuf:"bytes,14,opt,name=thread_root_id,json=threadRootId,proto3" json:"thread_root_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -335,16 +361,23 @@ func (x *PlatformContext) GetPlatformData() map[string]string {
 	return nil
 }
 
-func (x *PlatformContext) GetTrigger() PlatformContext_Trigger {
-	if x != nil {
-		return x.Trigger
-	}
-	return PlatformContext_TRIGGER_UNSPECIFIED
-}
-
 func (x *PlatformContext) GetBotUserId() string {
 	if x != nil {
 		return x.BotUserId
+	}
+	return ""
+}
+
+func (x *PlatformContext) GetEventKind() PlatformContext_EventKind {
+	if x != nil {
+		return x.EventKind
+	}
+	return PlatformContext_EVENT_KIND_UNSPECIFIED
+}
+
+func (x *PlatformContext) GetThreadRootId() string {
+	if x != nil {
+		return x.ThreadRootId
 	}
 	return ""
 }
@@ -550,7 +583,7 @@ const file_astro_messaging_v1_message_proto_rawDesc = "" +
 	"\x04user\x18\x05 \x01(\v2\x18.astro.messaging.v1.UserR\x04user\x12\x18\n" +
 	"\acontent\x18\x06 \x01(\tR\acontent\x12@\n" +
 	"\vattachments\x18\a \x03(\v2\x1e.astro.messaging.v1.AttachmentR\vattachments\x12'\n" +
-	"\x0fconversation_id\x18\b \x01(\tR\x0econversationId\"\x84\x04\n" +
+	"\x0fconversation_id\x18\b \x01(\tR\x0econversationId\"\xef\x05\n" +
 	"\x0fPlatformContext\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1d\n" +
@@ -560,16 +593,24 @@ const file_astro_messaging_v1_message_proto_rawDesc = "" +
 	"\fchannel_name\x18\x04 \x01(\tR\vchannelName\x12!\n" +
 	"\fworkspace_id\x18\x05 \x01(\tR\vworkspaceId\x12Z\n" +
 	"\rplatform_data\x18\n" +
-	" \x03(\v25.astro.messaging.v1.PlatformContext.PlatformDataEntryR\fplatformData\x12E\n" +
-	"\atrigger\x18\v \x01(\x0e2+.astro.messaging.v1.PlatformContext.TriggerR\atrigger\x12\x1e\n" +
-	"\vbot_user_id\x18\f \x01(\tR\tbotUserId\x1a?\n" +
+	" \x03(\v25.astro.messaging.v1.PlatformContext.PlatformDataEntryR\fplatformData\x12\x1e\n" +
+	"\vbot_user_id\x18\f \x01(\tR\tbotUserId\x12L\n" +
+	"\n" +
+	"event_kind\x18\r \x01(\x0e2-.astro.messaging.v1.PlatformContext.EventKindR\teventKind\x12$\n" +
+	"\x0ethread_root_id\x18\x0e \x01(\tR\fthreadRootId\x1a?\n" +
 	"\x11PlatformDataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"L\n" +
-	"\aTrigger\x12\x17\n" +
-	"\x13TRIGGER_UNSPECIFIED\x10\x00\x12\x12\n" +
-	"\x0eTRIGGER_DIRECT\x10\x01\x12\x14\n" +
-	"\x10TRIGGER_OBSERVED\x10\x02\"\xe9\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x89\x02\n" +
+	"\tEventKind\x12\x1a\n" +
+	"\x16EVENT_KIND_UNSPECIFIED\x10\x00\x12\x11\n" +
+	"\rEVENT_KIND_DM\x10\x01\x12\x1a\n" +
+	"\x16EVENT_KIND_APP_MENTION\x10\x02\x12\x1b\n" +
+	"\x17EVENT_KIND_THREAD_REPLY\x10\x03\x12\x17\n" +
+	"\x13EVENT_KIND_OBSERVED\x10\x04\x12\x17\n" +
+	"\x13EVENT_KIND_REACTION\x10\x05\x12\x1b\n" +
+	"\x17EVENT_KIND_BUTTON_CLICK\x10\x06\x12\x1c\n" +
+	"\x18EVENT_KIND_SLASH_COMMAND\x10\a\x12'\n" +
+	"#EVENT_KIND_ASSISTANT_THREAD_STARTED\x10\b\"\xe9\x01\n" +
 	"\x04User\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
 	"\busername\x18\x02 \x01(\tR\busername\x12\x1d\n" +
@@ -615,15 +656,15 @@ func file_astro_messaging_v1_message_proto_rawDescGZIP() []byte {
 var file_astro_messaging_v1_message_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_astro_messaging_v1_message_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_astro_messaging_v1_message_proto_goTypes = []any{
-	(PlatformContext_Trigger)(0),  // 0: astro.messaging.v1.PlatformContext.Trigger
-	(Attachment_Type)(0),          // 1: astro.messaging.v1.Attachment.Type
-	(*Message)(nil),               // 2: astro.messaging.v1.Message
-	(*PlatformContext)(nil),       // 3: astro.messaging.v1.PlatformContext
-	(*User)(nil),                  // 4: astro.messaging.v1.User
-	(*Attachment)(nil),            // 5: astro.messaging.v1.Attachment
-	nil,                           // 6: astro.messaging.v1.PlatformContext.PlatformDataEntry
-	nil,                           // 7: astro.messaging.v1.User.UserDataEntry
-	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
+	(PlatformContext_EventKind)(0), // 0: astro.messaging.v1.PlatformContext.EventKind
+	(Attachment_Type)(0),           // 1: astro.messaging.v1.Attachment.Type
+	(*Message)(nil),                // 2: astro.messaging.v1.Message
+	(*PlatformContext)(nil),        // 3: astro.messaging.v1.PlatformContext
+	(*User)(nil),                   // 4: astro.messaging.v1.User
+	(*Attachment)(nil),             // 5: astro.messaging.v1.Attachment
+	nil,                            // 6: astro.messaging.v1.PlatformContext.PlatformDataEntry
+	nil,                            // 7: astro.messaging.v1.User.UserDataEntry
+	(*timestamppb.Timestamp)(nil),  // 8: google.protobuf.Timestamp
 }
 var file_astro_messaging_v1_message_proto_depIdxs = []int32{
 	8, // 0: astro.messaging.v1.Message.timestamp:type_name -> google.protobuf.Timestamp
@@ -631,7 +672,7 @@ var file_astro_messaging_v1_message_proto_depIdxs = []int32{
 	4, // 2: astro.messaging.v1.Message.user:type_name -> astro.messaging.v1.User
 	5, // 3: astro.messaging.v1.Message.attachments:type_name -> astro.messaging.v1.Attachment
 	6, // 4: astro.messaging.v1.PlatformContext.platform_data:type_name -> astro.messaging.v1.PlatformContext.PlatformDataEntry
-	0, // 5: astro.messaging.v1.PlatformContext.trigger:type_name -> astro.messaging.v1.PlatformContext.Trigger
+	0, // 5: astro.messaging.v1.PlatformContext.event_kind:type_name -> astro.messaging.v1.PlatformContext.EventKind
 	7, // 6: astro.messaging.v1.User.user_data:type_name -> astro.messaging.v1.User.UserDataEntry
 	1, // 7: astro.messaging.v1.Attachment.type:type_name -> astro.messaging.v1.Attachment.Type
 	8, // [8:8] is the sub-list for method output_type

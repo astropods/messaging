@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n astro/messaging/v1/message.proto\x12\x12\x61stro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x9c\x02\n\x07Message\x12\n\n\x02id\x18\x01 \x01(\t\x12-\n\ttimestamp\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x10\n\x08platform\x18\x03 \x01(\t\x12=\n\x10platform_context\x18\x04 \x01(\x0b\x32#.astro.messaging.v1.PlatformContext\x12&\n\x04user\x18\x05 \x01(\x0b\x32\x18.astro.messaging.v1.User\x12\x0f\n\x07\x63ontent\x18\x06 \x01(\t\x12\x33\n\x0b\x61ttachments\x18\x07 \x03(\x0b\x32\x1e.astro.messaging.v1.Attachment\x12\x17\n\x0f\x63onversation_id\x18\x08 \x01(\t\"\x9c\x03\n\x0fPlatformContext\x12\x12\n\nmessage_id\x18\x01 \x01(\t\x12\x12\n\nchannel_id\x18\x02 \x01(\t\x12\x11\n\tthread_id\x18\x03 \x01(\t\x12\x14\n\x0c\x63hannel_name\x18\x04 \x01(\t\x12\x14\n\x0cworkspace_id\x18\x05 \x01(\t\x12L\n\rplatform_data\x18\n \x03(\x0b\x32\x35.astro.messaging.v1.PlatformContext.PlatformDataEntry\x12<\n\x07trigger\x18\x0b \x01(\x0e\x32+.astro.messaging.v1.PlatformContext.Trigger\x12\x13\n\x0b\x62ot_user_id\x18\x0c \x01(\t\x1a\x33\n\x11PlatformDataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"L\n\x07Trigger\x12\x17\n\x13TRIGGER_UNSPECIFIED\x10\x00\x12\x12\n\x0eTRIGGER_DIRECT\x10\x01\x12\x14\n\x10TRIGGER_OBSERVED\x10\x02\"\xb3\x01\n\x04User\x12\n\n\x02id\x18\x01 \x01(\t\x12\x10\n\x08username\x18\x02 \x01(\t\x12\x12\n\navatar_url\x18\x03 \x01(\t\x12\r\n\x05\x65mail\x18\x04 \x01(\t\x12\x39\n\tuser_data\x18\x05 \x03(\x0b\x32&.astro.messaging.v1.User.UserDataEntry\x1a/\n\rUserDataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\x9b\x02\n\nAttachment\x12\x31\n\x04type\x18\x01 \x01(\x0e\x32#.astro.messaging.v1.Attachment.Type\x12\x0b\n\x03url\x18\x02 \x01(\t\x12\x10\n\x08\x66ilename\x18\x03 \x01(\t\x12\x12\n\nsize_bytes\x18\x04 \x01(\x03\x12\x11\n\tmime_type\x18\x05 \x01(\t\x12\r\n\x05title\x18\x06 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x07 \x01(\t\x12\r\n\x05width\x18\x08 \x01(\x05\x12\x0e\n\x06height\x18\t \x01(\x05\"Q\n\x04Type\x12\x14\n\x10TYPE_UNSPECIFIED\x10\x00\x12\t\n\x05IMAGE\x10\x01\x12\x08\n\x04\x46ILE\x10\x02\x12\t\n\x05VIDEO\x10\x03\x12\t\n\x05\x41UDIO\x10\x04\x12\x08\n\x04LINK\x10\x05\x42\x33Z1github.com/postman/astro/messaging/v1;messagingv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n astro/messaging/v1/message.proto\x12\x12\x61stro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x9c\x02\n\x07Message\x12\n\n\x02id\x18\x01 \x01(\t\x12-\n\ttimestamp\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x10\n\x08platform\x18\x03 \x01(\t\x12=\n\x10platform_context\x18\x04 \x01(\x0b\x32#.astro.messaging.v1.PlatformContext\x12&\n\x04user\x18\x05 \x01(\x0b\x32\x18.astro.messaging.v1.User\x12\x0f\n\x07\x63ontent\x18\x06 \x01(\t\x12\x33\n\x0b\x61ttachments\x18\x07 \x03(\x0b\x32\x1e.astro.messaging.v1.Attachment\x12\x17\n\x0f\x63onversation_id\x18\x08 \x01(\t\"\xf7\x04\n\x0fPlatformContext\x12\x12\n\nmessage_id\x18\x01 \x01(\t\x12\x12\n\nchannel_id\x18\x02 \x01(\t\x12\x11\n\tthread_id\x18\x03 \x01(\t\x12\x14\n\x0c\x63hannel_name\x18\x04 \x01(\t\x12\x14\n\x0cworkspace_id\x18\x05 \x01(\t\x12L\n\rplatform_data\x18\n \x03(\x0b\x32\x35.astro.messaging.v1.PlatformContext.PlatformDataEntry\x12\x13\n\x0b\x62ot_user_id\x18\x0c \x01(\t\x12\x41\n\nevent_kind\x18\r \x01(\x0e\x32-.astro.messaging.v1.PlatformContext.EventKind\x12\x16\n\x0ethread_root_id\x18\x0e \x01(\t\x1a\x33\n\x11PlatformDataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\x89\x02\n\tEventKind\x12\x1a\n\x16\x45VENT_KIND_UNSPECIFIED\x10\x00\x12\x11\n\rEVENT_KIND_DM\x10\x01\x12\x1a\n\x16\x45VENT_KIND_APP_MENTION\x10\x02\x12\x1b\n\x17\x45VENT_KIND_THREAD_REPLY\x10\x03\x12\x17\n\x13\x45VENT_KIND_OBSERVED\x10\x04\x12\x17\n\x13\x45VENT_KIND_REACTION\x10\x05\x12\x1b\n\x17\x45VENT_KIND_BUTTON_CLICK\x10\x06\x12\x1c\n\x18\x45VENT_KIND_SLASH_COMMAND\x10\x07\x12\'\n#EVENT_KIND_ASSISTANT_THREAD_STARTED\x10\x08\"\xb3\x01\n\x04User\x12\n\n\x02id\x18\x01 \x01(\t\x12\x10\n\x08username\x18\x02 \x01(\t\x12\x12\n\navatar_url\x18\x03 \x01(\t\x12\r\n\x05\x65mail\x18\x04 \x01(\t\x12\x39\n\tuser_data\x18\x05 \x03(\x0b\x32&.astro.messaging.v1.User.UserDataEntry\x1a/\n\rUserDataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\x9b\x02\n\nAttachment\x12\x31\n\x04type\x18\x01 \x01(\x0e\x32#.astro.messaging.v1.Attachment.Type\x12\x0b\n\x03url\x18\x02 \x01(\t\x12\x10\n\x08\x66ilename\x18\x03 \x01(\t\x12\x12\n\nsize_bytes\x18\x04 \x01(\x03\x12\x11\n\tmime_type\x18\x05 \x01(\t\x12\r\n\x05title\x18\x06 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x07 \x01(\t\x12\r\n\x05width\x18\x08 \x01(\x05\x12\x0e\n\x06height\x18\t \x01(\x05\"Q\n\x04Type\x12\x14\n\x10TYPE_UNSPECIFIED\x10\x00\x12\t\n\x05IMAGE\x10\x01\x12\x08\n\x04\x46ILE\x10\x02\x12\t\n\x05VIDEO\x10\x03\x12\t\n\x05\x41UDIO\x10\x04\x12\x08\n\x04LINK\x10\x05\x42\x33Z1github.com/postman/astro/messaging/v1;messagingv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -40,17 +40,17 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_MESSAGE']._serialized_start=90
   _globals['_MESSAGE']._serialized_end=374
   _globals['_PLATFORMCONTEXT']._serialized_start=377
-  _globals['_PLATFORMCONTEXT']._serialized_end=789
-  _globals['_PLATFORMCONTEXT_PLATFORMDATAENTRY']._serialized_start=660
-  _globals['_PLATFORMCONTEXT_PLATFORMDATAENTRY']._serialized_end=711
-  _globals['_PLATFORMCONTEXT_TRIGGER']._serialized_start=713
-  _globals['_PLATFORMCONTEXT_TRIGGER']._serialized_end=789
-  _globals['_USER']._serialized_start=792
-  _globals['_USER']._serialized_end=971
-  _globals['_USER_USERDATAENTRY']._serialized_start=924
-  _globals['_USER_USERDATAENTRY']._serialized_end=971
-  _globals['_ATTACHMENT']._serialized_start=974
-  _globals['_ATTACHMENT']._serialized_end=1257
-  _globals['_ATTACHMENT_TYPE']._serialized_start=1176
-  _globals['_ATTACHMENT_TYPE']._serialized_end=1257
+  _globals['_PLATFORMCONTEXT']._serialized_end=1008
+  _globals['_PLATFORMCONTEXT_PLATFORMDATAENTRY']._serialized_start=689
+  _globals['_PLATFORMCONTEXT_PLATFORMDATAENTRY']._serialized_end=740
+  _globals['_PLATFORMCONTEXT_EVENTKIND']._serialized_start=743
+  _globals['_PLATFORMCONTEXT_EVENTKIND']._serialized_end=1008
+  _globals['_USER']._serialized_start=1011
+  _globals['_USER']._serialized_end=1190
+  _globals['_USER_USERDATAENTRY']._serialized_start=1143
+  _globals['_USER_USERDATAENTRY']._serialized_end=1190
+  _globals['_ATTACHMENT']._serialized_start=1193
+  _globals['_ATTACHMENT']._serialized_end=1476
+  _globals['_ATTACHMENT_TYPE']._serialized_start=1395
+  _globals['_ATTACHMENT_TYPE']._serialized_end=1476
 # @@protoc_insertion_point(module_scope)
