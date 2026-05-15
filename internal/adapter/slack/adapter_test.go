@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/metrics"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -585,9 +586,9 @@ type errAuthorizer struct {
 	err   error
 }
 
-func (e *errAuthorizer) Allowed(_ context.Context, _, _, _, _ string) (bool, error) {
+func (e *errAuthorizer) Authorize(_ context.Context, _, _, _, _ string) (authz.Result, error) {
 	e.calls++
-	return false, e.err
+	return authz.Result{}, e.err
 }
 
 // dispatch must return errAuthzUnavailable on authz transport error. The
@@ -615,9 +616,75 @@ func TestDispatch_AuthzTransportError_ReturnsUnavailableSentinel(t *testing.T) {
 // denyAuthorizer always returns allowed=false with no error.
 type denyAuthorizer struct{ calls int }
 
-func (d *denyAuthorizer) Allowed(_ context.Context, _, _, _, _ string) (bool, error) {
+func (d *denyAuthorizer) Authorize(_ context.Context, _, _, _, _ string) (authz.Result, error) {
 	d.calls++
-	return false, nil
+	return authz.Result{}, nil
+}
+
+// allowAuthorizer always allows and returns the configured WorkOS user_id.
+// Mirrors the server's response shape for a slack identity with a linked
+// WorkOS user, so we can pin down the dispatch-side rewrite behavior.
+type allowAuthorizer struct {
+	userID string
+	calls  int
+}
+
+func (a *allowAuthorizer) Authorize(_ context.Context, _, _, _, _ string) (authz.Result, error) {
+	a.calls++
+	return authz.Result{Allowed: true, UserID: a.userID}, nil
+}
+
+// When the server returns a resolved WorkOS user_id, dispatch rewrites
+// msg.User.Id to that canonical ID and preserves the raw slack id on
+// platform_data["slack_user_id"]. Downstream agents then see the same
+// identity shape as web traffic.
+func TestDispatch_RewritesUserIDToWorkOSUser(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.SetAuthorizer(&allowAuthorizer{userID: "user_workos_42"})
+
+	msg := &pb.Message{
+		User:            &pb.User{Id: "U123"},
+		PlatformContext: &pb.PlatformContext{ChannelId: "C1"},
+	}
+
+	if err := a.dispatch(t.Context(), msg, "T1"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if msg.User.Id != "user_workos_42" {
+		t.Errorf("msg.User.Id: got %q, want user_workos_42", msg.User.Id)
+	}
+	if got := msg.PlatformContext.PlatformData["slack_user_id"]; got != "U123" {
+		t.Errorf("platform_data[slack_user_id]: got %q, want U123", got)
+	}
+	if handler.count() != 1 {
+		t.Errorf("msgHandler should be invoked once; got %d", handler.count())
+	}
+}
+
+// When the server doesn't return a resolved user_id (unmapped slack user
+// allowed via org/anyone grant), msg.User.Id stays as the raw slack id —
+// that's the only identity we have. No platform_data shim is added.
+func TestDispatch_NoResolvedUserIDLeavesMsgUntouched(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.SetAuthorizer(&allowAuthorizer{userID: ""})
+
+	msg := &pb.Message{
+		User:            &pb.User{Id: "U123"},
+		PlatformContext: &pb.PlatformContext{ChannelId: "C1"},
+	}
+
+	if err := a.dispatch(t.Context(), msg, "T1"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if msg.User.Id != "U123" {
+		t.Errorf("msg.User.Id should not change when no resolved user_id; got %q", msg.User.Id)
+	}
+	if _, present := msg.PlatformContext.PlatformData["slack_user_id"]; present {
+		t.Error("platform_data[slack_user_id] should not be set when no rewrite happens")
+	}
+	if handler.count() != 1 {
+		t.Errorf("msgHandler should be invoked once; got %d", handler.count())
+	}
 }
 
 func TestDispatch_AuthzDenied_ReturnsDeniedSentinel(t *testing.T) {

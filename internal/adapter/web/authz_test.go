@@ -29,9 +29,9 @@ import (
 // these tests pin down.
 type denyAuthorizer struct{ calls int }
 
-func (d *denyAuthorizer) Allowed(_ context.Context, _, _, _, _ string) (bool, error) {
+func (d *denyAuthorizer) Authorize(_ context.Context, _, _, _, _ string) (authz.Result, error) {
 	d.calls++
-	return false, nil
+	return authz.Result{}, nil
 }
 
 var _ authz.Authorizer = (*denyAuthorizer)(nil)
