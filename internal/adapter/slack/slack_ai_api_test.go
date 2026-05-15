@@ -317,6 +317,92 @@ func TestSlackAIClient_PostMessageWithFeedback_DevMode(t *testing.T) {
 	}
 }
 
+// firstContextFooter returns the mrkdwn text of the first context block
+// found in the captured Slack payload, or "" if none.
+func firstContextFooter(t *testing.T, capturedBody map[string]any) string {
+	t.Helper()
+	blocks, ok := capturedBody["blocks"].([]any)
+	if !ok {
+		return ""
+	}
+	for _, b := range blocks {
+		block, ok := b.(map[string]any)
+		if !ok || block["type"] != "context" {
+			continue
+		}
+		elements, ok := block["elements"].([]any)
+		if !ok || len(elements) == 0 {
+			continue
+		}
+		elem, ok := elements[0].(map[string]any)
+		if !ok {
+			continue
+		}
+		if text, ok := elem["text"].(string); ok {
+			return text
+		}
+	}
+	return ""
+}
+
+func TestSlackAIClient_PostMessageWithFeedback_DevMode_WithAgentID(t *testing.T) {
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "9999.000001"})
+	}))
+	defer server.Close()
+
+	client := &SlackAIClient{
+		botToken:   "xoxb-test-token",
+		devMode:    true,
+		agentID:    "agent-xyz-123",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	text := firstContextFooter(t, capturedBody)
+	if !strings.Contains(text, "dev environment") || !strings.Contains(text, "agent-xyz-123") {
+		t.Errorf("expected dev footer to include agent ID, got %q", text)
+	}
+}
+
+func TestSlackAIClient_PostMessageWithFeedback_NoDevMode_WithAgentID(t *testing.T) {
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "9999.000001"})
+	}))
+	defer server.Close()
+
+	client := &SlackAIClient{
+		botToken:   "xoxb-test-token",
+		agentID:    "agent-xyz-123",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	text := firstContextFooter(t, capturedBody)
+	if !strings.Contains(text, "Agent ID:") || !strings.Contains(text, "agent-xyz-123") {
+		t.Errorf("expected non-dev footer to be 'Agent ID: <id>', got %q", text)
+	}
+	if strings.Contains(text, "dev environment") {
+		t.Errorf("non-dev footer should not mention dev environment, got %q", text)
+	}
+}
+
 func TestSlackAIClient_PostMessageWithFeedback_NoDevMode(t *testing.T) {
 	var capturedBody map[string]any
 	client, cleanup := newTestAIClient(func(w http.ResponseWriter, r *http.Request) {
@@ -707,12 +793,15 @@ func TestSplitIntoChunks_LeadingNewline(t *testing.T) {
 // --- Tests for NewSlackAIClient ---
 
 func TestNewSlackAIClient_Defaults(t *testing.T) {
-	client := NewSlackAIClient("xoxb-my-token", false)
+	client := NewSlackAIClient("xoxb-my-token", false, "agent-9")
 	if client.botToken != "xoxb-my-token" {
 		t.Errorf("expected botToken 'xoxb-my-token', got %q", client.botToken)
 	}
 	if client.devMode {
 		t.Error("expected devMode to be false")
+	}
+	if client.agentID != "agent-9" {
+		t.Errorf("expected agentID 'agent-9', got %q", client.agentID)
 	}
 	if client.baseURL != slackAPIBaseURL {
 		t.Errorf("expected baseURL %q, got %q", slackAPIBaseURL, client.baseURL)

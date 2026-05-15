@@ -71,6 +71,9 @@ type Config struct {
 	WebhookURL          string
 	AutoThread          bool
 	DevMode             bool // When true, messages include a "sent from dev" context
+	// AgentID is the value of ASTRO_AGENT_ID at startup. When non-empty it is
+	// rendered in the Slack message footer so users know which agent replied.
+	AgentID             string
 	RateLimit           RateLimitConfig
 	ActionableReactions []string // Emoji names forwarded to the agent; empty means no reactions
 	AllowedChannelIDs   []string // Channel IDs that may use the app (empty = allow all)

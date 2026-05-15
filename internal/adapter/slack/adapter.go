@@ -165,7 +165,7 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 		config.RateLimit.BurstSize,
 	)
 
-	a.aiClient = NewSlackAIClient(config.BotToken, config.DevMode)
+	a.aiClient = NewSlackAIClient(config.BotToken, config.DevMode, config.AgentID)
 
 	a.actionableReactions = make(map[string]bool, len(config.ActionableReactions))
 	for _, r := range config.ActionableReactions {

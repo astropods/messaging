@@ -181,6 +181,7 @@ func Load() (*Config, error) {
 		SocketMode:          socketMode,
 		AutoThread:          autoThread,
 		DevMode:             getEnvBool("DEV", false),
+		AgentID:             strings.TrimSpace(os.Getenv("ASTRO_AGENT_ID")),
 		ActionableReactions: cfg.Slack.AdapterConfig.ActionableReactions,
 		AllowedChannelIDs:   cfg.Slack.AdapterConfig.AllowedChannelIDs,
 		AllowedUserIDs:      cfg.Slack.AdapterConfig.AllowedUserIDs,
