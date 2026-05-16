@@ -234,12 +234,12 @@ func buildFooterText(devMode bool, agentID string) string {
 	if devMode {
 		footer := ":test_tube: Sent from dev environment"
 		if agentID != "" {
-			footer += fmt.Sprintf(" — Agent ID: `%s`", agentID)
+			footer += fmt.Sprintf(" — Agent ID: %s", agentID)
 		}
 		return footer
 	}
 	if agentID != "" {
-		return fmt.Sprintf("Agent ID: `%s`", agentID)
+		return fmt.Sprintf("Agent ID: %s", agentID)
 	}
 	return ""
 }
