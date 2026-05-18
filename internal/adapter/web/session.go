@@ -92,3 +92,36 @@ func (m *BearerTokenSessionManager) ValidateRequest(ctx context.Context, r *http
 	token := auth[len(prefix):]
 	return m.ValidateToken(ctx, token)
 }
+
+// OrderedSessionManagers tries each nested SessionManager in order. The first
+// non-nil *Session wins. The first ValidateRequest error terminates the chain.
+type OrderedSessionManagers []SessionManager
+
+// ValidateRequest implements SessionManager for OrderedSessionManagers.
+func (chain OrderedSessionManagers) ValidateRequest(ctx context.Context, r *http.Request) (*Session, error) {
+	for _, sm := range chain {
+		if sm == nil {
+			continue
+		}
+		s, err := sm.ValidateRequest(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		if s != nil {
+			return s, nil
+		}
+	}
+	return nil, nil
+}
+
+// AnonymousWebFallbackSessionManager is the terminal shim when OIDC ingress
+// headers are absent but the messaging server still runs with deploy-token
+// authz. It yields an empty principal; Handlers.authenticate maps that to
+// anonymous authorize inputs (identity_type=id="") so tokens with
+// anyone_adapters:["web"] and server-side anyone grants still work without ALB.
+type AnonymousWebFallbackSessionManager struct{}
+
+// ValidateRequest implements SessionManager.
+func (AnonymousWebFallbackSessionManager) ValidateRequest(context.Context, *http.Request) (*Session, error) {
+	return &Session{Username: "anonymous"}, nil
+}

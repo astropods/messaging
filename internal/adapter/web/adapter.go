@@ -12,6 +12,8 @@ import (
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
+	"github.com/google/uuid"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // WebAdapter implements adapter.Adapter for web browser clients via HTTP + SSE
@@ -116,6 +118,7 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 
 	// API routes
+	mux.HandleFunc("DELETE /api/conversations/{id}/runs/{run_id}", a.handlers.HandleCancelRun)
 	mux.HandleFunc("POST /api/conversations", a.handlers.HandleCreateConversation)
 	mux.HandleFunc("POST /api/conversations/{id}/messages", a.handlers.HandleSendMessage)
 	mux.HandleFunc("GET /api/conversations/{id}/stream", a.handlers.HandleStream)
@@ -225,28 +228,38 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		return fmt.Errorf("missing conversation ID in response")
 	}
 
+	rid := response.ResponseId
+	if rid == "" && a.handlers != nil {
+		rid = a.handlers.ActiveRunID(conversationID)
+	}
+
 	// Convert response to SSE events based on payload type
 	switch payload := response.Payload.(type) {
 	case *pb.AgentResponse_Content:
 		// Content chunk
-		event := NewChunkEvent(payload.Content, response.ResponseId)
+		event := NewChunkEvent(payload.Content, rid)
 		a.connManager.Broadcast(conversationID, event)
 
 		// Send finish event on END chunk
 		if payload.Content.Type == pb.ContentChunk_END {
-			finishEvent := NewFinishEvent(response.ResponseId)
+			finishEvent := NewFinishEvent(rid)
 			a.connManager.Broadcast(conversationID, finishEvent)
 		}
 
 		// Store message content for thread history
 		if a.threadStore != nil && payload.Content.Type == pb.ContentChunk_END {
+			msgID := rid
+			if msgID == "" {
+				msgID = uuid.NewString()
+			}
 			a.threadStore.AddMessage(conversationID, &pb.ThreadMessage{
-				MessageId: response.ResponseId,
+				MessageId: msgID,
 				User: &pb.User{
 					Id:       "agent",
 					Username: "Agent",
 				},
-				Content: payload.Content.Content,
+				Content:   payload.Content.Content,
+				Timestamp: timestamppb.Now(),
 			})
 		}
 
@@ -262,7 +275,7 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 
 	case *pb.AgentResponse_Error:
 		// Error response
-		event := NewErrorEvent(payload.Error)
+		event := NewErrorEvent(payload.Error, rid)
 		a.connManager.Broadcast(conversationID, event)
 
 	case *pb.AgentResponse_Transcript:
@@ -290,13 +303,19 @@ func (a *WebAdapter) HydrateThread(ctx context.Context, conversationID string, t
 
 // StreamContent streams content chunks to SSE clients
 func (a *WebAdapter) StreamContent(ctx context.Context, conversationID string, chunks []*pb.ContentChunk) error {
+	rid := uuid.NewString()
+	if a.handlers != nil {
+		if v := a.handlers.ActiveRunID(conversationID); v != "" {
+			rid = v
+		}
+	}
 	for _, chunk := range chunks {
-		event := NewChunkEvent(chunk, "")
+		event := NewChunkEvent(chunk, rid)
 		a.connManager.Broadcast(conversationID, event)
 
 		// Send finish on END
 		if chunk.Type == pb.ContentChunk_END {
-			finishEvent := NewFinishEvent("")
+			finishEvent := NewFinishEvent(rid)
 			a.connManager.Broadcast(conversationID, finishEvent)
 		}
 	}

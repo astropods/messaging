@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
@@ -24,16 +26,59 @@ type Handlers struct {
 	audioForwarder   adapter.AudioForwarder
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
+
+	runMu                   sync.Mutex
+	activeRunByConversation map[string]string // conversationID -> run_id (last POST …/messages id)
 }
 
 // NewHandlers creates a new Handlers instance
 func NewHandlers(connManager *ConnectionManager, sessionManager SessionManager, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore) *Handlers {
 	return &Handlers{
-		connManager:      connManager,
-		sessionManager:   sessionManager,
-		threadStore:      threadStore,
-		agentConfigStore: agentConfigStore,
+		connManager:             connManager,
+		sessionManager:          sessionManager,
+		threadStore:             threadStore,
+		agentConfigStore:        agentConfigStore,
+		activeRunByConversation: make(map[string]string),
 	}
+}
+
+// ActiveRunID returns the stable run/response correlation id for the active user turn, if any.
+func (h *Handlers) ActiveRunID(conversationID string) string {
+	if h == nil || conversationID == "" {
+		return ""
+	}
+	h.runMu.Lock()
+	defer h.runMu.Unlock()
+	return h.activeRunByConversation[conversationID]
+}
+
+func (h *Handlers) setActiveRun(conversationID, runID string) {
+	if h == nil || conversationID == "" || runID == "" {
+		return
+	}
+	h.runMu.Lock()
+	defer h.runMu.Unlock()
+	if h.activeRunByConversation == nil {
+		h.activeRunByConversation = make(map[string]string)
+	}
+	h.activeRunByConversation[conversationID] = runID
+}
+
+// ClearActiveRunIfMatch clears the active run only when runID matches (idempotent cancel).
+func (h *Handlers) ClearActiveRunIfMatch(conversationID, runID string) bool {
+	if h == nil || conversationID == "" || runID == "" {
+		return false
+	}
+	h.runMu.Lock()
+	defer h.runMu.Unlock()
+	if h.activeRunByConversation == nil {
+		return false
+	}
+	if cur, ok := h.activeRunByConversation[conversationID]; ok && cur == runID {
+		delete(h.activeRunByConversation, conversationID)
+		return true
+	}
+	return false
 }
 
 // SetAuthorizer wires the authorizer used to gate every API request. nil
@@ -63,10 +108,16 @@ func (h *Handlers) authenticate(w http.ResponseWriter, r *http.Request) *Session
 	}
 
 	if h.authz != nil {
-		// Web identity is a globally-unique WorkOS user_id, so no scope.
-		// The resolved user_id is the same value we sent in — no need to
-		// thread it back through the handler.
-		res, err := h.authz.Authorize(ctx, authz.IdentityTypeUser, session.UserID, authz.AdapterWeb, "")
+		// Web identity from ALB OIDC is a globally-unique WorkOS user_id. Synthetic
+		// sessions (local dev / direct HTTP clients without ALB) use an empty
+		// principal; Authorize passes identity_type=id="" so astro-server anyone
+		// grants and transitional rules apply.
+		idType, identityID := authz.IdentityTypeUser, strings.TrimSpace(session.UserID)
+		if identityID == "" {
+			idType = ""
+			identityID = ""
+		}
+		res, err := h.authz.Authorize(ctx, idType, identityID, authz.AdapterWeb, "")
 		if err != nil {
 			// Fail closed on authz transport errors — better to return a 503
 			// than to silently drop the check.
@@ -114,6 +165,7 @@ type SendMessageRequest struct {
 // SendMessageResponse represents the response to a message send
 type SendMessageResponse struct {
 	MessageID string `json:"message_id"`
+	RunID     string `json:"run_id"`
 	Timestamp string `json:"timestamp"`
 }
 
@@ -201,6 +253,9 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		ConversationId: conversationID,
 	}
 
+	// Correlate streamed agent output with this user turn (run_id == message_id).
+	h.setActiveRun(conversationID, messageID)
+
 	// Forward to gRPC handler
 	if h.msgHandler == nil {
 		slog.Warn("[Web] No message handler registered")
@@ -209,7 +264,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.msgHandler(ctx, msg); err != nil {
 		slog.Error(fmt.Sprintf("[Web] Error forwarding message: %v", err))
-		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process message")
+		h.sendErrorEvent(conversationID, messageID, "INTERNAL_ERROR", "Failed to process message")
 		http.Error(w, "Failed to process message", http.StatusInternalServerError)
 		return
 	}
@@ -229,6 +284,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	resp := SendMessageResponse{
 		MessageID: messageID,
+		RunID:     messageID,
 		Timestamp: now.UTC().Format(time.RFC3339),
 	}
 
@@ -340,11 +396,16 @@ func (h *Handlers) HandleHistory(w http.ResponseWriter, r *http.Request) {
 	// Convert to JSON-friendly format
 	messages := make([]map[string]interface{}, 0, len(history.Messages))
 	for _, msg := range history.Messages {
+		role := "user"
+		if msg.User != nil && msg.User.Id == "agent" {
+			role = "assistant"
+		}
 		m := map[string]interface{}{
 			"message_id": msg.MessageId,
 			"content":    msg.Content,
 			"timestamp":  msg.Timestamp.AsTime().Format(time.RFC3339),
 			"was_edited": msg.WasEdited,
+			"role":       role,
 		}
 		if msg.User != nil {
 			m["user"] = map[string]interface{}{
@@ -464,8 +525,34 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// HandleCancelRun handles DELETE /api/conversations/{id}/runs/{run_id}
+func (h *Handlers) HandleCancelRun(w http.ResponseWriter, r *http.Request) {
+	session := h.authenticate(w, r)
+	if session == nil {
+		return
+	}
+	_ = session
+	conversationID := r.PathValue("id")
+	runID := r.PathValue("run_id")
+	if conversationID == "" || runID == "" {
+		http.Error(w, "Missing conversation or run id", http.StatusBadRequest)
+		return
+	}
+	if !h.ClearActiveRunIfMatch(conversationID, runID) {
+		http.Error(w, "Run not found or already completed", http.StatusNotFound)
+		return
+	}
+	// Tell native clients the turn ended client-side; agent may still finish in-process.
+	finish := NewFinishEvent(runID)
+	h.connManager.Broadcast(conversationID, finish)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // sendErrorEvent broadcasts an error event to all connections for a conversation
-func (h *Handlers) sendErrorEvent(conversationID, code, message string) {
-	event := NewErrorEventFromMessage(code, message, false)
+func (h *Handlers) sendErrorEvent(conversationID, runID, code, message string) {
+	if runID == "" {
+		runID = h.ActiveRunID(conversationID)
+	}
+	event := NewErrorEventFromMessage(code, message, false, runID)
 	h.connManager.Broadcast(conversationID, event)
 }

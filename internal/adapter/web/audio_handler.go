@@ -111,7 +111,7 @@ func (h *Handlers) handleAudioSegmentStart(
 
 	if err := h.msgHandler(ctx, msg); err != nil {
 		slog.Error(fmt.Sprintf("[Web] Error forwarding audio message: %v", err))
-		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process audio")
+		h.sendErrorEvent(conversationID, "", "INTERNAL_ERROR", "Failed to process audio")
 	}
 
 	return messageID

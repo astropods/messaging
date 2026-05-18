@@ -62,6 +62,7 @@ type ChunkEventData struct {
 	Content           string `json:"content"`
 	ChunkType         string `json:"chunk_type"` // start, delta, end, replace
 	ResponseID        string `json:"response_id,omitempty"`
+	RunID             string `json:"run_id,omitempty"`
 	PlatformMessageID string `json:"platform_message_id,omitempty"`
 }
 
@@ -83,17 +84,20 @@ type StepEventData struct {
 
 // ErrorEventData represents the data for an error event
 type ErrorEventData struct {
-	Type      string `json:"type"`
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Details   string `json:"details,omitempty"`
-	Retryable bool   `json:"retryable"`
+	Type        string `json:"type"`
+	Code        string `json:"code"`
+	Message     string `json:"message"`
+	Details     string `json:"details,omitempty"`
+	Retryable   bool   `json:"retryable"`
+	ResponseID  string `json:"response_id,omitempty"`
+	RunID       string `json:"run_id,omitempty"`
 }
 
 // FinishEventData represents the data for a finish event
 type FinishEventData struct {
 	Type       string `json:"type"`
 	ResponseID string `json:"response_id,omitempty"`
+	RunID      string `json:"run_id,omitempty"`
 }
 
 // PromptsEventData represents the data for suggested prompts
@@ -146,6 +150,7 @@ func NewChunkEvent(chunk *pb.ContentChunk, responseID string) SSEEvent {
 		Content:           chunk.Content,
 		ChunkType:         chunkType,
 		ResponseID:        responseID,
+		RunID:             responseID,
 		PlatformMessageID: chunk.PlatformMessageId,
 	}
 	jsonData, err := json.Marshal(data)
@@ -212,13 +217,15 @@ func NewStepEndEvent(stepID string) SSEEvent {
 }
 
 // NewErrorEvent creates an error SSE event from a protobuf ErrorResponse
-func NewErrorEvent(pbErr *pb.ErrorResponse) SSEEvent {
+func NewErrorEvent(pbErr *pb.ErrorResponse, runID string) SSEEvent {
 	data := ErrorEventData{
-		Type:      "error",
-		Code:      pbErr.Code.String(),
-		Message:   pbErr.Message,
-		Details:   pbErr.Details,
-		Retryable: pbErr.Retryable,
+		Type:       "error",
+		Code:       pbErr.Code.String(),
+		Message:    pbErr.Message,
+		Details:    pbErr.Details,
+		Retryable:  pbErr.Retryable,
+		ResponseID: runID,
+		RunID:      runID,
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -231,12 +238,14 @@ func NewErrorEvent(pbErr *pb.ErrorResponse) SSEEvent {
 }
 
 // NewErrorEventFromMessage creates an error SSE event from a message string
-func NewErrorEventFromMessage(code, message string, retryable bool) SSEEvent {
+func NewErrorEventFromMessage(code, message string, retryable bool, runID string) SSEEvent {
 	data := ErrorEventData{
-		Type:      "error",
-		Code:      code,
-		Message:   message,
-		Retryable: retryable,
+		Type:       "error",
+		Code:       code,
+		Message:    message,
+		Retryable:  retryable,
+		ResponseID: runID,
+		RunID:      runID,
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -253,6 +262,7 @@ func NewFinishEvent(responseID string) SSEEvent {
 	data := FinishEventData{
 		Type:       "finish",
 		ResponseID: responseID,
+		RunID:      responseID,
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {

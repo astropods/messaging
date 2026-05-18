@@ -248,18 +248,24 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 	if cfg.Web.Enabled {
 		slog.Info("Initializing Web adapter...")
 		// In production astro-server runs the web adapter behind ALB OIDC,
-		// which injects the WorkOS user ID as x-amzn-oidc-identity. Read
-		// that header as the session userID; without it (local dev) the
-		// adapter falls back to NoopSessionManager via the option below.
+		// which injects the WorkOS user ID as x-amzn-oidc-identity. When
+		// ASTRO_AUTHZ_TOKEN is set, main wires an OIDC+fallback SessionManager so
+		// local/direct HTTP clients still work (see AnonymousWebFallbackSessionManager).
 		webOpts := []web.WebAdapterOption{
 			web.WithListenAddr(cfg.Web.ListenAddr),
 			web.WithAllowedOrigins(cfg.Web.AllowedOrigins),
 			web.WithServePlayground(cfg.Web.ServePlayground),
 		}
 		if cfg.Authz.IdentityToken != "" {
-			webOpts = append(webOpts, web.WithSessionManager(
-				web.NewHeaderSessionManager("x-amzn-oidc-identity", "", ""),
-			))
+			// Production ingress (ALB) sets x-amzn-oidc-identity. Local Kubernetes
+			// and port-forward setups often omit it; keep authz reachable by
+			// falling through to synthetic anonymous principals (see Handlers.authenticate).
+			headerSM := web.NewHeaderSessionManager("x-amzn-oidc-identity", "", "")
+			chain := web.OrderedSessionManagers{
+				headerSM,
+				web.AnonymousWebFallbackSessionManager{},
+			}
+			webOpts = append(webOpts, web.WithSessionManager(chain))
 		}
 		webAdapter := web.New(webOpts...)
 		if err := webAdapter.Initialize(ctx, adapter.Config{}); err != nil {

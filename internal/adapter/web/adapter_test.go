@@ -283,7 +283,7 @@ func TestNewPromptsEvent(t *testing.T) {
 }
 
 func TestNewErrorEventFromMessage(t *testing.T) {
-	event := NewErrorEventFromMessage("INTERNAL_ERROR", "Something went wrong", true)
+	event := NewErrorEventFromMessage("INTERNAL_ERROR", "Something went wrong", true, "")
 
 	if event.Event != EventError {
 		t.Errorf("expected event type %s, got %s", EventError, event.Event)
@@ -336,7 +336,7 @@ func TestNewErrorEvent(t *testing.T) {
 		Retryable: true,
 	}
 
-	event := NewErrorEvent(err)
+	event := NewErrorEvent(err, "run-1")
 
 	if event.Event != EventError {
 		t.Errorf("expected event type %s, got %s", EventError, event.Event)
