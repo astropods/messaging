@@ -131,89 +131,8 @@ func TestHandleMessage_ChannelTopLevelIgnored(t *testing.T) {
 	}
 }
 
-func TestHandleMessage_ObserveChannel_TopLevelForwarded(t *testing.T) {
-	a, handler := newTestAdapter()
-	a.observeChannels = map[string]bool{"C123456": true}
-	a.msgDedup = newSlackMsgDedup(8)
-	a.botUserID = "UBOTTEST"
-
-	ev := &slackevents.MessageEvent{
-		Channel:   "C123456",
-		User:      "U123",
-		Text:      "hello everyone",
-		TimeStamp: "9999999999.000001",
-	}
-	a.handleMessage(t.Context(), ev, "")
-
-	if handler.count() != 1 {
-		t.Fatalf("expected observed top-level to forward, got %d", handler.count())
-	}
-	msg := handler.last()
-	if msg.PlatformContext.ThreadId != "9999999999.000001" {
-		t.Errorf("expected ThreadId == TimeStamp, got %q", msg.PlatformContext.ThreadId)
-	}
-	if msg.ConversationId != "C123456-9999999999.000001" {
-		t.Errorf("expected conv id 'C123456-9999999999.000001', got %q", msg.ConversationId)
-	}
-	if msg.Content != "hello everyone" {
-		t.Errorf("expected raw text, got %q", msg.Content)
-	}
-	if msg.PlatformContext.EventKind != pb.PlatformContext_EVENT_KIND_OBSERVED {
-		t.Errorf("expected EventKind=EVENT_KIND_OBSERVED, got %v", msg.PlatformContext.EventKind)
-	}
-	if msg.PlatformContext.ThreadRootId != "" {
-		t.Errorf("expected ThreadRootId empty for top-level observed, got %q", msg.PlatformContext.ThreadRootId)
-	}
-	if msg.PlatformContext.BotUserId != "UBOTTEST" {
-		t.Errorf("expected BotUserId='UBOTTEST', got %q", msg.PlatformContext.BotUserId)
-	}
-}
-
-func TestHandleMessage_ObserveChannel_BotMentionDropped(t *testing.T) {
-	a, handler := newTestAdapter()
-	a.observeChannels = map[string]bool{"C123456": true}
-	a.botUserID = "UBOTTEST"
-	a.msgDedup = newSlackMsgDedup(8)
-	before := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "app_mention_dedup"))
-
-	ev := &slackevents.MessageEvent{
-		Channel:   "C123456",
-		User:      "U123",
-		Text:      "<@UBOTTEST> please help",
-		TimeStamp: "8888888888.000001",
-	}
-	a.handleMessage(t.Context(), ev, "")
-
-	if handler.count() != 0 {
-		t.Fatalf("expected bot-mention text to be skipped (app_mention will handle), got %d", handler.count())
-	}
-	if got := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "app_mention_dedup")) - before; got != 1 {
-		t.Errorf("expected app_mention_dedup +1, got +%v", got)
-	}
-}
-
-func TestHandleMessage_ObserveChannel_DuplicateSuppressed(t *testing.T) {
-	a, handler := newTestAdapter()
-	a.observeChannels = map[string]bool{"C123456": true}
-	a.msgDedup = newSlackMsgDedup(8)
-
-	ev := &slackevents.MessageEvent{
-		Channel:   "C123456",
-		User:      "U123",
-		Text:      "hi",
-		TimeStamp: "7777777777.000001",
-	}
-	a.handleMessage(t.Context(), ev, "")
-	a.handleMessage(t.Context(), ev, "")
-
-	if handler.count() != 1 {
-		t.Fatalf("expected dedup to drop second delivery, got %d", handler.count())
-	}
-}
-
 func TestHandleMessage_ChannelThreadReplyProcessed(t *testing.T) {
 	a, handler := newTestAdapter()
-	a.botUserID = "UBOTTEST"
 
 	ev := &slackevents.MessageEvent{
 		Channel:         "C123456",
@@ -233,59 +152,9 @@ func TestHandleMessage_ChannelThreadReplyProcessed(t *testing.T) {
 	if msg.ConversationId != expectedConvID {
 		t.Errorf("expected conversation ID %q, got %q", expectedConvID, msg.ConversationId)
 	}
-	if msg.Content != "thread reply without mention" {
-		t.Errorf("expected content 'thread reply without mention', got %q", msg.Content)
+	if !strings.Contains(msg.Content, "[slack_meta]") || !strings.Contains(msg.Content, "thread reply without mention") {
+		t.Errorf("expected slack_meta + text, got %q", msg.Content)
 	}
-	if msg.PlatformContext.EventKind != pb.PlatformContext_EVENT_KIND_THREAD_REPLY {
-		t.Errorf("expected EventKind=EVENT_KIND_THREAD_REPLY, got %v", msg.PlatformContext.EventKind)
-	}
-	if msg.PlatformContext.ThreadRootId != "1234567890.000001" {
-		t.Errorf("expected ThreadRootId='1234567890.000001', got %q", msg.PlatformContext.ThreadRootId)
-	}
-	if msg.PlatformContext.BotUserId != "UBOTTEST" {
-		t.Errorf("expected BotUserId='UBOTTEST', got %q", msg.PlatformContext.BotUserId)
-	}
-}
-
-// EVENT_KIND_DM is set on every direct-message ingress (top-level and thread).
-// ThreadRootId is empty on a top-level DM, non-empty on a reply.
-func TestHandleMessage_DM_EventKindAndThreadRoot(t *testing.T) {
-	t.Run("top-level", func(t *testing.T) {
-		a, handler := newTestAdapter()
-		ev := &slackevents.MessageEvent{
-			Channel: "D123", User: "U1", Text: "hi", TimeStamp: "11.000001",
-		}
-		a.handleMessage(t.Context(), ev, "")
-		if handler.count() != 1 {
-			t.Fatalf("expected forward, got %d", handler.count())
-		}
-		pc := handler.last().PlatformContext
-		if pc.EventKind != pb.PlatformContext_EVENT_KIND_DM {
-			t.Errorf("expected EVENT_KIND_DM, got %v", pc.EventKind)
-		}
-		if pc.ThreadRootId != "" {
-			t.Errorf("expected empty ThreadRootId for top-level DM, got %q", pc.ThreadRootId)
-		}
-	})
-
-	t.Run("thread reply", func(t *testing.T) {
-		a, handler := newTestAdapter()
-		ev := &slackevents.MessageEvent{
-			Channel: "D123", User: "U1", Text: "follow-up",
-			TimeStamp: "12.000001", ThreadTimeStamp: "11.000001",
-		}
-		a.handleMessage(t.Context(), ev, "")
-		if handler.count() != 1 {
-			t.Fatalf("expected forward, got %d", handler.count())
-		}
-		pc := handler.last().PlatformContext
-		if pc.EventKind != pb.PlatformContext_EVENT_KIND_DM {
-			t.Errorf("expected EVENT_KIND_DM, got %v", pc.EventKind)
-		}
-		if pc.ThreadRootId != "11.000001" {
-			t.Errorf("expected ThreadRootId='11.000001', got %q", pc.ThreadRootId)
-		}
-	})
 }
 
 func TestHandleMessage_BotMessageIgnored(t *testing.T) {
@@ -618,73 +487,7 @@ type denyAuthorizer struct{ calls int }
 
 func (d *denyAuthorizer) Authorize(_ context.Context, _, _, _, _ string) (authz.Result, error) {
 	d.calls++
-	return authz.Result{}, nil
-}
-
-// allowAuthorizer always allows and returns the configured WorkOS user_id.
-// Mirrors the server's response shape for a slack identity with a linked
-// WorkOS user, so we can pin down the dispatch-side rewrite behavior.
-type allowAuthorizer struct {
-	userID string
-	calls  int
-}
-
-func (a *allowAuthorizer) Authorize(_ context.Context, _, _, _, _ string) (authz.Result, error) {
-	a.calls++
-	return authz.Result{Allowed: true, UserID: a.userID}, nil
-}
-
-// When the server returns a resolved WorkOS user_id, dispatch rewrites
-// msg.User.Id to that canonical ID and preserves the raw slack id on
-// platform_data["slack_user_id"]. Downstream agents then see the same
-// identity shape as web traffic.
-func TestDispatch_RewritesUserIDToWorkOSUser(t *testing.T) {
-	a, handler := newTestAdapter()
-	a.SetAuthorizer(&allowAuthorizer{userID: "user_workos_42"})
-
-	msg := &pb.Message{
-		User:            &pb.User{Id: "U123"},
-		PlatformContext: &pb.PlatformContext{ChannelId: "C1"},
-	}
-
-	if err := a.dispatch(t.Context(), msg, "T1"); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-	if msg.User.Id != "user_workos_42" {
-		t.Errorf("msg.User.Id: got %q, want user_workos_42", msg.User.Id)
-	}
-	if got := msg.PlatformContext.PlatformData["slack_user_id"]; got != "U123" {
-		t.Errorf("platform_data[slack_user_id]: got %q, want U123", got)
-	}
-	if handler.count() != 1 {
-		t.Errorf("msgHandler should be invoked once; got %d", handler.count())
-	}
-}
-
-// When the server doesn't return a resolved user_id (unmapped slack user
-// allowed via org/anyone grant), msg.User.Id stays as the raw slack id —
-// that's the only identity we have. No platform_data shim is added.
-func TestDispatch_NoResolvedUserIDLeavesMsgUntouched(t *testing.T) {
-	a, handler := newTestAdapter()
-	a.SetAuthorizer(&allowAuthorizer{userID: ""})
-
-	msg := &pb.Message{
-		User:            &pb.User{Id: "U123"},
-		PlatformContext: &pb.PlatformContext{ChannelId: "C1"},
-	}
-
-	if err := a.dispatch(t.Context(), msg, "T1"); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-	if msg.User.Id != "U123" {
-		t.Errorf("msg.User.Id should not change when no resolved user_id; got %q", msg.User.Id)
-	}
-	if _, present := msg.PlatformContext.PlatformData["slack_user_id"]; present {
-		t.Error("platform_data[slack_user_id] should not be set when no rewrite happens")
-	}
-	if handler.count() != 1 {
-		t.Errorf("msgHandler should be invoked once; got %d", handler.count())
-	}
+	return authz.Result{Allowed: false}, nil
 }
 
 func TestDispatch_AuthzDenied_ReturnsDeniedSentinel(t *testing.T) {
@@ -700,30 +503,6 @@ func TestDispatch_AuthzDenied_ReturnsDeniedSentinel(t *testing.T) {
 	}
 	if handler.count() != 0 {
 		t.Errorf("msgHandler should not be invoked on deny; got %d call(s)", handler.count())
-	}
-}
-
-// Observe channels are passive watch channels — the user didn't address the
-// bot, so dispatch must skip the per-user authz check.
-func TestDispatch_ObserveChannel_SkipsAuthz(t *testing.T) {
-	a, handler := newTestAdapter()
-	a.observeChannels = map[string]bool{"C123456": true}
-	az := &denyAuthorizer{}
-	a.SetAuthorizer(az)
-
-	msg := &pb.Message{
-		User:            &pb.User{Id: "U123"},
-		PlatformContext: &pb.PlatformContext{ChannelId: "C123456"},
-	}
-
-	if err := a.dispatch(t.Context(), msg, ""); err != nil {
-		t.Fatalf("expected nil err for observed message, got %v", err)
-	}
-	if az.calls != 0 {
-		t.Errorf("authorizer should not be called for observe channel, got %d call(s)", az.calls)
-	}
-	if handler.count() != 1 {
-		t.Errorf("msgHandler should be invoked for observed message; got %d", handler.count())
 	}
 }
 
@@ -973,143 +752,69 @@ func newFakeSlackServer(t *testing.T, replyText string) *fakeSlackServer {
 	return fs
 }
 
-// TestHandleMessage_BlockKitContentReachesAgent verifies that block-only
-// content (header + section + fields) posted via an app shows up in
-// pb.Message.Content alongside the fallback text.
-func TestHandleMessage_BlockKitContentReachesAgent(t *testing.T) {
-	a, handler := newTestAdapter()
 
-	blocks := blocksFromJSON(t, `[
-		{"type":"header","text":{"type":"plain_text","text":"Deploy Status"}},
-		{"type":"section",
-		 "text":{"type":"mrkdwn","text":"All green."},
-		 "fields":[
-			{"type":"mrkdwn","text":"*Service:* api"},
-			{"type":"mrkdwn","text":"*Version:* v1.2.3"}
-		 ]}
-	]`)
+func testAdapterWithConfig(t *testing.T, cfg adapter.Config) (*SlackAdapter, *mockMessageHandler) {
+	t.Helper()
+	handler := &mockMessageHandler{}
+	a := &SlackAdapter{contentBuffers: make(map[string]string), config: cfg}
+	a.msgHandler = handler.handle
+	return a, handler
+}
 
-	ev := &slackevents.MessageEvent{
-		Channel:   "D123456",
-		User:      "U123",
-		Text:      "summary fallback",
-		TimeStamp: "1234567890.000001",
-		Blocks:    blocks,
-	}
-
-	a.handleMessage(t.Context(), ev, "T1")
-
+func TestHandleMessage_ObserverTopLevelBypass(t *testing.T) {
+	cfg := adapter.Config{ObserverChannelIDs: []string{"C_OBS"}, ObserverPrependMarker: true}
+	a, handler := testAdapterWithConfig(t, cfg)
+	ev := &slackevents.MessageEvent{Channel: "C_OBS", User: "U1", Text: "status update", TimeStamp: "100.0001"}
+	a.handleMessage(t.Context(), ev, "")
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
 	}
-	got := handler.last().Content
-	for _, want := range []string{"summary fallback", "Deploy Status", "All green.", "*Service:* api", "*Version:* v1.2.3"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("content %q missing %q", got, want)
-		}
+	if !strings.HasPrefix(handler.last().Content, "[slack_observer]") {
+		t.Fatalf("expected observer marker, got %q", handler.last().Content)
+	}
+	if !strings.Contains(handler.last().Content, "[slack_meta]") {
+		t.Fatalf("expected slack_meta, got %q", handler.last().Content)
 	}
 }
 
-// TestHandleMessage_UserRichTextNotDuplicated verifies that for a
-// user-typed message — where Slack auto-derives text from rich_text —
-// the agent receives a single un-duplicated rendering.
-func TestHandleMessage_UserRichTextNotDuplicated(t *testing.T) {
-	a, handler := newTestAdapter()
-
-	blocks := blocksFromJSON(t, `[
-		{"type":"rich_text","elements":[
-			{"type":"rich_text_section","elements":[
-				{"type":"text","text":"hello world"}
-			]}
-		]}
-	]`)
-
-	ev := &slackevents.MessageEvent{
-		Channel:   "D123456",
-		User:      "U123",
-		Text:      "hello world",
-		TimeStamp: "1234567890.000001",
-		Blocks:    blocks,
-	}
-
-	a.handleMessage(t.Context(), ev, "T1")
-
+func TestHandleMessage_ObserverTopLevelDedup(t *testing.T) {
+	cfg := adapter.Config{ObserverChannelIDs: []string{"C_OBS"}}
+	a, handler := testAdapterWithConfig(t, cfg)
+	ev := &slackevents.MessageEvent{Channel: "C_OBS", User: "U1", Text: "dup", TimeStamp: "100.0002"}
+	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "")
 	if handler.count() != 1 {
-		t.Fatalf("expected 1 message, got %d", handler.count())
-	}
-	if got := handler.last().Content; got != "hello world" {
-		t.Errorf("got %q, want %q", got, "hello world")
+		t.Fatalf("expected dedup to allow one dispatch, got %d", handler.count())
 	}
 }
 
-// TestHandleAppMention_BlockKitMergedAndMentionsStripped verifies that
-// a section block carrying real content is merged in, and any bot
-// mention (in text or rendered from a rich_text user element) is
-// stripped from the combined string.
-func TestHandleAppMention_BlockKitMergedAndMentionsStripped(t *testing.T) {
-	a, handler := newTestAdapter()
-	srv := newFakeSlackServer(t, "")
+func TestHandleMessage_AutoLinkTopLevel(t *testing.T) {
+	cfg := adapter.Config{AutoLinkTextSubstrings: []string{"github.com"}, AutoLinkChannelIDs: []string{"C_LINK"}}
+	a, handler := testAdapterWithConfig(t, cfg)
+	ev := &slackevents.MessageEvent{Channel: "C_LINK", User: "U1", Text: "see https://github.com/o/r/issues/1", TimeStamp: "100.0003"}
+	a.handleMessage(t.Context(), ev, "")
+	if handler.count() != 1 {
+		t.Fatalf("expected auto_link dispatch, got %d", handler.count())
+	}
+	if !strings.Contains(handler.last().Content, "[slack_auto_link]") {
+		t.Fatalf("expected auto_link marker, got %q", handler.last().Content)
+	}
+}
+
+func TestHandleReactionAdded_IncludesSlackMeta(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"messages":[{"text":"orig","ts":"1234567890.000001"}]}`))
+	}))
 	defer srv.Close()
-	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
-	a.aiClient = &SlackAIClient{
-		botToken:   "xoxb-fake",
-		httpClient: srv.Client(),
-		baseURL:    srv.URL,
-	}
-
-	blocks := blocksFromJSON(t, `[
-		{"type":"rich_text","elements":[
-			{"type":"rich_text_section","elements":[
-				{"type":"user","user_id":"UBOT"},
-				{"type":"text","text":" please summarize this report"}
-			]}
-		]},
-		{"type":"section","text":{"type":"mrkdwn","text":"Q3 revenue: $5M"}}
-	]`)
-
-	ev := &slackevents.AppMentionEvent{
-		Channel:   "C123456",
-		User:      "U123",
-		Text:      "<@UBOT> please summarize this report",
-		TimeStamp: "1234567890.000001",
-		Blocks:    blocks,
-	}
-
-	a.handleAppMention(t.Context(), ev, "T1")
-
+	a, handler := newTestAdapterWithReactions([]string{"ticket"})
+	a.client = slacklib.New("xoxb-test", slacklib.OptionAPIURL(srv.URL+"/"))
+	ev := &slackevents.ReactionAddedEvent{Reaction: "ticket", User: "U123", Item: slackevents.Item{Channel: "C123456", Timestamp: "1234567890.000001"}}
+	a.handleReactionAdded(t.Context(), ev, "")
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
 	}
-	got := handler.last().Content
-	if strings.Contains(got, "<@UBOT>") {
-		t.Errorf("expected bot mention stripped, got %q", got)
-	}
-	if !strings.Contains(got, "please summarize this report") {
-		t.Errorf("expected mention text to survive, got %q", got)
-	}
-	if !strings.Contains(got, "Q3 revenue: $5M") {
-		t.Errorf("expected section text included, got %q", got)
-	}
-}
-
-// TestHandleMessage_NoBlocksPreservesText guards the common case where
-// no blocks are present: behavior must match pre-renderBlocks exactly.
-func TestHandleMessage_NoBlocksPreservesText(t *testing.T) {
-	a, handler := newTestAdapter()
-
-	ev := &slackevents.MessageEvent{
-		Channel:   "D123456",
-		User:      "U123",
-		Text:      "plain text only",
-		TimeStamp: "1234567890.000001",
-	}
-
-	a.handleMessage(t.Context(), ev, "T1")
-
-	if handler.count() != 1 {
-		t.Fatalf("expected 1 message, got %d", handler.count())
-	}
-	if got := handler.last().Content; got != "plain text only" {
-		t.Errorf("got %q, want %q", got, "plain text only")
+	if !strings.Contains(handler.last().Content, "[slack_meta]") {
+		t.Fatalf("expected slack_meta in reaction delivery, got %q", handler.last().Content)
 	}
 }

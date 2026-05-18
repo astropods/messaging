@@ -9,8 +9,8 @@ func TestStripMentions(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"<@U123456> Hello!", "Hello!"},                          // Trims leading/trailing spaces
-		{"Hey <@U123456> how are you?", "Hey  how are you?"},     // Doesn't trim internal spaces
+		{"<@U123456> Hello!", "Hello!"},                      // Trims leading/trailing spaces
+		{"Hey <@U123456> how are you?", "Hey  how are you?"}, // Doesn't trim internal spaces
 		{"No mentions here", "No mentions here"},
 		{"<@U123> <@U456> Multiple mentions", "Multiple mentions"}, // Trims leading/trailing spaces
 	}

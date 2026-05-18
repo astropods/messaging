@@ -79,10 +79,21 @@ type Config struct {
 	AllowedChannelIDs   []string // Channel IDs that may use the app (empty = allow all)
 	AllowedUserIDs      []string // User IDs that may use the app (empty = allow all)
 
-	// ObserveChannelIDs lists channel IDs where top-level (non-mention) messages
-	// are forwarded to the agent instead of being dropped. A message that already
-	// mentions the bot user is delivered via app_mention only (not duplicated).
-	ObserveChannelIDs []string
+	// ObserveChannelIDs is the astro-spec field name; ObserverChannelIDs is the SLACK_CONFIG alias.
+	ObserveChannelIDs      []string
+	ObserverChannelIDs     []string
+	AutoLinkTextSubstrings []string
+	AutoLinkChannelIDs     []string
+	ChannelMessages        bool
+	ObserverPrependMarker  bool
+	ObserverPrependThread  bool
+	ReactionPrependThread  bool
+	ThreadMaxMessages      int
+	ThreadMaxRunes         int
+
+	// Populated by the Slack adapter during Initialize via auth.test.
+	BotUserID string
+	TeamURL   string
 }
 
 // RateLimitConfig configures rate limiting

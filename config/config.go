@@ -82,9 +82,18 @@ type SlackAdapterConfig struct {
 	AutoThread          *bool    `json:"auto_thread,omitempty"`
 	AllowedChannelIDs   []string `json:"allowed_channel_ids,omitempty"`
 	AllowedUserIDs      []string `json:"allowed_user_ids,omitempty"`
-	// ObserveChannelIDs lists channel IDs where top-level (non-mention) messages
-	// are forwarded to the agent instead of being dropped.
+	// ObserveChannelIDs is the astro-spec / deploy UI field name.
 	ObserveChannelIDs []string `json:"observe_channel_ids,omitempty"`
+	// ObserverChannelIDs is the legacy SLACK_CONFIG JSON name (same semantics).
+	ObserverChannelIDs     []string `json:"observer_channels,omitempty"`
+	AutoLinkTextSubstrings []string `json:"auto_link_text_substrings,omitempty"`
+	AutoLinkChannelIDs     []string `json:"auto_link_channel_ids,omitempty"`
+	ChannelMessages        *bool    `json:"channel_messages,omitempty"`
+	ObserverPrependMarker  *bool    `json:"observer_prepend_marker,omitempty"`
+	ObserverPrependThread  *bool    `json:"observer_prepend_thread,omitempty"`
+	ReactionPrependThread  *bool    `json:"reaction_prepend_thread,omitempty"`
+	ThreadMaxMessages      int      `json:"thread_max_messages,omitempty"`
+	ThreadMaxRunes         int      `json:"thread_max_runes,omitempty"`
 }
 
 // SlackConfig holds Slack-specific configuration
@@ -175,17 +184,33 @@ func Load() (*Config, error) {
 		}
 	}
 
+	observerChannelIDs := cfg.Slack.AdapterConfig.ObserverChannelIDs
+	if len(observerChannelIDs) == 0 {
+		observerChannelIDs = cfg.Slack.AdapterConfig.ObserveChannelIDs
+	} else if len(cfg.Slack.AdapterConfig.ObserveChannelIDs) > 0 {
+		observerChannelIDs = append(observerChannelIDs, cfg.Slack.AdapterConfig.ObserveChannelIDs...)
+	}
+
 	cfg.Slack.Config = adapter.Config{
-		BotToken:            cfg.Slack.Credentials.BotToken,
-		AppToken:            cfg.Slack.Credentials.AppToken,
-		SocketMode:          socketMode,
-		AutoThread:          autoThread,
-		DevMode:             getEnvBool("DEV", false),
-		AgentID:             strings.TrimSpace(os.Getenv("ASTRO_AGENT_ID")),
-		ActionableReactions: cfg.Slack.AdapterConfig.ActionableReactions,
-		AllowedChannelIDs:   cfg.Slack.AdapterConfig.AllowedChannelIDs,
-		AllowedUserIDs:      cfg.Slack.AdapterConfig.AllowedUserIDs,
-		ObserveChannelIDs:   cfg.Slack.AdapterConfig.ObserveChannelIDs,
+		BotToken:               cfg.Slack.Credentials.BotToken,
+		AppToken:               cfg.Slack.Credentials.AppToken,
+		SocketMode:             socketMode,
+		AutoThread:             autoThread,
+		DevMode:                getEnvBool("DEV", false),
+		AgentID:                strings.TrimSpace(os.Getenv("ASTRO_AGENT_ID")),
+		ActionableReactions:    cfg.Slack.AdapterConfig.ActionableReactions,
+		AllowedChannelIDs:      cfg.Slack.AdapterConfig.AllowedChannelIDs,
+		AllowedUserIDs:         cfg.Slack.AdapterConfig.AllowedUserIDs,
+		ObserveChannelIDs:      cfg.Slack.AdapterConfig.ObserveChannelIDs,
+		ObserverChannelIDs:     observerChannelIDs,
+		AutoLinkTextSubstrings: cfg.Slack.AdapterConfig.AutoLinkTextSubstrings,
+		AutoLinkChannelIDs:     cfg.Slack.AdapterConfig.AutoLinkChannelIDs,
+		ChannelMessages:        derefBool(cfg.Slack.AdapterConfig.ChannelMessages, false),
+		ObserverPrependMarker:  derefBool(cfg.Slack.AdapterConfig.ObserverPrependMarker, true),
+		ObserverPrependThread:  derefBool(cfg.Slack.AdapterConfig.ObserverPrependThread, false),
+		ReactionPrependThread:  derefBool(cfg.Slack.AdapterConfig.ReactionPrependThread, false),
+		ThreadMaxMessages:      cfg.Slack.AdapterConfig.ThreadMaxMessages,
+		ThreadMaxRunes:         cfg.Slack.AdapterConfig.ThreadMaxRunes,
 		RateLimit: adapter.RateLimitConfig{
 			RequestsPerSecond: getEnvFloat("SLACK_RATE_LIMIT_RPS", 3.0),
 			BurstSize:         getEnvInt("SLACK_RATE_LIMIT_BURST", 10),

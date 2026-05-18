@@ -62,6 +62,9 @@ func (c *SlackAIClient) SetThreadStatus(ctx context.Context, channelID, threadTS
 	}
 
 	if !result.OK {
+		if result.Error == "invalid_thread_ts" {
+			return nil
+		}
 		return fmt.Errorf("slack API error: %s", result.Error)
 	}
 
