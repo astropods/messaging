@@ -51,6 +51,10 @@ type SlackAdapter struct {
 	// contain <@botUserID> so they don't double-deliver with app_mention.
 	botUserID string
 
+	// teamURL is the workspace base URL from auth.test, used to build permalinks
+	// when chat.getPermalink is unavailable.
+	teamURL string
+
 	// msgDedup suppresses duplicate top-level deliveries (Slack retries) in
 	// observe channels.
 	msgDedup *slackMsgDedup
@@ -186,9 +190,12 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 	// on paths where the adapter strips the mention or doesn't see it).
 	if auth, err := a.client.AuthTestContext(ctx); err != nil {
 		slog.Warn("[Slack] AuthTest failed during init; bot_user_id will be empty", "err", err)
-	} else if auth.UserID != "" {
-		a.botUserID = auth.UserID
-		slog.Info("[Slack] resolved bot user id from auth.test", "bot_user_id", a.botUserID)
+	} else {
+		a.teamURL = auth.URL
+		if auth.UserID != "" {
+			a.botUserID = auth.UserID
+			slog.Info("[Slack] resolved bot user id from auth.test", "bot_user_id", a.botUserID)
+		}
 	}
 
 	slog.Info(fmt.Sprintf("[Slack] Adapter initialized (Socket Mode: %v, observe channels: %v, actionable reactions: %v, allowed channels: %v, allowed user IDs: %v)",
@@ -408,12 +415,14 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		eventKind = pb.PlatformContext_EVENT_KIND_DM
 	}
 
+	body := a.prependInboundMeta(ctx, ev.Channel, ev.TimeStamp, ev.ThreadTimeStamp, renderBlocks(ev.Text, ev.Blocks))
+
 	// Convert to pb.Message
 	msg := &pb.Message{
 		Id:             uuid.NewString(),
 		Timestamp:      timestamppb.New(parseSlackTimestamp(ev.TimeStamp)),
 		Platform:       "slack",
-		Content:        renderBlocks(ev.Text, ev.Blocks),
+		Content:        body,
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
 			MessageId:    ev.TimeStamp,
@@ -695,6 +704,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 	// mentions from the combined string — rich_text user elements get
 	// rendered as <@U…> by renderBlocks, so the same regex handles them.
 	text := stripMentions(renderBlocks(ev.Text, ev.Blocks))
+	text = a.prependInboundMeta(ctx, ev.Channel, ev.TimeStamp, ev.ThreadTimeStamp, text)
 
 	slog.Debug(fmt.Sprintf("[Slack] Setting loading state: channel=%s, threadTS=%s", ev.Channel, threadID))
 	if err := a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "Assistant is thinking...", "thinking_face"); err != nil {
@@ -760,8 +770,9 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 	}
 	conversationID := fmt.Sprintf("%s-%s", ev.Item.Channel, threadID)
 
-	content := fmt.Sprintf("[reaction :%s: added by <@%s> on message]\n%s",
+	body := fmt.Sprintf("[reaction :%s: added by <@%s> on message]\n%s",
 		ev.Reaction, ev.User, originalText)
+	content := a.prependInboundMeta(ctx, ev.Item.Channel, ev.Item.Timestamp, parentThreadTs, body)
 
 	msg := &pb.Message{
 		Id:             uuid.NewString(),
