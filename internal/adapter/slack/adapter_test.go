@@ -155,8 +155,8 @@ func TestHandleMessage_ObserveChannel_TopLevelForwarded(t *testing.T) {
 	if msg.ConversationId != "C123456-9999999999.000001" {
 		t.Errorf("expected conv id 'C123456-9999999999.000001', got %q", msg.ConversationId)
 	}
-	if !strings.Contains(msg.Content, "[slack_meta]") || !strings.Contains(msg.Content, "hello everyone") {
-		t.Errorf("expected slack_meta + text, got %q", msg.Content)
+	if msg.Content != "hello everyone" {
+		t.Errorf("expected raw text, got %q", msg.Content)
 	}
 	if msg.PlatformContext.EventKind != pb.PlatformContext_EVENT_KIND_OBSERVED {
 		t.Errorf("expected EventKind=EVENT_KIND_OBSERVED, got %v", msg.PlatformContext.EventKind)
@@ -233,8 +233,8 @@ func TestHandleMessage_ChannelThreadReplyProcessed(t *testing.T) {
 	if msg.ConversationId != expectedConvID {
 		t.Errorf("expected conversation ID %q, got %q", expectedConvID, msg.ConversationId)
 	}
-	if !strings.Contains(msg.Content, "[slack_meta]") || !strings.Contains(msg.Content, "thread reply without mention") {
-		t.Errorf("expected slack_meta + text, got %q", msg.Content)
+	if msg.Content != "thread reply without mention" {
+		t.Errorf("expected content 'thread reply without mention', got %q", msg.Content)
 	}
 	if msg.PlatformContext.EventKind != pb.PlatformContext_EVENT_KIND_THREAD_REPLY {
 		t.Errorf("expected EventKind=EVENT_KIND_THREAD_REPLY, got %v", msg.PlatformContext.EventKind)
@@ -1037,9 +1037,8 @@ func TestHandleMessage_UserRichTextNotDuplicated(t *testing.T) {
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
 	}
-	got := handler.last().Content
-	if !strings.Contains(got, "[slack_meta]") || !strings.Contains(got, "hello world") {
-		t.Errorf("got %q, want slack_meta + hello world", got)
+	if got := handler.last().Content; got != "hello world" {
+		t.Errorf("got %q, want %q", got, "hello world")
 	}
 }
 
@@ -1094,7 +1093,7 @@ func TestHandleAppMention_BlockKitMergedAndMentionsStripped(t *testing.T) {
 }
 
 // TestHandleMessage_NoBlocksPreservesText guards the common case where
-// no blocks are present: user text is unchanged aside from slack_meta.
+// no blocks are present: behavior must match pre-renderBlocks exactly.
 func TestHandleMessage_NoBlocksPreservesText(t *testing.T) {
 	a, handler := newTestAdapter()
 
@@ -1110,8 +1109,7 @@ func TestHandleMessage_NoBlocksPreservesText(t *testing.T) {
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
 	}
-	got := handler.last().Content
-	if !strings.Contains(got, "[slack_meta]") || !strings.Contains(got, "plain text only") {
-		t.Errorf("got %q, want slack_meta + plain text only", got)
+	if got := handler.last().Content; got != "plain text only" {
+		t.Errorf("got %q, want %q", got, "plain text only")
 	}
 }

@@ -2,6 +2,17 @@ import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import { join } from 'path';
 import { EventEmitter } from 'events';
+import { enrichIncomingAgentResponse } from './inbound-content';
+
+export type { SlackMetaPayload } from './inbound-content';
+export {
+  enrichSlackInboundMessage,
+  enrichIncomingAgentResponse,
+  formatSlackMetaLine,
+  hasSlackMeta,
+  prependSlackMeta,
+  resolveSlackPermalink,
+} from './inbound-content';
 
 // Import types (will be generated from proto)
 export interface Message {
@@ -528,7 +539,7 @@ export class ConversationStream extends EventEmitter {
         this.emit('audioChunk', response.audioChunk as AudioChunk);
       }
 
-      this.emit('response', response as AgentResponse);
+      this.emit('response', enrichIncomingAgentResponse(response as AgentResponse));
     });
 
     stream.on('error', (error: any) => {
