@@ -56,3 +56,32 @@ def test_platform_context_event_kind_default_is_unspecified():
     assert pc.event_kind == message_pb2.PlatformContext.EVENT_KIND_UNSPECIFIED
     assert pc.thread_root_id == ""
     assert pc.bot_user_id == ""
+
+
+def test_add_skill_helper_builds_request():
+    """add_skill packages a Skill into the right ConversationRequest oneof."""
+    from astropods_messaging import Skill, add_skill
+
+    req = add_skill(Skill(name="review", description="Review a PR"))
+    assert req.HasField("add_skill")
+    assert req.add_skill.skill.name == "review"
+    assert req.add_skill.skill.description == "Review a PR"
+
+
+def test_remove_skill_helper_builds_request():
+    from astropods_messaging import remove_skill
+
+    req = remove_skill("review")
+    assert req.HasField("remove_skill")
+    assert req.remove_skill.name == "review"
+
+
+def test_skill_invocation_roundtrip():
+    """SkillInvocation is what the agent receives when a user picks a skill."""
+    from astropods_messaging.astro.messaging.v1 import skill_pb2
+
+    inv = skill_pb2.SkillInvocation(skill_name="review", args="PR 42")
+    restored = skill_pb2.SkillInvocation()
+    restored.ParseFromString(inv.SerializeToString())
+    assert restored.skill_name == "review"
+    assert restored.args == "PR 42"
