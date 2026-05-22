@@ -7,6 +7,7 @@ import "astro/messaging/v1/response.proto";
 import "astro/messaging/v1/feedback.proto";
 import "astro/messaging/v1/audio.proto";
 import "astro/messaging/v1/config.proto";
+import "astro/messaging/v1/skill.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
@@ -49,6 +50,9 @@ message ConversationRequest {
     AgentResponse agent_response = 4;
     AudioStreamConfig audio_config = 5;  // Start audio within conversation
     AudioChunk audio = 6;                // Audio data within conversation
+    AddSkill add_skill = 7;              // Agent → server: register a skill
+    RemoveSkill remove_skill = 8;        // Agent → server: deregister a skill
+    SkillInvocation skill_invocation = 9; // Server → agent: user picked a skill
   }
 }
 

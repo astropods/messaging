@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package astro.messaging.v1;
+
+option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
+
+// A user-invocable skill the agent advertises (e.g. slash command). The
+// playground lists these in a popover when the user types `/`.
+message Skill {
+  string name = 1;             // slug, e.g. "agent-card"; unique key
+  string description = 2;      // short label shown in the dropdown
+  string long_description = 3; // optional longer help shown alongside
+}
+
+// Agent → server: register or update a skill. Repeated sends for the same
+// `name` replace the prior entry.
+message AddSkill {
+  Skill skill = 1;
+}
+
+// Agent → server: remove a previously-registered skill by name. Unknown
+// names are a no-op.
+message RemoveSkill {
+  string name = 1;
+}
+
+// Web/UI → agent: a user picked a skill from the slash menu. The server
+// forwards this verbatim to the agent on the conversation's stream.
+message SkillInvocation {
+  string skill_name = 1;
+  string args = 2;             // free-form text after the command
+}

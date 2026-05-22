@@ -5,6 +5,7 @@ package astro.messaging.v1;
 import "google/protobuf/timestamp.proto";
 import "astro/messaging/v1/message.proto";
 import "astro/messaging/v1/audio.proto";
+import "astro/messaging/v1/skill.proto";
 
 option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
 
@@ -26,6 +27,7 @@ message AgentResponse {
     Transcript transcript = 10;           // Audio transcript (agent → platform)
     AudioStreamConfig audio_config = 11;  // Audio session config (server → agent)
     AudioChunk audio_chunk = 12;          // Audio data (server → agent)
+    SkillInvocation skill_invocation = 13; // User picked a slash command (server → agent)
   }
 }
 
