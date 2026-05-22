@@ -22,6 +22,7 @@ type WebAdapter struct {
 	sessionManager   SessionManager
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
+	skillsStore      *store.SkillsStore
 	server           *http.Server
 	handlers         *Handlers
 
@@ -93,7 +94,7 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 	a.connManager = NewConnectionManager(a.heartbeatInterval)
 
 	// Initialize handlers
-	a.handlers = NewHandlers(a.connManager, a.sessionManager, a.threadStore, a.agentConfigStore)
+	a.handlers = NewHandlers(a.connManager, a.sessionManager, a.threadStore, a.agentConfigStore, a.skillsStore)
 
 	slog.Info("[Web] Adapter initialized", "listen", a.listenAddr)
 	return nil
@@ -121,6 +122,8 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/conversations/{id}/stream", a.handlers.HandleStream)
 	mux.HandleFunc("GET /api/conversations/{id}/history", a.handlers.HandleHistory)
 	mux.HandleFunc("GET /api/agent/config", a.handlers.HandleAgentConfig)
+	mux.HandleFunc("GET /api/skills", a.handlers.HandleListSkills)
+	mux.HandleFunc("POST /api/conversations/{id}/invocations", a.handlers.HandleInvokeSkill)
 	mux.HandleFunc("GET /api/conversations/{id}/audio", a.handlers.HandleAudioStream)
 	mux.HandleFunc("POST /api/conversations/{id}/audio", a.handlers.HandleAudioUpload)
 	mux.HandleFunc("GET /health", a.handlers.HandleHealth)
@@ -316,6 +319,22 @@ func (a *WebAdapter) SetAgentConfigStore(s *store.AgentConfigStore) {
 	a.agentConfigStore = s
 	if a.handlers != nil {
 		a.handlers.agentConfigStore = s
+	}
+}
+
+// SetSkillsStore sets the skills store used to populate GET /api/skills.
+func (a *WebAdapter) SetSkillsStore(s *store.SkillsStore) {
+	a.skillsStore = s
+	if a.handlers != nil {
+		a.handlers.skillsStore = s
+	}
+}
+
+// SetSkillInvoker wires the forwarder that delivers user-picked slash
+// commands to the agent's gRPC stream.
+func (a *WebAdapter) SetSkillInvoker(inv adapter.SkillInvoker) {
+	if a.handlers != nil {
+		a.handlers.SetSkillInvoker(inv)
 	}
 }
 

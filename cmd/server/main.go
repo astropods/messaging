@@ -115,7 +115,7 @@ func main() {
 	agentConfigStore := store.NewAgentConfigStore()
 
 	// Initialize skills store. Skills are pushed by the agent over the gRPC
-	// stream; the web adapter surfaces them in a later commit.
+	// stream and surfaced to the playground via GET /api/skills.
 	skillsStore := store.NewSkillsStore()
 
 	// Initialize gRPC server (if enabled)
@@ -132,7 +132,7 @@ func main() {
 	authorizer := buildAuthorizer(cfg.Authz)
 
 	// Initialize adapters
-	adapters := initializeAdapters(ctx, cfg, threadStore, agentConfigStore, authorizer)
+	adapters := initializeAdapters(ctx, cfg, threadStore, agentConfigStore, skillsStore, authorizer)
 	if len(adapters) == 0 && !cfg.GRPC.Enabled {
 		slog.Error("No adapters enabled or configured and gRPC is disabled")
 		os.Exit(1)
@@ -154,10 +154,12 @@ func main() {
 			slog.Info("Registering gRPC message handler for adapter", "adapter", name)
 			adpt.SetMessageHandler(grpcServer.HandleIncomingMessage)
 
-			// Wire audio forwarder for adapters that support it
+			// Wire audio forwarder + skill invoker for adapters that support
+			// them. Both flow web → gRPC server → agent stream.
 			if wa, ok := adpt.(*web.WebAdapter); ok {
 				wa.SetAudioForwarder(grpcServer)
-				slog.Info("Registered audio forwarder for adapter", "adapter", name)
+				wa.SetSkillInvoker(grpcServer)
+				slog.Info("Registered audio forwarder and skill invoker for adapter", "adapter", name)
 			}
 		}
 	}
@@ -232,7 +234,7 @@ func main() {
 }
 
 // initializeAdapters creates and initializes adapters based on configuration
-func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer) map[string]adapter.Adapter {
+func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, skillsStore *store.SkillsStore, authorizer authz.Authorizer) map[string]adapter.Adapter {
 	adapters := make(map[string]adapter.Adapter)
 
 	// Initialize Slack adapter if enabled
@@ -271,6 +273,7 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 		} else {
 			webAdapter.SetThreadStore(threadStore)
 			webAdapter.SetAgentConfigStore(agentConfigStore)
+			webAdapter.SetSkillsStore(skillsStore)
 			webAdapter.SetAuthorizer(authorizer)
 			adapters["web"] = webAdapter
 			slog.Info("Web adapter initialized")

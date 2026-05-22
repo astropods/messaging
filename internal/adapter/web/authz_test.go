@@ -39,7 +39,7 @@ var _ authz.Authorizer = (*denyAuthorizer)(nil)
 func newHandlersWithDenyAuthz(configStore *store.AgentConfigStore) (*Handlers, *denyAuthorizer) {
 	cm := NewConnectionManager(30 * time.Second)
 	az := &denyAuthorizer{}
-	h := NewHandlers(cm, &NoopSessionManager{}, nil, configStore)
+	h := NewHandlers(cm, &NoopSessionManager{}, nil, configStore, nil)
 	h.SetAuthorizer(az)
 	return h, az
 }
@@ -84,7 +84,7 @@ func TestAuthz_AgentConfig_NoSession_LeaksSystemPrompt(t *testing.T) {
 
 	cm := NewConnectionManager(30 * time.Second)
 	sm := NewHeaderSessionManager("X-User-ID", "", "") // header missing → ValidateRequest returns nil
-	h := NewHandlers(cm, sm, nil, configStore)
+	h := NewHandlers(cm, sm, nil, configStore, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/agent/config", nil)
 	w := httptest.NewRecorder()

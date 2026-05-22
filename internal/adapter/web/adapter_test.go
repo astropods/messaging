@@ -358,7 +358,7 @@ func TestNewErrorEvent(t *testing.T) {
 func TestHandlers_CreateConversation(t *testing.T) {
 	cm := NewConnectionManager(30 * time.Second)
 	sm := &NoopSessionManager{}
-	handlers := NewHandlers(cm, sm, nil, nil)
+	handlers := NewHandlers(cm, sm, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/conversations", nil)
 	w := httptest.NewRecorder()
@@ -387,7 +387,7 @@ func TestHandlers_SendMessage(t *testing.T) {
 	cm := NewConnectionManager(30 * time.Second)
 	sm := &NoopSessionManager{}
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
-	handlers := NewHandlers(cm, sm, threadStore, nil)
+	handlers := NewHandlers(cm, sm, threadStore, nil, nil)
 
 	var receivedMsg *pb.Message
 	handlers.SetMessageHandler(func(ctx context.Context, msg *pb.Message) error {
@@ -429,7 +429,7 @@ func TestHandlers_SendMessage(t *testing.T) {
 func TestHandlers_SendMessage_Unauthorized(t *testing.T) {
 	cm := NewConnectionManager(30 * time.Second)
 	sm := &HeaderSessionManager{UserIDHeader: "X-User-ID"} // Requires header
-	handlers := NewHandlers(cm, sm, nil, nil)
+	handlers := NewHandlers(cm, sm, nil, nil, nil)
 
 	body := `{"content":"Hello"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/conversations/conv-123/messages", bytes.NewReader([]byte(body)))
@@ -446,7 +446,7 @@ func TestHandlers_SendMessage_Unauthorized(t *testing.T) {
 func TestHandlers_SendMessage_EmptyContent(t *testing.T) {
 	cm := NewConnectionManager(30 * time.Second)
 	sm := &NoopSessionManager{}
-	handlers := NewHandlers(cm, sm, nil, nil)
+	handlers := NewHandlers(cm, sm, nil, nil, nil)
 
 	body := `{"content":""}`
 	req := httptest.NewRequest(http.MethodPost, "/api/conversations/conv-123/messages", bytes.NewReader([]byte(body)))
@@ -463,7 +463,7 @@ func TestHandlers_SendMessage_EmptyContent(t *testing.T) {
 func TestHandlers_SendMessage_InvalidJSON(t *testing.T) {
 	cm := NewConnectionManager(30 * time.Second)
 	sm := &NoopSessionManager{}
-	handlers := NewHandlers(cm, sm, nil, nil)
+	handlers := NewHandlers(cm, sm, nil, nil, nil)
 
 	body := `{invalid json}`
 	req := httptest.NewRequest(http.MethodPost, "/api/conversations/conv-123/messages", bytes.NewReader([]byte(body)))
@@ -480,7 +480,7 @@ func TestHandlers_SendMessage_InvalidJSON(t *testing.T) {
 func TestHandlers_SendMessage_NoHandler(t *testing.T) {
 	cm := NewConnectionManager(30 * time.Second)
 	sm := &NoopSessionManager{}
-	handlers := NewHandlers(cm, sm, nil, nil)
+	handlers := NewHandlers(cm, sm, nil, nil, nil)
 	// Note: no SetMessageHandler called
 
 	body := `{"content":"Hello"}`
@@ -498,7 +498,7 @@ func TestHandlers_SendMessage_NoHandler(t *testing.T) {
 func TestHandlers_SendMessage_HandlerError(t *testing.T) {
 	cm := NewConnectionManager(30 * time.Second)
 	sm := &NoopSessionManager{}
-	handlers := NewHandlers(cm, sm, nil, nil)
+	handlers := NewHandlers(cm, sm, nil, nil, nil)
 
 	handlers.SetMessageHandler(func(ctx context.Context, msg *pb.Message) error {
 		return context.DeadlineExceeded // Simulate an error
@@ -519,7 +519,7 @@ func TestHandlers_SendMessage_HandlerError(t *testing.T) {
 func TestHandlers_SendMessage_MissingConversationID(t *testing.T) {
 	cm := NewConnectionManager(30 * time.Second)
 	sm := &NoopSessionManager{}
-	handlers := NewHandlers(cm, sm, nil, nil)
+	handlers := NewHandlers(cm, sm, nil, nil, nil)
 
 	body := `{"content":"Hello"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/conversations//messages", bytes.NewReader([]byte(body)))
@@ -537,7 +537,7 @@ func TestHandlers_History(t *testing.T) {
 	cm := NewConnectionManager(30 * time.Second)
 	sm := &NoopSessionManager{}
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
-	handlers := NewHandlers(cm, sm, threadStore, nil)
+	handlers := NewHandlers(cm, sm, threadStore, nil, nil)
 
 	// Add some messages
 	threadStore.AddMessage("conv-123", &pb.ThreadMessage{
@@ -578,7 +578,7 @@ func TestHandlers_History(t *testing.T) {
 func TestHandlers_Health(t *testing.T) {
 	cm := NewConnectionManager(30 * time.Second)
 	sm := &NoopSessionManager{}
-	handlers := NewHandlers(cm, sm, nil, nil)
+	handlers := NewHandlers(cm, sm, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
@@ -929,7 +929,7 @@ func TestHeaderSessionManager(t *testing.T) {
 func TestHandlers_AgentConfig_NoStore(t *testing.T) {
 	cm := NewConnectionManager(30 * time.Second)
 	sm := &NoopSessionManager{}
-	handlers := NewHandlers(cm, sm, nil, nil) // nil config store
+	handlers := NewHandlers(cm, sm, nil, nil, nil) // nil config store
 
 	req := httptest.NewRequest(http.MethodGet, "/api/agent/config", nil)
 	w := httptest.NewRecorder()
@@ -945,7 +945,7 @@ func TestHandlers_AgentConfig_NotYetReceived(t *testing.T) {
 	cm := NewConnectionManager(30 * time.Second)
 	sm := &NoopSessionManager{}
 	configStore := store.NewAgentConfigStore() // empty — no config set
-	handlers := NewHandlers(cm, sm, nil, configStore)
+	handlers := NewHandlers(cm, sm, nil, configStore, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/agent/config", nil)
 	w := httptest.NewRecorder()
@@ -972,7 +972,7 @@ func TestHandlers_AgentConfig_ValidConfig(t *testing.T) {
 			},
 		},
 	})
-	handlers := NewHandlers(cm, sm, nil, configStore)
+	handlers := NewHandlers(cm, sm, nil, configStore, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/agent/config", nil)
 	w := httptest.NewRecorder()
@@ -1044,7 +1044,7 @@ func TestHandlers_AgentConfig_WithGraph(t *testing.T) {
 			},
 		},
 	})
-	handlers := NewHandlers(cm, sm, nil, configStore)
+	handlers := NewHandlers(cm, sm, nil, configStore, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/agent/config", nil)
 	w := httptest.NewRecorder()
@@ -1111,7 +1111,7 @@ func TestHandlers_AgentConfig_EmptyTools(t *testing.T) {
 		SystemPrompt: "No tools agent",
 		Tools:        []*pb.AgentToolConfig{},
 	})
-	handlers := NewHandlers(cm, sm, nil, configStore)
+	handlers := NewHandlers(cm, sm, nil, configStore, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/agent/config", nil)
 	w := httptest.NewRecorder()
@@ -1146,7 +1146,7 @@ func TestHandlers_AgentConfig_NilToolsInProto(t *testing.T) {
 		SystemPrompt: "Prompt only",
 		// Tools is nil (not set)
 	})
-	handlers := NewHandlers(cm, sm, nil, configStore)
+	handlers := NewHandlers(cm, sm, nil, configStore, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/agent/config", nil)
 	w := httptest.NewRecorder()
@@ -1189,7 +1189,7 @@ func TestHandlers_AgentConfig_ToolWithoutGraph(t *testing.T) {
 			},
 		},
 	})
-	handlers := NewHandlers(cm, sm, nil, configStore)
+	handlers := NewHandlers(cm, sm, nil, configStore, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/agent/config", nil)
 	w := httptest.NewRecorder()
@@ -1232,7 +1232,7 @@ func TestHandlers_AgentConfig_MultipleTools(t *testing.T) {
 			},
 		},
 	})
-	handlers := NewHandlers(cm, sm, nil, configStore)
+	handlers := NewHandlers(cm, sm, nil, configStore, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/agent/config", nil)
 	w := httptest.NewRecorder()
@@ -1746,5 +1746,170 @@ func TestBearerTokenSessionManager(t *testing.T) {
 	}
 	if session3 != nil {
 		t.Error("expected nil session when no auth header")
+	}
+}
+
+// --- Tests for HandleListSkills ---
+
+func TestHandlers_ListSkills_Empty(t *testing.T) {
+	cm := NewConnectionManager(30 * time.Second)
+	sm := &NoopSessionManager{}
+	skills := store.NewSkillsStore()
+	handlers := NewHandlers(cm, sm, nil, nil, skills)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/skills", nil)
+	w := httptest.NewRecorder()
+
+	handlers.HandleListSkills(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Skills []map[string]any `json:"skills"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Skills) != 0 {
+		t.Errorf("expected 0 skills, got %d", len(resp.Skills))
+	}
+}
+
+func TestHandlers_ListSkills_ReturnsRegistered(t *testing.T) {
+	cm := NewConnectionManager(30 * time.Second)
+	sm := &NoopSessionManager{}
+	skills := store.NewSkillsStore()
+	skills.Add(&pb.Skill{Name: "review", Description: "Review a PR", LongDescription: "Reviews a pull request"})
+	skills.Add(&pb.Skill{Name: "agent-card", Description: "Update AGENT.md"})
+	handlers := NewHandlers(cm, sm, nil, nil, skills)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/skills", nil)
+	w := httptest.NewRecorder()
+
+	handlers.HandleListSkills(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp struct {
+		Skills []struct {
+			Name            string `json:"name"`
+			Description     string `json:"description"`
+			LongDescription string `json:"longDescription,omitempty"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Skills) != 2 {
+		t.Fatalf("expected 2 skills, got %d", len(resp.Skills))
+	}
+	// Sorted by name → agent-card, review.
+	if resp.Skills[0].Name != "agent-card" || resp.Skills[1].Name != "review" {
+		t.Errorf("unexpected ordering: %+v", resp.Skills)
+	}
+	if resp.Skills[1].LongDescription != "Reviews a pull request" {
+		t.Errorf("expected long description on review skill, got %q", resp.Skills[1].LongDescription)
+	}
+}
+
+// --- Tests for HandleInvokeSkill ---
+
+type fakeSkillInvoker struct {
+	called         bool
+	conversationID string
+	invocation     *pb.SkillInvocation
+	err            error
+}
+
+func (f *fakeSkillInvoker) HandleSkillInvocation(_ context.Context, conversationID string, inv *pb.SkillInvocation) error {
+	f.called = true
+	f.conversationID = conversationID
+	f.invocation = inv
+	return f.err
+}
+
+func TestHandlers_InvokeSkill_Forwards(t *testing.T) {
+	cm := NewConnectionManager(30 * time.Second)
+	sm := &NoopSessionManager{}
+	skills := store.NewSkillsStore()
+	skills.Add(&pb.Skill{Name: "review", Description: "Review a PR"})
+	handlers := NewHandlers(cm, sm, nil, nil, skills)
+	inv := &fakeSkillInvoker{}
+	handlers.SetSkillInvoker(inv)
+
+	body := bytes.NewBufferString(`{"skill":"review","args":"PR 42"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/conversations/c1/invocations", body)
+	req.SetPathValue("id", "c1")
+	w := httptest.NewRecorder()
+
+	handlers.HandleInvokeSkill(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+	if !inv.called || inv.conversationID != "c1" {
+		t.Fatalf("invoker not called with c1: %+v", inv)
+	}
+	if inv.invocation.SkillName != "review" || inv.invocation.Args != "PR 42" {
+		t.Errorf("invocation mismatch: %+v", inv.invocation)
+	}
+}
+
+func TestHandlers_InvokeSkill_UnknownSkill(t *testing.T) {
+	cm := NewConnectionManager(30 * time.Second)
+	sm := &NoopSessionManager{}
+	skills := store.NewSkillsStore() // empty
+	handlers := NewHandlers(cm, sm, nil, nil, skills)
+	handlers.SetSkillInvoker(&fakeSkillInvoker{})
+
+	body := bytes.NewBufferString(`{"skill":"nope"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/conversations/c1/invocations", body)
+	req.SetPathValue("id", "c1")
+	w := httptest.NewRecorder()
+
+	handlers.HandleInvokeSkill(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestHandlers_InvokeSkill_MissingSkillField(t *testing.T) {
+	cm := NewConnectionManager(30 * time.Second)
+	sm := &NoopSessionManager{}
+	handlers := NewHandlers(cm, sm, nil, nil, store.NewSkillsStore())
+	handlers.SetSkillInvoker(&fakeSkillInvoker{})
+
+	body := bytes.NewBufferString(`{"args":"hi"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/conversations/c1/invocations", body)
+	req.SetPathValue("id", "c1")
+	w := httptest.NewRecorder()
+
+	handlers.HandleInvokeSkill(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandlers_InvokeSkill_NoInvokerWired(t *testing.T) {
+	cm := NewConnectionManager(30 * time.Second)
+	sm := &NoopSessionManager{}
+	skills := store.NewSkillsStore()
+	skills.Add(&pb.Skill{Name: "review"})
+	handlers := NewHandlers(cm, sm, nil, nil, skills) // no invoker
+
+	body := bytes.NewBufferString(`{"skill":"review"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/conversations/c1/invocations", body)
+	req.SetPathValue("id", "c1")
+	w := httptest.NewRecorder()
+
+	handlers.HandleInvokeSkill(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", w.Code)
 	}
 }

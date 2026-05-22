@@ -22,17 +22,20 @@ type Handlers struct {
 	authz            authz.Authorizer // nil = skip authz (dev convenience)
 	msgHandler       adapter.MessageHandler
 	audioForwarder   adapter.AudioForwarder
+	skillInvoker     adapter.SkillInvoker
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
+	skillsStore      *store.SkillsStore
 }
 
 // NewHandlers creates a new Handlers instance
-func NewHandlers(connManager *ConnectionManager, sessionManager SessionManager, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore) *Handlers {
+func NewHandlers(connManager *ConnectionManager, sessionManager SessionManager, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, skillsStore *store.SkillsStore) *Handlers {
 	return &Handlers{
 		connManager:      connManager,
 		sessionManager:   sessionManager,
 		threadStore:      threadStore,
 		agentConfigStore: agentConfigStore,
+		skillsStore:      skillsStore,
 	}
 }
 
@@ -92,6 +95,12 @@ func (h *Handlers) SetMessageHandler(handler adapter.MessageHandler) {
 // SetAudioForwarder sets the audio streaming forwarder
 func (h *Handlers) SetAudioForwarder(fwd adapter.AudioForwarder) {
 	h.audioForwarder = fwd
+}
+
+// SetSkillInvoker wires the forwarder that delivers user-picked slash
+// commands to the agent stream.
+func (h *Handlers) SetSkillInvoker(inv adapter.SkillInvoker) {
+	h.skillInvoker = inv
 }
 
 // CreateConversationRequest represents a request to create a new conversation
@@ -462,6 +471,94 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		slog.Error(fmt.Sprintf("[Web] Encode error on agent config: %v", err))
 	}
+}
+
+// HandleListSkills handles GET /api/skills — returns the agent-advertised
+// slash commands surfaced by the playground in its `/` popover.
+func (h *Handlers) HandleListSkills(w http.ResponseWriter, r *http.Request) {
+	if h.authenticate(w, r) == nil {
+		return
+	}
+
+	type skillResp struct {
+		Name            string `json:"name"`
+		Description     string `json:"description"`
+		LongDescription string `json:"longDescription,omitempty"`
+	}
+
+	skills := []skillResp{}
+	if h.skillsStore != nil {
+		for _, s := range h.skillsStore.List() {
+			skills = append(skills, skillResp{
+				Name:            s.Name,
+				Description:     s.Description,
+				LongDescription: s.LongDescription,
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"skills": skills}); err != nil {
+		slog.Error(fmt.Sprintf("[Web] Encode error on list skills: %v", err))
+	}
+}
+
+// InvokeSkillRequest is the body for POST /api/conversations/{id}/invocations.
+type InvokeSkillRequest struct {
+	Skill string `json:"skill"`
+	Args  string `json:"args,omitempty"`
+}
+
+// HandleInvokeSkill handles POST /api/conversations/{id}/invocations —
+// forwards the user's slash-command pick to the agent via the gRPC stream.
+func (h *Handlers) HandleInvokeSkill(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	session := h.authenticate(w, r)
+	if session == nil {
+		return
+	}
+
+	conversationID := r.PathValue("id")
+	if conversationID == "" {
+		http.Error(w, "Missing conversation ID", http.StatusBadRequest)
+		return
+	}
+
+	var req InvokeSkillRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Skill == "" {
+		http.Error(w, "skill is required", http.StatusBadRequest)
+		return
+	}
+
+	// Reject unknown skill names so a misbehaving client can't make the
+	// agent see arbitrary slash commands. Skipped when the store isn't
+	// wired (test paths).
+	if h.skillsStore != nil && h.skillsStore.Get(req.Skill) == nil {
+		http.Error(w, "Unknown skill", http.StatusNotFound)
+		return
+	}
+
+	if h.skillInvoker == nil {
+		slog.Warn("[Web] No skill invoker registered")
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	invocation := &pb.SkillInvocation{SkillName: req.Skill, Args: req.Args}
+	if err := h.skillInvoker.HandleSkillInvocation(ctx, conversationID, invocation); err != nil {
+		slog.Error(fmt.Sprintf("[Web] Error invoking skill: %v", err))
+		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to invoke skill")
+		http.Error(w, "Failed to invoke skill", http.StatusInternalServerError)
+		return
+	}
+
+	slog.Debug(fmt.Sprintf("[Web] Skill invoked: skill=%q, conversation=%q, user=%q", req.Skill, conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // sendErrorEvent broadcasts an error event to all connections for a conversation
