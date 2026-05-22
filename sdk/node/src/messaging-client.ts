@@ -87,6 +87,24 @@ export interface AgentResponse {
   transcript?: Transcript;
   audioConfig?: AudioStreamConfig;
   audioChunk?: AudioChunk;
+  skillInvocation?: SkillInvocation;
+}
+
+/**
+ * A slash command the agent advertises to the playground. Surfaces in the
+ * `/` popover with `description` as the short label and `longDescription`
+ * as the hover/preview text.
+ */
+export interface Skill {
+  name: string;
+  description: string;
+  longDescription?: string;
+}
+
+/** Sent by the server when a user picks a skill from the slash menu. */
+export interface SkillInvocation {
+  skillName: string;
+  args?: string;
 }
 
 export interface StatusUpdate {
@@ -275,6 +293,9 @@ export interface ConversationRequest {
   agentResponse?: AgentResponse;
   audioConfig?: AudioStreamConfig;
   audio?: AudioChunk;
+  addSkill?: { skill: Skill };
+  removeSkill?: { name: string };
+  skillInvocation?: SkillInvocation;
 }
 
 export interface ReconnectOptions {
@@ -526,6 +547,8 @@ export class ConversationStream extends EventEmitter {
         this.emit('audioConfig', response.audioConfig as AudioStreamConfig);
       } else if (response.audioChunk) {
         this.emit('audioChunk', response.audioChunk as AudioChunk);
+      } else if (response.skillInvocation) {
+        this.emit('skillInvocation', response.skillInvocation as SkillInvocation);
       }
 
       this.emit('response', response as AgentResponse);
@@ -627,6 +650,21 @@ export class ConversationStream extends EventEmitter {
    */
   sendAgentResponse(response: AgentResponse): void {
     this.write({ agentResponse: response });
+  }
+
+  /**
+   * Register a slash-invocable skill. The skill appears in the playground's
+   * `/` popover. Re-sending with the same `name` replaces the prior entry.
+   */
+  addSkill(skill: Skill): void {
+    this.write({ addSkill: { skill } });
+  }
+
+  /**
+   * Deregister a previously-added skill by name. Unknown names are a no-op.
+   */
+  removeSkill(name: string): void {
+    this.write({ removeSkill: { name } });
   }
 
   /**
