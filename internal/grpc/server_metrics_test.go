@@ -17,7 +17,7 @@ import (
 func newMetricsTestServer() *Server {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	return NewServer(":0", threadStore, convStore, nil)
+	return NewServer(":0", threadStore, convStore, nil, nil)
 }
 
 func newMetricsTestMessage(platform string) *pb.Message {

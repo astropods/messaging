@@ -81,7 +81,7 @@ func (m *mockAdapter) getResponseCount() int {
 func TestHandleIncomingMessage_ForwardsToStream(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	var capturedResponse *pb.AgentResponse
 	mockStream := &captureStream{
@@ -167,7 +167,7 @@ func TestHandleIncomingMessage_ForwardsToStream(t *testing.T) {
 func TestHandleIncomingMessage_NoActiveStream(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	msg := &pb.Message{
 		Id:       "msg-101",
@@ -190,7 +190,7 @@ func TestHandleIncomingMessage_NoActiveStream(t *testing.T) {
 func TestHandleIncomingMessage_StreamSendError(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	mockStream := &captureStream{
 		sendFunc: func(resp *pb.AgentResponse) error {
@@ -220,7 +220,7 @@ func TestHandleIncomingMessage_StreamSendError(t *testing.T) {
 func TestHandleIncomingMessage_PlatformContextPreserved(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	mock := newMockAdapter("web")
 	server.RegisterAdapter("web", mock)
@@ -290,7 +290,7 @@ func TestHandleIncomingMessage_PlatformContextPreserved(t *testing.T) {
 func TestHandleIncomingMessage_UserFieldsPreserved(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	var capturedResponse *pb.AgentResponse
 	mockStream := &captureStream{
@@ -340,7 +340,7 @@ func TestHandleIncomingMessage_UserFieldsPreserved(t *testing.T) {
 func TestPlatformContext_RoundtripWebMessage(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	webAdapter := newMockAdapter("web")
 	server.RegisterAdapter("web", webAdapter)
@@ -431,7 +431,7 @@ func TestPlatformContext_RoundtripWebMessage(t *testing.T) {
 func TestPlatformContext_RoundtripSlackThreadedMessage(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	slackAdapter := newMockAdapter("slack")
 	server.RegisterAdapter("slack", slackAdapter)
@@ -508,7 +508,7 @@ func TestPlatformContext_RoundtripSlackThreadedMessage(t *testing.T) {
 func TestPlatformContext_PlatformDataPreserved(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	var capturedResponse *pb.AgentResponse
 	mockStream := &captureStream{
@@ -571,7 +571,7 @@ func TestPlatformContext_PlatformDataPreserved(t *testing.T) {
 func TestProtobufMessage_ConversationIdPreserved(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	var capturedResponse *pb.AgentResponse
 	mockStream := &captureStream{
@@ -617,7 +617,7 @@ func TestProtobufMessage_ConversationIdPreserved(t *testing.T) {
 func TestProtobufMessage_TimestampPreserved(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	var capturedResponse *pb.AgentResponse
 	mockStream := &captureStream{
@@ -666,7 +666,7 @@ func TestProtobufMessage_TimestampPreserved(t *testing.T) {
 func TestProtobufMessage_AttachmentsPreserved(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	var capturedResponse *pb.AgentResponse
 	mockStream := &captureStream{
@@ -773,7 +773,7 @@ func TestBuildConversationID(t *testing.T) {
 func TestHealthCheck_AllHealthy(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	mock1 := newMockAdapter("web")
 	mock2 := newMockAdapter("slack")
@@ -793,7 +793,7 @@ func TestHealthCheck_AllHealthy(t *testing.T) {
 func TestHealthCheck_Degraded(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	healthyAdapter := newMockAdapter("web")
 	unhealthyAdapter := newMockAdapter("slack")
@@ -817,7 +817,7 @@ func TestHealthCheck_Degraded(t *testing.T) {
 func TestRegisterAdapter(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	mock := newMockAdapter("web")
 	server.RegisterAdapter("web", mock)
@@ -839,7 +839,7 @@ func TestRegisterAdapter(t *testing.T) {
 func TestSendToAgent_Success(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	var capturedResponse *pb.AgentResponse
 	mockStream := &captureStream{
@@ -879,7 +879,7 @@ func TestSendToAgent_Success(t *testing.T) {
 func TestSendToAgent_NoStream(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	resp := &pb.AgentResponse{
 		ConversationId: "nonexistent",
@@ -897,7 +897,7 @@ func TestNewServer_WithAgentConfigStore(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
 	configStore := store.NewAgentConfigStore()
-	server := NewServer(":0", threadStore, convStore, configStore)
+	server := NewServer(":0", threadStore, convStore, configStore, nil)
 
 	if server.agentConfigStore != configStore {
 		t.Error("expected agentConfigStore to be set")
@@ -907,7 +907,7 @@ func TestNewServer_WithAgentConfigStore(t *testing.T) {
 func TestNewServer_NilAgentConfigStore(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	if server.agentConfigStore != nil {
 		t.Error("expected agentConfigStore to be nil")
@@ -919,7 +919,7 @@ func TestNewServer_NilAgentConfigStore(t *testing.T) {
 func TestRouteAgentResponse_RoutesViaCacheToCorrectAdapter(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	webAdapter := newMockAdapter("web")
 	slackAdapter := newMockAdapter("slack")
@@ -959,7 +959,7 @@ func TestRouteAgentResponse_RoutesViaCacheToCorrectAdapter(t *testing.T) {
 func TestRouteAgentResponse_BroadcastsWhenNotInCache(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	webAdapter := newMockAdapter("web")
 	slackAdapter := newMockAdapter("slack")
@@ -991,7 +991,7 @@ func TestRouteAgentResponse_BroadcastsWhenNotInCache(t *testing.T) {
 func TestRouteAgentResponse_StatusUpdate(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	webAdapter := newMockAdapter("web")
 	server.RegisterAdapter("web", webAdapter)
@@ -1039,7 +1039,7 @@ func TestRouteAgentResponse_StatusUpdate(t *testing.T) {
 func TestRouteAgentResponse_ContentChunkSequence(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	webAdapter := newMockAdapter("web")
 	server.RegisterAdapter("web", webAdapter)
@@ -1093,7 +1093,7 @@ func TestRouteAgentResponse_ContentChunkSequence(t *testing.T) {
 func TestRouteAgentResponse_AdapterReturnsError(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	webAdapter := newMockAdapter("web")
 	webAdapter.respErr = fmt.Errorf("adapter broken")
@@ -1127,7 +1127,7 @@ func TestRouteAgentResponse_AdapterReturnsError(t *testing.T) {
 func TestRouteAgentResponse_EmptyConversationID(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	webAdapter := newMockAdapter("web")
 	server.RegisterAdapter("web", webAdapter)
@@ -1156,7 +1156,7 @@ func TestRouteAgentResponse_EmptyConversationID(t *testing.T) {
 func TestUpdateConversationCache_CreatesNewEntry(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	msg := &pb.Message{
 		Id:             "msg-001",
@@ -1203,7 +1203,7 @@ func TestUpdateConversationCache_CreatesNewEntry(t *testing.T) {
 func TestUpdateConversationCache_UpdatesExistingEntry(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	ctx := context.Background()
 	convStore.Create(ctx, &types.ConversationContext{
@@ -1234,7 +1234,7 @@ func TestUpdateConversationCache_UpdatesExistingEntry(t *testing.T) {
 func TestUpdateConversationCache_NilPlatformContext(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	msg := &pb.Message{
 		ConversationId:  "conv-no-pc",
@@ -1261,7 +1261,7 @@ func TestUpdateConversationCache_NilPlatformContext(t *testing.T) {
 func TestRouteAgentResponse_UsesCache_AfterIncomingMessage(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	webAdapter := newMockAdapter("web")
 	slackAdapter := newMockAdapter("slack")
@@ -1318,7 +1318,7 @@ func TestRouteAgentResponse_UsesCache_AfterIncomingMessage(t *testing.T) {
 func TestUpdateConversationCache_SecondMessageIncrements(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	ctx := context.Background()
 	msg := &pb.Message{
@@ -1352,7 +1352,7 @@ func TestUpdateConversationCache_SecondMessageIncrements(t *testing.T) {
 func TestFindStreamForConversation_MatchesExactConversation(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	stream1 := &captureStream{}
 	stream2 := &captureStream{}
@@ -1380,7 +1380,7 @@ func TestFindStreamForConversation_MatchesExactConversation(t *testing.T) {
 func TestFindStreamForConversation_FallsBackToAgentStream(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	agentStream := &captureStream{}
 
@@ -1404,7 +1404,7 @@ func TestFindStreamForConversation_FallsBackToAgentStream(t *testing.T) {
 func TestFindStreamForConversation_ReturnsNilWhenEmpty(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	found := server.findStreamForConversation("anything")
 	if found != nil {
@@ -1415,7 +1415,7 @@ func TestFindStreamForConversation_ReturnsNilWhenEmpty(t *testing.T) {
 func TestSendAudioConfig_RoutesToCorrectStream(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	var stream1Responses []*pb.AgentResponse
 	var stream2Responses []*pb.AgentResponse
@@ -1465,7 +1465,7 @@ func TestSendAudioConfig_RoutesToCorrectStream(t *testing.T) {
 func TestSendAudioChunk_RoutesToCorrectStream(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	var received []*pb.AgentResponse
 	mock := &captureStream{sendFunc: func(resp *pb.AgentResponse) error {
@@ -1509,7 +1509,7 @@ func TestSendAudioChunk_RoutesToCorrectStream(t *testing.T) {
 func TestSendAudioConfig_NoStream(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	err := server.SendAudioConfig("nonexistent", &pb.AudioStreamConfig{})
 	if err == nil {
@@ -1523,7 +1523,7 @@ func TestSendAudioConfig_NoStream(t *testing.T) {
 func TestSendAudioChunk_NoStream(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	server := NewServer(":0", threadStore, convStore, nil)
+	server := NewServer(":0", threadStore, convStore, nil, nil)
 
 	err := server.SendAudioChunk("nonexistent", []byte{0x01}, 1, false)
 	if err == nil {

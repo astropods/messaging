@@ -45,7 +45,7 @@ func startIntegrationServer(t *testing.T) *integrationServer {
 
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
-	srv := grpcserver.NewServer(grpcAddr, threadStore, convStore, nil)
+	srv := grpcserver.NewServer(grpcAddr, threadStore, convStore, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go srv.Start(ctx) //nolint:errcheck

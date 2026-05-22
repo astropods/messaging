@@ -114,11 +114,15 @@ func main() {
 	// Initialize agent config store
 	agentConfigStore := store.NewAgentConfigStore()
 
+	// Initialize skills store. Skills are pushed by the agent over the gRPC
+	// stream; the web adapter surfaces them in a later commit.
+	skillsStore := store.NewSkillsStore()
+
 	// Initialize gRPC server (if enabled)
 	var grpcServer *grpc.Server
 	if cfg.GRPC.Enabled {
 		slog.Info("Initializing gRPC server...")
-		grpcServer = grpc.NewServer(cfg.GRPC.ListenAddr, threadStore, conversationStore, agentConfigStore)
+		grpcServer = grpc.NewServer(cfg.GRPC.ListenAddr, threadStore, conversationStore, agentConfigStore, skillsStore)
 		slog.Info("gRPC server initialized", "addr", cfg.GRPC.ListenAddr)
 	}
 

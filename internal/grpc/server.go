@@ -31,6 +31,9 @@ type Server struct {
 	// Agent config store
 	agentConfigStore *store.AgentConfigStore
 
+	// Skills store — agent-advertised slash commands surfaced to the playground
+	skillsStore *store.SkillsStore
+
 	// Conversation metadata cache
 	conversationCache store.ConversationStore
 
@@ -51,11 +54,12 @@ type conversationStream struct {
 }
 
 // NewServer creates a new gRPC server
-func NewServer(listenAddr string, threadStore *store.ThreadHistoryStore, convStore store.ConversationStore, agentConfigStore *store.AgentConfigStore) *Server {
+func NewServer(listenAddr string, threadStore *store.ThreadHistoryStore, convStore store.ConversationStore, agentConfigStore *store.AgentConfigStore, skillsStore *store.SkillsStore) *Server {
 	return &Server{
 		adapters:          make(map[string]adapter.Adapter),
 		threadStore:       threadStore,
 		agentConfigStore:  agentConfigStore,
+		skillsStore:       skillsStore,
 		conversationCache: convStore,
 		streams:           make(map[string]*conversationStream),
 		listenAddr:        listenAddr,
@@ -213,6 +217,21 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 			slog.Debug("[gRPC] Agent response", "conversation", response.ConversationId)
 			if err := s.routeAgentResponse(streamCtx, response); err != nil {
 				slog.Error("[gRPC] Error routing agent response", "err", err)
+			}
+
+		case *pb.ConversationRequest_AddSkill:
+			// Agent registering a slash-invocable skill.
+			if s.skillsStore != nil && payload.AddSkill != nil {
+				s.skillsStore.Add(payload.AddSkill.Skill)
+				if payload.AddSkill.Skill != nil {
+					slog.Debug("[gRPC] Skill added", "name", payload.AddSkill.Skill.Name)
+				}
+			}
+
+		case *pb.ConversationRequest_RemoveSkill:
+			if s.skillsStore != nil && payload.RemoveSkill != nil {
+				s.skillsStore.Remove(payload.RemoveSkill.Name)
+				slog.Debug("[gRPC] Skill removed", "name", payload.RemoveSkill.Name)
 			}
 
 		default:
@@ -499,6 +518,8 @@ func agentResponseType(r *pb.AgentResponse) string {
 		return "audio_config"
 	case *pb.AgentResponse_AudioChunk:
 		return "audio_chunk"
+	case *pb.AgentResponse_SkillInvocation:
+		return "skill_invocation"
 	default:
 		return "unknown"
 	}
@@ -536,6 +557,33 @@ func (s *Server) updateConversationCache(ctx context.Context, msg *pb.Message) e
 	conv.MessageCount++
 
 	return s.conversationCache.Update(ctx, conv)
+}
+
+// HandleSkillInvocation forwards a user-picked slash command to the agent's
+// stream. Mirrors HandleIncomingMessage but carries a SkillInvocation rather
+// than a Message — agents distinguish them by the AgentResponse payload type.
+func (s *Server) HandleSkillInvocation(ctx context.Context, conversationID string, invocation *pb.SkillInvocation) error {
+	if invocation == nil || invocation.SkillName == "" {
+		return fmt.Errorf("skill invocation missing skill_name")
+	}
+
+	stream := s.findStreamForConversation(conversationID)
+	if stream == nil {
+		metrics.MessagesDropped.WithLabelValues("web", "no_agent").Inc()
+		return adapter.ErrNoAgentStream
+	}
+
+	response := &pb.AgentResponse{
+		ConversationId: conversationID,
+		Payload: &pb.AgentResponse_SkillInvocation{
+			SkillInvocation: invocation,
+		},
+	}
+	if err := stream.stream.Send(response); err != nil {
+		return fmt.Errorf("failed to send skill invocation to agent: %w", err)
+	}
+	slog.Debug("[gRPC] Skill invocation forwarded to agent", "conversation", conversationID, "skill", invocation.SkillName)
+	return nil
 }
 
 // SendToAgent sends a message to an agent stream

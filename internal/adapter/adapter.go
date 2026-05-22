@@ -63,6 +63,13 @@ type AudioForwarder interface {
 	SendAudioChunk(conversationID string, data []byte, sequence int64, done bool) error
 }
 
+// SkillInvoker forwards a user-picked slash command to the agent over the
+// gRPC stream. Web adapter calls this when the playground POSTs an
+// invocation; the gRPC server implements it.
+type SkillInvoker interface {
+	HandleSkillInvocation(ctx context.Context, conversationID string, invocation *pb.SkillInvocation) error
+}
+
 // Config holds adapter configuration
 type Config struct {
 	BotToken            string
