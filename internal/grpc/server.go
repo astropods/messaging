@@ -220,11 +220,20 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 			}
 
 		case *pb.ConversationRequest_AddSkill:
-			// Agent registering a slash-invocable skill.
+			// Agent registering a slash-invocable skill. The store validates
+			// name format / length and description size; a malformed skill
+			// is dropped here with a warning rather than terminating the
+			// stream — one bad registration shouldn't kill the conversation.
 			if s.skillsStore != nil && payload.AddSkill != nil {
-				s.skillsStore.Add(payload.AddSkill.Skill)
-				if payload.AddSkill.Skill != nil {
-					slog.Debug("[gRPC] Skill added", "name", payload.AddSkill.Skill.Name)
+				skill := payload.AddSkill.Skill
+				if err := s.skillsStore.Add(skill); err != nil {
+					name := ""
+					if skill != nil {
+						name = skill.Name
+					}
+					slog.Warn("[gRPC] AddSkill rejected", "name", name, "err", err)
+				} else {
+					slog.Debug("[gRPC] Skill added", "name", skill.Name)
 				}
 			}
 
