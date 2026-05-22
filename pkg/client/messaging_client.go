@@ -138,6 +138,27 @@ func (s *ConversationStream) SendFeedback(feedback *pb.PlatformFeedback) error {
 	})
 }
 
+// AddSkill registers a slash-invocable skill with the server. The skill
+// appears in the playground's `/` popover. Re-sending with the same Name
+// replaces the prior entry.
+func (s *ConversationStream) AddSkill(skill *pb.Skill) error {
+	return s.Send(&pb.ConversationRequest{
+		Request: &pb.ConversationRequest_AddSkill{
+			AddSkill: &pb.AddSkill{Skill: skill},
+		},
+	})
+}
+
+// RemoveSkill deregisters a skill by name. Unknown names are a no-op on the
+// server side.
+func (s *ConversationStream) RemoveSkill(name string) error {
+	return s.Send(&pb.ConversationRequest{
+		Request: &pb.ConversationRequest_RemoveSkill{
+			RemoveSkill: &pb.RemoveSkill{Name: name},
+		},
+	})
+}
+
 // Receive receives an agent response from the stream
 func (s *ConversationStream) Receive() (*pb.AgentResponse, error) {
 	return s.stream.Recv()
