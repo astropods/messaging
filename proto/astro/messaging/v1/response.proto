@@ -29,12 +29,6 @@ message AgentResponse {
     AudioChunk audio_chunk = 12;          // Audio data (server → agent)
     PlatformFeedback feedback = 13;       // Incoming platform feedback (server → agent)
   }
-
-  // Observability trace identifier (e.g. Langfuse trace ID) the agent
-  // emits on the END frame so the messaging server can correlate later
-  // feedback events with the original trace. Optional — when empty the
-  // server falls back to logging only.
-  string trace_id = 14;
 }
 
 // AI status indicators (loading states, typing)

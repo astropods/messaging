@@ -88,29 +88,33 @@ export interface AgentResponse {
   audioConfig?: AudioStreamConfig;
   audioChunk?: AudioChunk;
   feedback?: PlatformFeedback;
-  // Observability trace ID (e.g. Langfuse) the agent emits on the END frame
-  // so the messaging server can later correlate feedback events with the
-  // trace. Optional — when empty the server falls back to logging only.
-  traceId?: string;
 }
 
 // Inbound platform feedback. Mirrors astro.messaging.v1.PlatformFeedback —
 // proto-loader flattens the oneof, so only one of the feedback fields below
 // is populated on any given event.
+//
+// The non-`reaction` / non-`text` variants are typed as opaque records on
+// purpose: SDK consumers should switch on the FeedbackEvent.kind string
+// rather than read these proto shapes directly, so over-exposing them just
+// adds API surface that callers shouldn't be touching.
 export interface PlatformFeedback {
   conversationId: string;
   responseId?: string;
   timestamp?: any;
-  userId?: string;
-  userName?: string;
+  user?: User;
   // oneof feedback — only one of these is set:
-  streamControl?: StreamControl;
-  promptSelection?: PromptSelection;
   reaction?: MessageReaction;
-  buttonClick?: ButtonClick;
-  messageEdit?: MessageEdit;
-  messageDelete?: MessageDelete;
   text?: TextFeedback;
+  // Other oneof variants on the wire (stream_control, prompt_selection,
+  // button_click, message_edit, message_delete). Present so the dispatch
+  // code can detect kind, but intentionally untyped — consume via
+  // FeedbackEvent.kind, not by reading these directly.
+  streamControl?: Record<string, unknown>;
+  promptSelection?: Record<string, unknown>;
+  buttonClick?: Record<string, unknown>;
+  messageEdit?: Record<string, unknown>;
+  messageDelete?: Record<string, unknown>;
 }
 
 export interface MessageReaction {
@@ -123,35 +127,6 @@ export interface MessageReaction {
 export interface TextFeedback {
   text: string;
   prompt?: string;
-}
-
-export interface ButtonClick {
-  buttonId: string;
-  value?: string;
-  action: string;
-}
-
-export interface PromptSelection {
-  promptId: string;
-  promptMessage: string;
-}
-
-export interface StreamControl {
-  // Enum: UNSPECIFIED=0, STOP=1, PAUSE=2, RESUME=3, REGENERATE=4
-  action: number;
-  reason?: string;
-}
-
-export interface MessageEdit {
-  messageId: string;
-  newContent: string;
-  originalContent?: string;
-  editedAt?: any;
-}
-
-export interface MessageDelete {
-  messageId: string;
-  deletedAt?: any;
 }
 
 export interface StatusUpdate {

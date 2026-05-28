@@ -193,7 +193,7 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 
 	blocks = append(blocks, map[string]interface{}{
 		"type":     "actions",
-		"block_id": "yoda_feedback_comment_actions",
+		"block_id": "astropods_feedback_comment_actions",
 		"elements": []map[string]interface{}{
 			{
 				"type":      "button",

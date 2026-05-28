@@ -219,12 +219,7 @@ type AgentResponse struct {
 	//	*AgentResponse_AudioConfig
 	//	*AgentResponse_AudioChunk
 	//	*AgentResponse_Feedback
-	Payload isAgentResponse_Payload `protobuf_oneof:"payload"`
-	// Observability trace identifier (e.g. Langfuse trace ID) the agent
-	// emits on the END frame so the messaging server can correlate later
-	// feedback events with the original trace. Optional — when empty the
-	// server falls back to logging only.
-	TraceId       string `protobuf:"bytes,14,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	Payload       isAgentResponse_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -377,13 +372,6 @@ func (x *AgentResponse) GetFeedback() *PlatformFeedback {
 		}
 	}
 	return nil
-}
-
-func (x *AgentResponse) GetTraceId() string {
-	if x != nil {
-		return x.TraceId
-	}
-	return ""
 }
 
 type isAgentResponse_Payload interface {
@@ -1624,7 +1612,7 @@ var File_astro_messaging_v1_response_proto protoreflect.FileDescriptor
 
 const file_astro_messaging_v1_response_proto_rawDesc = "" +
 	"\n" +
-	"!astro/messaging/v1/response.proto\x12\x12astro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a astro/messaging/v1/message.proto\x1a\x1eastro/messaging/v1/audio.proto\x1a!astro/messaging/v1/feedback.proto\"\xf9\x06\n" +
+	"!astro/messaging/v1/response.proto\x12\x12astro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a astro/messaging/v1/message.proto\x1a\x1eastro/messaging/v1/audio.proto\x1a!astro/messaging/v1/feedback.proto\"\xde\x06\n" +
 	"\rAgentResponse\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x1f\n" +
 	"\vresponse_id\x18\x02 \x01(\tR\n" +
@@ -1643,8 +1631,7 @@ const file_astro_messaging_v1_response_proto_rawDesc = "" +
 	"\faudio_config\x18\v \x01(\v2%.astro.messaging.v1.AudioStreamConfigH\x00R\vaudioConfig\x12A\n" +
 	"\vaudio_chunk\x18\f \x01(\v2\x1e.astro.messaging.v1.AudioChunkH\x00R\n" +
 	"audioChunk\x12B\n" +
-	"\bfeedback\x18\r \x01(\v2$.astro.messaging.v1.PlatformFeedbackH\x00R\bfeedback\x12\x19\n" +
-	"\btrace_id\x18\x0e \x01(\tR\atraceIdB\t\n" +
+	"\bfeedback\x18\r \x01(\v2$.astro.messaging.v1.PlatformFeedbackH\x00R\bfeedbackB\t\n" +
 	"\apayload\"\x86\x02\n" +
 	"\fStatusUpdate\x12?\n" +
 	"\x06status\x18\x01 \x01(\x0e2'.astro.messaging.v1.StatusUpdate.StatusR\x06status\x12%\n" +

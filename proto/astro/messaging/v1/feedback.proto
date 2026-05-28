@@ -3,6 +3,7 @@ syntax = "proto3";
 package astro.messaging.v1;
 
 import "google/protobuf/timestamp.proto";
+import "astro/messaging/v1/message.proto";
 
 option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
 
@@ -23,10 +24,10 @@ message PlatformFeedback {
     TextFeedback text = 10;               // Free-form text submitted via modal/dialog
   }
 
-  // Identifies the platform user who submitted the feedback. Empty for
-  // anonymous/system-generated feedback events.
-  string user_id = 20;
-  string user_name = 21;
+  // Platform user who submitted the feedback. Same shape as Message.user
+  // for consistency across the API surface — sinks can drop both into the
+  // same column. Empty for anonymous/system-generated events.
+  User user = 20;
 }
 
 // Control agent streaming/generation

@@ -16,16 +16,6 @@ func (a *SlackAdapter) HandleAgentResponse(ctx context.Context, response *pb.Age
 		return fmt.Errorf("nil response")
 	}
 
-	// Capture trace_id (e.g. Langfuse) the agent emitted on this frame
-	// BEFORE dispatching. The trace_id is associated with the conversation
-	// here; handleContentChunk binds it to the Slack message_ts once
-	// PostMessageWithFeedback returns the platform ID.
-	if response.TraceId != "" && response.ConversationId != "" {
-		a.pendingTraceIDsMu.Lock()
-		a.pendingTraceIDs[response.ConversationId] = response.TraceId
-		a.pendingTraceIDsMu.Unlock()
-	}
-
 	switch payload := response.Payload.(type) {
 	case *pb.AgentResponse_Status:
 		return a.setSlackStatus(ctx, response.ConversationId, payload.Status)
@@ -150,16 +140,10 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 			return fmt.Errorf("rate limit wait failed: %w", err)
 		}
 
-		postedTS, err := a.aiClient.PostMessageWithFeedback(ctx, channelID, fullContent, threadTS)
+		_, err = a.aiClient.PostMessageWithFeedback(ctx, channelID, fullContent, threadTS)
 		if err != nil {
 			return fmt.Errorf("failed to send message: %w", err)
 		}
-
-		// If the agent emitted a Langfuse trace_id on this conversation, bind
-		// it to the posted message_ts so a later feedback click can look it
-		// up and submit a score. Best-effort — store errors should not break
-		// message delivery.
-		a.bindPendingTraceID(ctx, conversationID, postedTS)
 
 		slog.Debug(fmt.Sprintf("[Slack] Sent content to %s (%d chars)", conversationID, len(fullContent)))
 

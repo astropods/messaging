@@ -375,15 +375,7 @@ func (s *Server) HandleIncomingFeedback(ctx context.Context, fb *pb.PlatformFeed
 	}
 	metrics.MessagesReceived.WithLabelValues("feedback").Inc()
 
-	s.streamsMu.RLock()
-	var stream *conversationStream
-	if cs, ok := s.streams[fb.ConversationId]; ok {
-		stream = cs
-	} else if cs, ok := s.streams["agent-stream"]; ok {
-		stream = cs
-	}
-	s.streamsMu.RUnlock()
-
+	stream := s.findStreamForConversation(fb.ConversationId)
 	if stream == nil {
 		metrics.MessagesDropped.WithLabelValues("feedback", "no_agent").Inc()
 		return adapter.ErrNoAgentStream

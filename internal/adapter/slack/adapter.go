@@ -9,12 +9,10 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/authz"
-	"github.com/astropods/messaging/internal/langfuse"
 	"github.com/astropods/messaging/internal/metrics"
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
@@ -57,24 +55,6 @@ type SlackAdapter struct {
 	// msgDedup suppresses duplicate top-level deliveries (Slack retries) in
 	// observe channels.
 	msgDedup *slackMsgDedup
-
-	// langfuseClient submits user-feedback scores when configured. nil or
-	// disabled clients no-op silently — the callback path always fires
-	// regardless of whether scores are also being recorded.
-	langfuseClient *langfuse.Client
-
-	// feedbackStore maps Slack message_ts → Langfuse trace_id so that a
-	// thumbs/comment click minutes later can be tied back to the trace the
-	// agent emitted at END time. Process-local; multi-pod deployments will
-	// want a Redis-backed impl (planned follow-up).
-	feedbackStore store.FeedbackStore
-
-	// pendingTraceIDs holds trace_ids the agent emitted on the END frame
-	// BEFORE the platform message has been posted (and thus before the
-	// Slack message_ts is known). Keyed by conversation_id; consumed by
-	// handleContentChunk after PostMessageWithFeedback returns the ts.
-	pendingTraceIDs   map[string]string
-	pendingTraceIDsMu sync.Mutex
 }
 
 // SetAuthorizer wires the authorizer used to gate every incoming slack
@@ -201,19 +181,6 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 	}
 	if len(a.observeChannels) > 0 {
 		a.msgDedup = newSlackMsgDedup(512)
-	}
-
-	// Langfuse score submission wiring. Always construct a client (it
-	// no-ops when creds are empty) so call sites can avoid nil checks.
-	a.langfuseClient = langfuse.New(
-		config.LangfuseBaseURL,
-		config.LangfusePublicKey,
-		config.LangfuseSecretKey,
-	)
-	a.feedbackStore = store.NewMemoryFeedbackStore(0) // 0 → DefaultFeedbackTTL
-	a.pendingTraceIDs = make(map[string]string)
-	if a.langfuseClient.Enabled() {
-		slog.Info("[Slack] Langfuse user-feedback scoring enabled", "base_url", config.LangfuseBaseURL)
 	}
 	// Resolve the bot user id once at init so every outbound Message can carry
 	// it on PlatformContext (agents may need it to detect "I was @-mentioned"
@@ -517,11 +484,9 @@ func (a *SlackAdapter) handleFeedbackButton(ctx context.Context, callback *slack
 	// Use Slack emoji names (not emoji characters)
 	emojiName := "thumbsup"
 	reactionType := pb.MessageReaction_THUMBS_UP
-	scoreValue := 1.0
 	if feedbackType == "negative_feedback" {
 		emojiName = "thumbsdown"
 		reactionType = pb.MessageReaction_THUMBS_DOWN
-		scoreValue = 0.0
 	}
 
 	// Remove feedback buttons from the message first
@@ -571,8 +536,10 @@ func (a *SlackAdapter) handleFeedbackButton(ctx context.Context, callback *slack
 		ConversationId: conversationIDFromCallback(callback),
 		ResponseId:     callback.Message.Timestamp,
 		Timestamp:      timestamppb.Now(),
-		UserId:         callback.User.ID,
-		UserName:       callback.User.Name,
+		User: &pb.User{
+			Id:       callback.User.ID,
+			Username: callback.User.Name,
+		},
 		Feedback: &pb.PlatformFeedback_Reaction{
 			Reaction: &pb.MessageReaction{
 				Type:  reactionType,
@@ -580,35 +547,23 @@ func (a *SlackAdapter) handleFeedbackButton(ctx context.Context, callback *slack
 			},
 		},
 	})
-
-	// Submit Langfuse score (pillar #1: out-of-the-box satisfaction signal).
-	// Idempotency key derived from message_ts so a double-click is upserted
-	// rather than duplicated.
-	a.submitLangfuseScore(
-		ctx,
-		callback.Message.Timestamp,
-		"user-feedback",
-		callback.Message.Timestamp+"-user-feedback",
-		scoreValue,
-		"",
-	)
 }
 
 // feedbackCommentBlockID identifies the actions block that hosts our
 // 💬 comment button (so handleFeedbackButton can strip it alongside the
 // thumbs widget when removing feedback UI after a click).
-const feedbackCommentBlockID = "yoda_feedback_comment_actions"
+const feedbackCommentBlockID = "astropods_feedback_comment_actions"
 
 // feedbackCommentCallbackID identifies the modal view submission so
 // handleViewSubmission knows the submission came from our comment dialog.
-const feedbackCommentCallbackID = "yoda_feedback_comment_modal"
+const feedbackCommentCallbackID = "astropods_feedback_comment_modal"
 
 // feedbackCommentInputBlockID / feedbackCommentInputActionID locate the
 // text input inside the modal — both needed to read the typed value out
 // of the view_submission state map.
 const (
-	feedbackCommentInputBlockID  = "yoda_feedback_comment_input"
-	feedbackCommentInputActionID = "yoda_feedback_comment_text"
+	feedbackCommentInputBlockID  = "astropods_feedback_comment_input"
+	feedbackCommentInputActionID = "astropods_feedback_comment_text"
 )
 
 // handleFeedbackCommentOpen opens a Slack modal where the user types
@@ -708,8 +663,10 @@ func (a *SlackAdapter) handleViewSubmission(ctx context.Context, callback *slack
 		ConversationId: meta.ConversationID,
 		ResponseId:     meta.MessageTS,
 		Timestamp:      timestamppb.Now(),
-		UserId:         callback.User.ID,
-		UserName:       callback.User.Name,
+		User: &pb.User{
+			Id:       callback.User.ID,
+			Username: callback.User.Name,
+		},
 		Feedback: &pb.PlatformFeedback_Text{
 			Text: &pb.TextFeedback{
 				Text:   text,
@@ -717,18 +674,6 @@ func (a *SlackAdapter) handleViewSubmission(ctx context.Context, callback *slack
 			},
 		},
 	})
-
-	// Submit Langfuse score with the comment attached. Value=0.5 marks it
-	// as neutral on the numeric axis — the dashboard treats `user-comment`
-	// as a qualitative score where the `comment` field is the payload.
-	a.submitLangfuseScore(
-		ctx,
-		meta.MessageTS,
-		"user-comment",
-		meta.MessageTS+"-user-comment",
-		0.5,
-		text,
-	)
 }
 
 // conversationIDFromCallback reconstructs the conversation ID used elsewhere
@@ -759,75 +704,6 @@ func (a *SlackAdapter) forwardFeedback(ctx context.Context, fb *pb.PlatformFeedb
 		}
 		slog.Error("[Slack] Feedback forward failed", "err", err)
 	}
-}
-
-// bindPendingTraceID moves a trace_id from the per-conversation pending
-// map to the persistent (message_ts → trace_id) store now that the Slack
-// platform has assigned a timestamp. Called immediately after the message
-// is posted; safe to call when no trace_id is pending (silent no-op).
-func (a *SlackAdapter) bindPendingTraceID(ctx context.Context, conversationID, messageTS string) {
-	if conversationID == "" || messageTS == "" {
-		return
-	}
-	a.pendingTraceIDsMu.Lock()
-	traceID, ok := a.pendingTraceIDs[conversationID]
-	if ok {
-		delete(a.pendingTraceIDs, conversationID)
-	}
-	a.pendingTraceIDsMu.Unlock()
-	if !ok || traceID == "" {
-		return
-	}
-	if a.feedbackStore == nil {
-		return
-	}
-	if err := a.feedbackStore.SetTraceID(ctx, messageTS, traceID); err != nil {
-		slog.Warn("[Slack] FeedbackStore.SetTraceID failed", "err", err, "message_ts", messageTS)
-		return
-	}
-	slog.Debug("[Slack] Bound trace_id to message", "message_ts", messageTS, "trace_id", traceID)
-}
-
-// submitLangfuseScore posts a single user-feedback score to Langfuse for
-// the trace bound to messageTS. Best-effort: missing trace mapping or a
-// disabled client returns silently. Logs other errors.
-//
-// `id` is the idempotency key — pass a deterministic value (e.g.
-// "<ts>-user-feedback") so a double-click upserts instead of duplicating.
-// `value` is 1.0 for THUMBS_UP, 0.0 for THUMBS_DOWN, and 0.5 (neutral) for
-// free-form comments (the meaningful signal is in `comment` for that case).
-func (a *SlackAdapter) submitLangfuseScore(
-	ctx context.Context, messageTS, name, id string, value float64, comment string,
-) {
-	if a.langfuseClient == nil || !a.langfuseClient.Enabled() {
-		return
-	}
-	if a.feedbackStore == nil {
-		return
-	}
-	traceID, err := a.feedbackStore.GetTraceID(ctx, messageTS)
-	if err != nil {
-		slog.Warn("[Slack] FeedbackStore.GetTraceID failed", "err", err, "message_ts", messageTS)
-		return
-	}
-	if traceID == "" {
-		// Common case for agents that don't emit trace_id (e.g. Python
-		// agents pre-trace-id-hook). The callback path still fires.
-		slog.Debug("[Slack] No trace_id for message; skipping Langfuse score", "message_ts", messageTS)
-		return
-	}
-	err = a.langfuseClient.CreateScore(ctx, langfuse.ScoreRequest{
-		ID:      id,
-		TraceID: traceID,
-		Name:    name,
-		Value:   value,
-		Comment: comment,
-	})
-	if err != nil {
-		slog.Warn("[Slack] Langfuse score submit failed", "err", err, "trace_id", traceID, "name", name)
-		return
-	}
-	slog.Debug("[Slack] Langfuse score submitted", "trace_id", traceID, "name", name, "value", value)
 }
 
 // routeButtonClickToAgent forwards a Slack block-action button click to the agent

@@ -186,12 +186,6 @@ func Load() (*Config, error) {
 		AllowedChannelIDs:   cfg.Slack.AdapterConfig.AllowedChannelIDs,
 		AllowedUserIDs:      cfg.Slack.AdapterConfig.AllowedUserIDs,
 		ObserveChannelIDs:   cfg.Slack.AdapterConfig.ObserveChannelIDs,
-		// Langfuse credentials for user-feedback score submission. All three
-		// must be set; missing creds → score submission is a silent no-op
-		// while the callback path still fires.
-		LangfuseBaseURL:   strings.TrimSpace(os.Getenv("LANGFUSE_BASE_URL")),
-		LangfusePublicKey: strings.TrimSpace(os.Getenv("LANGFUSE_PUBLIC_KEY")),
-		LangfuseSecretKey: strings.TrimSpace(os.Getenv("LANGFUSE_SECRET_KEY")),
 		RateLimit: adapter.RateLimitConfig{
 			RequestsPerSecond: getEnvFloat("SLACK_RATE_LIMIT_RPS", 3.0),
 			BurstSize:         getEnvInt("SLACK_RATE_LIMIT_BURST", 10),
