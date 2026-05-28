@@ -95,6 +95,13 @@ type Config struct {
 	// are forwarded to the agent instead of being dropped. A message that already
 	// mentions the bot user is delivered via app_mention only (not duplicated).
 	ObserveChannelIDs []string
+
+	// Langfuse credentials for submitting user-feedback scores when a user
+	// clicks 👍/👎/💬 on an agent reply. All three must be set; otherwise
+	// score submission is silently skipped (callback path still fires).
+	LangfuseBaseURL   string
+	LangfusePublicKey string
+	LangfuseSecretKey string
 }
 
 // RateLimitConfig configures rate limiting

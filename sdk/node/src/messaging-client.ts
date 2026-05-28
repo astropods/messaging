@@ -88,6 +88,10 @@ export interface AgentResponse {
   audioConfig?: AudioStreamConfig;
   audioChunk?: AudioChunk;
   feedback?: PlatformFeedback;
+  // Observability trace ID (e.g. Langfuse) the agent emits on the END frame
+  // so the messaging server can later correlate feedback events with the
+  // trace. Optional — when empty the server falls back to logging only.
+  traceId?: string;
 }
 
 // Inbound platform feedback. Mirrors astro.messaging.v1.PlatformFeedback —
