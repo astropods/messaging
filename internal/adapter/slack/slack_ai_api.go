@@ -157,6 +157,16 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 		})
 	}
 
+	// Two feedback affordances on every agent reply:
+	//   1. Native Slack AI thumbs widget (context_actions/feedback_buttons) —
+	//      one-click 👍/👎 that the platform renders with built-in styling.
+	//   2. A 💬 button in an actions block — opens a modal where the user
+	//      can leave free-form text. We keep this separate because the
+	//      feedback_buttons element only accepts positive_button +
+	//      negative_button and rejects a third option.
+	// Both flow through handleBlockActions and end up calling forwardFeedback,
+	// so the agent's developer sees a single on_feedback callback regardless
+	// of which path the user took.
 	blocks = append(blocks, map[string]interface{}{
 		"type": "context_actions",
 		"elements": []map[string]interface{}{
@@ -181,9 +191,27 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 		},
 	})
 
-	// Slack caps at 50 blocks per message; keep the last block (feedback buttons)
+	blocks = append(blocks, map[string]interface{}{
+		"type":     "actions",
+		"block_id": "yoda_feedback_comment_actions",
+		"elements": []map[string]interface{}{
+			{
+				"type":      "button",
+				"action_id": "feedback_comment",
+				"text": map[string]interface{}{
+					"type":  "plain_text",
+					"text":  "💬 Comment",
+					"emoji": true,
+				},
+				"value": "open_comment_modal",
+			},
+		},
+	})
+
+	// Slack caps at 50 blocks per message; keep the last two blocks
+	// (the feedback widgets) so feedback stays available even on huge replies.
 	if len(blocks) > 50 {
-		blocks = append(blocks[:49], blocks[len(blocks)-1])
+		blocks = append(blocks[:48], blocks[len(blocks)-2:]...)
 	}
 
 	payload := map[string]interface{}{

@@ -87,6 +87,67 @@ export interface AgentResponse {
   transcript?: Transcript;
   audioConfig?: AudioStreamConfig;
   audioChunk?: AudioChunk;
+  feedback?: PlatformFeedback;
+}
+
+// Inbound platform feedback. Mirrors astro.messaging.v1.PlatformFeedback —
+// proto-loader flattens the oneof, so only one of the feedback fields below
+// is populated on any given event.
+export interface PlatformFeedback {
+  conversationId: string;
+  responseId?: string;
+  timestamp?: any;
+  userId?: string;
+  userName?: string;
+  // oneof feedback — only one of these is set:
+  streamControl?: StreamControl;
+  promptSelection?: PromptSelection;
+  reaction?: MessageReaction;
+  buttonClick?: ButtonClick;
+  messageEdit?: MessageEdit;
+  messageDelete?: MessageDelete;
+  text?: TextFeedback;
+}
+
+export interface MessageReaction {
+  // Enum: UNSPECIFIED=0, THUMBS_UP=1, THUMBS_DOWN=2, CUSTOM_EMOJI=3
+  type: number;
+  emoji?: string;
+  added?: boolean;
+}
+
+export interface TextFeedback {
+  text: string;
+  prompt?: string;
+}
+
+export interface ButtonClick {
+  buttonId: string;
+  value?: string;
+  action: string;
+}
+
+export interface PromptSelection {
+  promptId: string;
+  promptMessage: string;
+}
+
+export interface StreamControl {
+  // Enum: UNSPECIFIED=0, STOP=1, PAUSE=2, RESUME=3, REGENERATE=4
+  action: number;
+  reason?: string;
+}
+
+export interface MessageEdit {
+  messageId: string;
+  newContent: string;
+  originalContent?: string;
+  editedAt?: any;
+}
+
+export interface MessageDelete {
+  messageId: string;
+  deletedAt?: any;
 }
 
 export interface StatusUpdate {

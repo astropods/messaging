@@ -149,6 +149,7 @@ func main() {
 		for name, adpt := range adapters {
 			slog.Info("Registering gRPC message handler for adapter", "adapter", name)
 			adpt.SetMessageHandler(grpcServer.HandleIncomingMessage)
+			adpt.SetFeedbackHandler(grpcServer.HandleIncomingFeedback)
 
 			// Wire audio forwarder for adapters that support it
 			if wa, ok := adpt.(*web.WebAdapter); ok {

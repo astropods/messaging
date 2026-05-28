@@ -47,6 +47,7 @@ func (m *mockAdapter) Capabilities() adapter.AdapterCapabilities {
 func (m *mockAdapter) SetMessageHandler(handler adapter.MessageHandler) {
 	m.handler = handler
 }
+func (m *mockAdapter) SetFeedbackHandler(handler adapter.FeedbackHandler) {}
 func (m *mockAdapter) HydrateThread(ctx context.Context, conversationID string, s *store.ThreadHistoryStore) error {
 	return nil
 }

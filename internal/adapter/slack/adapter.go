@@ -25,14 +25,15 @@ import (
 
 // SlackAdapter implements the adapter.Adapter interface for Slack
 type SlackAdapter struct {
-	client       *slack.Client
-	socketClient *socketmode.Client
-	config       adapter.Config
-	msgHandler   adapter.MessageHandler
-	authz        authz.Authorizer // nil = skip authz (dev convenience)
-	rateLimiter  *RateLimiter
-	stopChan     chan struct{}
-	aiClient     *SlackAIClient
+	client          *slack.Client
+	socketClient    *socketmode.Client
+	config          adapter.Config
+	msgHandler      adapter.MessageHandler
+	feedbackHandler adapter.FeedbackHandler
+	authz           authz.Authorizer // nil = skip authz (dev convenience)
+	rateLimiter     *RateLimiter
+	stopChan        chan struct{}
+	aiClient        *SlackAIClient
 
 	// contentBuffers accumulates DELTA chunks per conversation so the adapter
 	// can send a single complete message to Slack on END.
@@ -266,12 +267,20 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 			slog.Warn("[Slack] Ack failed for interactive event", "err", err)
 		}
 
-		// Handle block actions (feedback buttons, etc.)
+		// Handle block actions (feedback buttons, etc.) and view submissions
+		// (free-form feedback modal).
 		callback, ok := evt.Data.(slack.InteractionCallback)
-		if ok && callback.Type == slack.InteractionTypeBlockActions {
+		if !ok {
+			slog.Debug("[Slack] Interactive event received (not a callback)")
+			break
+		}
+		switch callback.Type {
+		case slack.InteractionTypeBlockActions:
 			a.handleBlockActions(ctx, &callback)
-		} else {
-			slog.Debug("[Slack] Interactive event received (not yet handled)")
+		case slack.InteractionTypeViewSubmission:
+			a.handleViewSubmission(ctx, &callback)
+		default:
+			slog.Debug("[Slack] Interactive event received (not yet handled)", "type", callback.Type)
 		}
 
 	case socketmode.EventTypeSlashCommand:
@@ -444,59 +453,252 @@ func (a *SlackAdapter) handleBlockActions(ctx context.Context, callback *slack.I
 	for _, action := range callback.ActionCallback.BlockActions {
 		slog.Debug(fmt.Sprintf("[Slack] Action: id=%s, value=%s", action.ActionID, action.Value))
 
-		// feedback_buttons: built-in Slack AI thumbs up/down widget — handled locally.
-		// All other block actions are agent-sent interactive buttons forwarded to the agent.
-		if action.ActionID == "feedback_buttons" {
-			feedbackType := action.Value // "positive_feedback" or "negative_feedback"
-			slog.Debug(fmt.Sprintf("[Slack] Feedback received: %s from user %s on message %s",
-				feedbackType, callback.User.ID, callback.Message.Timestamp))
-
-			// Use Slack emoji names (not emoji characters)
-			emojiName := "thumbsup"
-			if feedbackType == "negative_feedback" {
-				emojiName = "thumbsdown"
-			}
-
-			// Remove feedback buttons from the message first
-			if len(callback.Message.Blocks.BlockSet) > 0 {
-				updatedBlocks := []slack.Block{}
-				for _, block := range callback.Message.Blocks.BlockSet {
-					// Filter out the context_actions block (Slack AI feedback block type)
-					if block.BlockType() == "context_actions" {
-						continue
-					}
-					updatedBlocks = append(updatedBlocks, block)
-				}
-
-				_, _, _, err := a.client.UpdateMessage(
-					callback.Channel.ID,
-					callback.Message.Timestamp,
-					slack.MsgOptionBlocks(updatedBlocks...),
-					slack.MsgOptionText(callback.Message.Text, false),
-				)
-
-				if err != nil {
-					slog.Error(fmt.Sprintf("[Slack] Failed to remove feedback buttons: %v", err))
-				} else {
-					slog.Debug("[Slack] Feedback buttons removed from message")
-				}
-			}
-
-			// Acknowledge the feedback visually by adding a reaction
-			err := a.client.AddReaction(emojiName, slack.ItemRef{
-				Channel:   callback.Channel.ID,
-				Timestamp: callback.Message.Timestamp,
-			})
-
-			if err != nil {
-				slog.Error(fmt.Sprintf("[Slack] Failed to add reaction: %v", err))
-			} else {
-				slog.Debug(fmt.Sprintf("[Slack] Feedback acknowledged with :%s: reaction", emojiName))
-			}
-		} else {
-			// Agent-sent interactive button: forward to agent as an incoming message.
+		// feedback_buttons: built-in Slack AI thumbs up/down widget — handled locally
+		//   AND forwarded to the agent via the FeedbackHandler so developers can
+		//   persist the signal (Airtable, eval pipelines, etc.).
+		// feedback_comment: our extension — opens a free-form text modal. Modal
+		//   submission is handled in handleViewSubmission.
+		// All other block actions are agent-sent interactive buttons forwarded
+		// via routeButtonClickToAgent.
+		switch action.ActionID {
+		case "feedback_buttons":
+			a.handleFeedbackButton(ctx, callback, action)
+		case "feedback_comment":
+			a.handleFeedbackCommentOpen(ctx, callback, action)
+		default:
 			a.routeButtonClickToAgent(ctx, callback, action)
 		}
+	}
+}
+
+// handleFeedbackButton processes a thumbs-up/down click on the Slack AI
+// feedback_buttons widget. It (1) updates the visible UI (removes the
+// buttons, adds a reaction emoji) so the user sees their click registered,
+// and (2) forwards a PlatformFeedback{MessageReaction} to the agent so the
+// developer's on_feedback callback fires.
+func (a *SlackAdapter) handleFeedbackButton(ctx context.Context, callback *slack.InteractionCallback, action *slack.BlockAction) {
+	feedbackType := action.Value // "positive_feedback" or "negative_feedback"
+	slog.Debug(fmt.Sprintf("[Slack] Feedback received: %s from user %s on message %s",
+		feedbackType, callback.User.ID, callback.Message.Timestamp))
+
+	// Use Slack emoji names (not emoji characters)
+	emojiName := "thumbsup"
+	reactionType := pb.MessageReaction_THUMBS_UP
+	if feedbackType == "negative_feedback" {
+		emojiName = "thumbsdown"
+		reactionType = pb.MessageReaction_THUMBS_DOWN
+	}
+
+	// Remove feedback buttons from the message first
+	if len(callback.Message.Blocks.BlockSet) > 0 {
+		updatedBlocks := []slack.Block{}
+		for _, block := range callback.Message.Blocks.BlockSet {
+			// Filter out the context_actions block (Slack AI feedback block type)
+			// AND the actions block that hosts our :speech_balloon: comment button.
+			bt := block.BlockType()
+			if bt == "context_actions" {
+				continue
+			}
+			if bt == slack.MBTAction {
+				if ab, ok := block.(*slack.ActionBlock); ok && ab.BlockID == feedbackCommentBlockID {
+					continue
+				}
+			}
+			updatedBlocks = append(updatedBlocks, block)
+		}
+
+		_, _, _, err := a.client.UpdateMessage(
+			callback.Channel.ID,
+			callback.Message.Timestamp,
+			slack.MsgOptionBlocks(updatedBlocks...),
+			slack.MsgOptionText(callback.Message.Text, false),
+		)
+
+		if err != nil {
+			slog.Error(fmt.Sprintf("[Slack] Failed to remove feedback buttons: %v", err))
+		} else {
+			slog.Debug("[Slack] Feedback buttons removed from message")
+		}
+	}
+
+	// Acknowledge the feedback visually by adding a reaction
+	if err := a.client.AddReaction(emojiName, slack.ItemRef{
+		Channel:   callback.Channel.ID,
+		Timestamp: callback.Message.Timestamp,
+	}); err != nil {
+		slog.Error(fmt.Sprintf("[Slack] Failed to add reaction: %v", err))
+	} else {
+		slog.Debug(fmt.Sprintf("[Slack] Feedback acknowledged with :%s: reaction", emojiName))
+	}
+
+	// Forward to agent so developer-supplied callback fires.
+	a.forwardFeedback(ctx, &pb.PlatformFeedback{
+		ConversationId: conversationIDFromCallback(callback),
+		ResponseId:     callback.Message.Timestamp,
+		Timestamp:      timestamppb.Now(),
+		UserId:         callback.User.ID,
+		UserName:       callback.User.Name,
+		Feedback: &pb.PlatformFeedback_Reaction{
+			Reaction: &pb.MessageReaction{
+				Type:  reactionType,
+				Added: true,
+			},
+		},
+	})
+}
+
+// feedbackCommentBlockID identifies the actions block that hosts our
+// 💬 comment button (so handleFeedbackButton can strip it alongside the
+// thumbs widget when removing feedback UI after a click).
+const feedbackCommentBlockID = "yoda_feedback_comment_actions"
+
+// feedbackCommentCallbackID identifies the modal view submission so
+// handleViewSubmission knows the submission came from our comment dialog.
+const feedbackCommentCallbackID = "yoda_feedback_comment_modal"
+
+// feedbackCommentInputBlockID / feedbackCommentInputActionID locate the
+// text input inside the modal — both needed to read the typed value out
+// of the view_submission state map.
+const (
+	feedbackCommentInputBlockID  = "yoda_feedback_comment_input"
+	feedbackCommentInputActionID = "yoda_feedback_comment_text"
+)
+
+// handleFeedbackCommentOpen opens a Slack modal where the user types
+// free-form feedback. We stash channel + message ts in private_metadata so
+// handleViewSubmission can resolve the conversation when the modal is
+// submitted (callbacks don't carry the originating message context).
+func (a *SlackAdapter) handleFeedbackCommentOpen(ctx context.Context, callback *slack.InteractionCallback, action *slack.BlockAction) {
+	if callback.TriggerID == "" {
+		slog.Warn("[Slack] feedback_comment: missing trigger_id, cannot open modal")
+		return
+	}
+
+	privateMeta, err := json.Marshal(map[string]string{
+		"channel_id":     callback.Channel.ID,
+		"message_ts":     callback.Message.Timestamp,
+		"thread_ts":      callback.Message.ThreadTimestamp,
+		"conversation_id": conversationIDFromCallback(callback),
+	})
+	if err != nil {
+		slog.Error("[Slack] feedback_comment: failed to encode private_metadata", "err", err)
+		return
+	}
+
+	modal := slack.ModalViewRequest{
+		Type:            slack.VTModal,
+		CallbackID:      feedbackCommentCallbackID,
+		Title:           slack.NewTextBlockObject(slack.PlainTextType, "Share feedback", false, false),
+		Submit:          slack.NewTextBlockObject(slack.PlainTextType, "Send", false, false),
+		Close:           slack.NewTextBlockObject(slack.PlainTextType, "Cancel", false, false),
+		PrivateMetadata: string(privateMeta),
+		Blocks: slack.Blocks{
+			BlockSet: []slack.Block{
+				slack.NewInputBlock(
+					feedbackCommentInputBlockID,
+					slack.NewTextBlockObject(slack.PlainTextType, "What did you think of this reply?", false, false),
+					slack.NewTextBlockObject(slack.PlainTextType, "Your feedback goes straight to the team building this agent.", false, false),
+					&slack.PlainTextInputBlockElement{
+						Type:        slack.METPlainTextInput,
+						ActionID:    feedbackCommentInputActionID,
+						Multiline:   true,
+						Placeholder: slack.NewTextBlockObject(slack.PlainTextType, "Anything you'd like the agent's developer to know…", false, false),
+					},
+				),
+			},
+		},
+	}
+
+	if _, err := a.client.OpenView(callback.TriggerID, modal); err != nil {
+		slog.Error("[Slack] feedback_comment: OpenView failed", "err", err)
+	}
+}
+
+// handleViewSubmission handles modal submissions. Currently only the
+// feedback comment modal is wired; other view_submission callbacks are
+// logged and dropped.
+func (a *SlackAdapter) handleViewSubmission(ctx context.Context, callback *slack.InteractionCallback) {
+	view := callback.View
+	if view.CallbackID != feedbackCommentCallbackID {
+		slog.Debug("[Slack] Unhandled view_submission", "callback_id", view.CallbackID)
+		return
+	}
+
+	var meta struct {
+		ChannelID      string `json:"channel_id"`
+		MessageTS      string `json:"message_ts"`
+		ThreadTS       string `json:"thread_ts"`
+		ConversationID string `json:"conversation_id"`
+	}
+	if err := json.Unmarshal([]byte(view.PrivateMetadata), &meta); err != nil {
+		slog.Error("[Slack] feedback_comment: bad private_metadata", "err", err)
+		return
+	}
+
+	var text string
+	if blockVals, ok := view.State.Values[feedbackCommentInputBlockID]; ok {
+		if input, ok := blockVals[feedbackCommentInputActionID]; ok {
+			text = input.Value
+		}
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		slog.Debug("[Slack] feedback_comment: empty submission, dropping")
+		return
+	}
+
+	// Acknowledge in the original thread so the user knows their comment landed.
+	if meta.ChannelID != "" && meta.MessageTS != "" {
+		if err := a.client.AddReaction("speech_balloon", slack.ItemRef{
+			Channel:   meta.ChannelID,
+			Timestamp: meta.MessageTS,
+		}); err != nil {
+			slog.Debug("[Slack] feedback_comment: ack reaction failed", "err", err)
+		}
+	}
+
+	a.forwardFeedback(ctx, &pb.PlatformFeedback{
+		ConversationId: meta.ConversationID,
+		ResponseId:     meta.MessageTS,
+		Timestamp:      timestamppb.Now(),
+		UserId:         callback.User.ID,
+		UserName:       callback.User.Name,
+		Feedback: &pb.PlatformFeedback_Text{
+			Text: &pb.TextFeedback{
+				Text:   text,
+				Prompt: "What did you think of this reply?",
+			},
+		},
+	})
+}
+
+// conversationIDFromCallback reconstructs the conversation ID used elsewhere
+// in this adapter ("<channel>-<thread>"). Block-action callbacks expose
+// the originating thread via Container.ThreadTs or the message's own ts.
+func conversationIDFromCallback(callback *slack.InteractionCallback) string {
+	threadTS := callback.Container.ThreadTs
+	if threadTS == "" {
+		threadTS = callback.Message.ThreadTimestamp
+	}
+	if threadTS == "" {
+		threadTS = callback.Message.Timestamp
+	}
+	return fmt.Sprintf("%s-%s", callback.Channel.ID, threadTS)
+}
+
+// forwardFeedback routes a PlatformFeedback through the registered handler.
+// No-ops cleanly when the handler is unset (single-binary dev runs) or when
+// no agent is currently connected.
+func (a *SlackAdapter) forwardFeedback(ctx context.Context, fb *pb.PlatformFeedback) {
+	if a.feedbackHandler == nil {
+		return
+	}
+	if err := a.feedbackHandler(ctx, fb); err != nil {
+		if errors.Is(err, adapter.ErrNoAgentStream) {
+			slog.Debug("[Slack] Feedback dropped: no agent connected")
+			return
+		}
+		slog.Error("[Slack] Feedback forward failed", "err", err)
 	}
 }
 
@@ -877,6 +1079,13 @@ func (a *SlackAdapter) isAllowed(channelID, userID string) bool {
 // SetMessageHandler sets the handler for incoming messages from the platform
 func (a *SlackAdapter) SetMessageHandler(handler adapter.MessageHandler) {
 	a.msgHandler = handler
+}
+
+// SetFeedbackHandler sets the handler for incoming feedback events (thumbs
+// up/down, free-form comment, etc.). When nil the adapter still renders the
+// platform UI but does not forward feedback to the agent.
+func (a *SlackAdapter) SetFeedbackHandler(handler adapter.FeedbackHandler) {
+	a.feedbackHandler = handler
 }
 
 // GetPlatformName returns the platform identifier
