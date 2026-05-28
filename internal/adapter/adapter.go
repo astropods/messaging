@@ -28,6 +28,13 @@ type Adapter interface {
 	// Message handling (platform → agent)
 	SetMessageHandler(handler MessageHandler)
 
+	// Feedback handling (platform → agent). Adapters that surface platform-
+	// native feedback widgets (Slack thumbs/comment, Teams reactions, etc.)
+	// emit PlatformFeedback events through this handler so agents can route
+	// them to whatever sink they choose (logging, Airtable, eval pipelines).
+	// Adapters without feedback UI may ignore this.
+	SetFeedbackHandler(handler FeedbackHandler)
+
 	// Response handling (agent → platform)
 	HandleAgentResponse(ctx context.Context, response *pb.AgentResponse) error
 
@@ -38,6 +45,11 @@ type Adapter interface {
 // MessageHandler is called when a message is received from the platform.
 // It should forward the message to the gRPC server which sends it to the agent.
 type MessageHandler func(ctx context.Context, msg *pb.Message) error
+
+// FeedbackHandler is called when a feedback event is received from the platform
+// (thumbs up/down, free-form comment, prompt selection, etc.). The handler
+// forwards the event to the gRPC server which sends it to the agent.
+type FeedbackHandler func(ctx context.Context, fb *pb.PlatformFeedback) error
 
 // AudioForwarder streams audio data to the agent via the gRPC bidirectional stream.
 //

@@ -362,6 +362,39 @@ func (s *Server) HandleIncomingMessage(ctx context.Context, msg *pb.Message) err
 	return nil
 }
 
+// HandleIncomingFeedback is called by adapters when a platform feedback event
+// (thumbs up/down, free-form comment, etc.) arrives. It mirrors
+// HandleIncomingMessage: find the active agent stream, wrap the feedback in an
+// AgentResponse, and forward it.
+//
+// Returns adapter.ErrNoAgentStream when no agent is connected — adapters
+// should log and continue (the platform UI has already acknowledged the click).
+func (s *Server) HandleIncomingFeedback(ctx context.Context, fb *pb.PlatformFeedback) error {
+	if fb == nil {
+		return fmt.Errorf("nil feedback")
+	}
+	metrics.MessagesReceived.WithLabelValues("feedback").Inc()
+
+	stream := s.findStreamForConversation(fb.ConversationId)
+	if stream == nil {
+		metrics.MessagesDropped.WithLabelValues("feedback", "no_agent").Inc()
+		return adapter.ErrNoAgentStream
+	}
+
+	response := &pb.AgentResponse{
+		ConversationId: fb.ConversationId,
+		ResponseId:     fb.ResponseId,
+		Payload:        &pb.AgentResponse_Feedback{Feedback: fb},
+	}
+
+	if err := stream.stream.Send(response); err != nil {
+		return fmt.Errorf("failed to send feedback to agent: %w", err)
+	}
+
+	slog.Debug("[gRPC] Feedback forwarded to agent", "conversation", fb.ConversationId)
+	return nil
+}
+
 // SendAudioConfig sends an AudioStreamConfig to the agent via the gRPC bidirectional stream.
 //
 // This implements the adapter.AudioForwarder interface. It wraps the config in an
@@ -499,6 +532,8 @@ func agentResponseType(r *pb.AgentResponse) string {
 		return "audio_config"
 	case *pb.AgentResponse_AudioChunk:
 		return "audio_chunk"
+	case *pb.AgentResponse_Feedback:
+		return "feedback"
 	default:
 		return "unknown"
 	}

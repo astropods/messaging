@@ -87,6 +87,46 @@ export interface AgentResponse {
   transcript?: Transcript;
   audioConfig?: AudioStreamConfig;
   audioChunk?: AudioChunk;
+  feedback?: PlatformFeedback;
+}
+
+// Inbound platform feedback. Mirrors astro.messaging.v1.PlatformFeedback —
+// proto-loader flattens the oneof, so only one of the feedback fields below
+// is populated on any given event.
+//
+// The non-`reaction` / non-`text` variants are typed as opaque records on
+// purpose: SDK consumers should switch on the FeedbackEvent.kind string
+// rather than read these proto shapes directly, so over-exposing them just
+// adds API surface that callers shouldn't be touching.
+export interface PlatformFeedback {
+  conversationId: string;
+  responseId?: string;
+  timestamp?: any;
+  user?: User;
+  // oneof feedback — only one of these is set:
+  reaction?: MessageReaction;
+  text?: TextFeedback;
+  // Other oneof variants on the wire (stream_control, prompt_selection,
+  // button_click, message_edit, message_delete). Present so the dispatch
+  // code can detect kind, but intentionally untyped — consume via
+  // FeedbackEvent.kind, not by reading these directly.
+  streamControl?: Record<string, unknown>;
+  promptSelection?: Record<string, unknown>;
+  buttonClick?: Record<string, unknown>;
+  messageEdit?: Record<string, unknown>;
+  messageDelete?: Record<string, unknown>;
+}
+
+export interface MessageReaction {
+  // Enum: UNSPECIFIED=0, THUMBS_UP=1, THUMBS_DOWN=2, CUSTOM_EMOJI=3
+  type: number;
+  emoji?: string;
+  added?: boolean;
+}
+
+export interface TextFeedback {
+  text: string;
+  prompt?: string;
 }
 
 export interface StatusUpdate {

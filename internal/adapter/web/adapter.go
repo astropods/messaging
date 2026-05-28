@@ -203,6 +203,14 @@ func (a *WebAdapter) SetMessageHandler(handler adapter.MessageHandler) {
 	}
 }
 
+// SetFeedbackHandler is a no-op for the web adapter today — the playground
+// surface doesn't render thumbs/comment widgets. Kept to satisfy the
+// adapter.Adapter interface so future web-side feedback (e.g. a UI thumbs
+// affordance in the chat client) has a place to plug in.
+func (a *WebAdapter) SetFeedbackHandler(handler adapter.FeedbackHandler) {
+	// intentionally empty
+}
+
 // SetAuthorizer wires the authorizer used to gate every API request. nil
 // disables authz (dev mode).
 func (a *WebAdapter) SetAuthorizer(az authz.Authorizer) {

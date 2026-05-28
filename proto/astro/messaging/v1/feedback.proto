@@ -3,6 +3,7 @@ syntax = "proto3";
 package astro.messaging.v1;
 
 import "google/protobuf/timestamp.proto";
+import "astro/messaging/v1/message.proto";
 
 option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
 
@@ -20,7 +21,13 @@ message PlatformFeedback {
     ButtonClick button_click = 7;         // Interactive button clicked
     MessageEdit message_edit = 8;         // User edited a message
     MessageDelete message_delete = 9;     // User deleted a message
+    TextFeedback text = 10;               // Free-form text submitted via modal/dialog
   }
+
+  // Platform user who submitted the feedback. Same shape as Message.user
+  // for consistency across the API surface — sinks can drop both into the
+  // same column. Empty for anonymous/system-generated events.
+  User user = 20;
 }
 
 // Control agent streaming/generation
@@ -76,4 +83,13 @@ message MessageEdit {
 message MessageDelete {
   string message_id = 1;                  // Platform message ID that was deleted
   google.protobuf.Timestamp deleted_at = 2;
+}
+
+// Free-form text feedback submitted via a platform-native dialog/modal.
+// Slack uses views.open + view_submission; Teams uses a task module; Discord
+// uses a modal. The adapter is responsible for collecting the text and
+// emitting this message.
+message TextFeedback {
+  string text = 1;                        // The free-form text the user typed
+  string prompt = 2;                      // Label/title shown above the textbox (optional)
 }
