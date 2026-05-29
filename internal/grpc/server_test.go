@@ -1532,6 +1532,233 @@ func TestSendAudioChunk_NoStream(t *testing.T) {
 	}
 }
 
+// --- Tests for HandleIncomingFeedback ---
+
+func TestHandleIncomingFeedback_ForwardsReactionToAgent(t *testing.T) {
+	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
+	convStore := store.NewMemoryStore()
+	server := NewServer(":0", threadStore, convStore, nil)
+
+	var captured *pb.AgentResponse
+	mockStream := &captureStream{
+		sendFunc: func(resp *pb.AgentResponse) error {
+			captured = resp
+			return nil
+		},
+	}
+	server.streamsMu.Lock()
+	server.streams["agent-stream"] = &conversationStream{
+		stream:         mockStream,
+		conversationID: "agent-stream",
+	}
+	server.streamsMu.Unlock()
+
+	fb := &pb.PlatformFeedback{
+		ConversationId: "C123-thread-1",
+		ResponseId:     "1234567890.000001",
+		Timestamp:      timestamppb.Now(),
+		User:           &pb.User{Id: "U99", Username: "alice"},
+		Feedback: &pb.PlatformFeedback_Reaction{
+			Reaction: &pb.MessageReaction{Type: pb.MessageReaction_THUMBS_UP, Added: true},
+		},
+	}
+
+	beforeReceived := testutil.ToFloat64(metrics.FeedbackReceived.WithLabelValues("reaction"))
+
+	if err := server.HandleIncomingFeedback(context.Background(), fb); err != nil {
+		t.Fatalf("HandleIncomingFeedback failed: %v", err)
+	}
+
+	if got := testutil.ToFloat64(metrics.FeedbackReceived.WithLabelValues("reaction")) - beforeReceived; got != 1 {
+		t.Errorf("FeedbackReceived{reaction}: expected +1, got +%v", got)
+	}
+
+	if captured == nil {
+		t.Fatal("expected feedback to be forwarded via stream")
+	}
+	if captured.ConversationId != "C123-thread-1" {
+		t.Errorf("ConversationId: expected 'C123-thread-1', got %q", captured.ConversationId)
+	}
+	if captured.ResponseId != "1234567890.000001" {
+		t.Errorf("ResponseId: expected '1234567890.000001', got %q", captured.ResponseId)
+	}
+	gotFB := captured.GetFeedback()
+	if gotFB == nil {
+		t.Fatal("expected Feedback payload")
+	}
+	react := gotFB.GetReaction()
+	if react == nil {
+		t.Fatal("expected Reaction variant")
+	}
+	if react.Type != pb.MessageReaction_THUMBS_UP {
+		t.Errorf("ReactionType: expected THUMBS_UP, got %v", react.Type)
+	}
+	if gotFB.User == nil || gotFB.User.Id != "U99" {
+		t.Errorf("User.Id: expected 'U99', got %v", gotFB.User)
+	}
+}
+
+func TestHandleIncomingFeedback_ForwardsTextToAgent(t *testing.T) {
+	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
+	convStore := store.NewMemoryStore()
+	server := NewServer(":0", threadStore, convStore, nil)
+
+	var captured *pb.AgentResponse
+	mockStream := &captureStream{
+		sendFunc: func(resp *pb.AgentResponse) error {
+			captured = resp
+			return nil
+		},
+	}
+	server.streamsMu.Lock()
+	server.streams["agent-stream"] = &conversationStream{
+		stream:         mockStream,
+		conversationID: "agent-stream",
+	}
+	server.streamsMu.Unlock()
+
+	fb := &pb.PlatformFeedback{
+		ConversationId: "C123-thread-1",
+		User:           &pb.User{Id: "U99"},
+		Feedback: &pb.PlatformFeedback_Text{
+			Text: &pb.TextFeedback{Text: "looks good", Prompt: "What did you think?"},
+		},
+	}
+
+	beforeReceived := testutil.ToFloat64(metrics.FeedbackReceived.WithLabelValues("text"))
+
+	if err := server.HandleIncomingFeedback(context.Background(), fb); err != nil {
+		t.Fatalf("HandleIncomingFeedback failed: %v", err)
+	}
+
+	if got := testutil.ToFloat64(metrics.FeedbackReceived.WithLabelValues("text")) - beforeReceived; got != 1 {
+		t.Errorf("FeedbackReceived{text}: expected +1, got +%v", got)
+	}
+	text := captured.GetFeedback().GetText()
+	if text == nil || text.Text != "looks good" {
+		t.Errorf("expected TextFeedback with 'looks good', got %v", text)
+	}
+}
+
+func TestHandleIncomingFeedback_NilReturnsError(t *testing.T) {
+	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
+	convStore := store.NewMemoryStore()
+	server := NewServer(":0", threadStore, convStore, nil)
+
+	err := server.HandleIncomingFeedback(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error for nil feedback")
+	}
+}
+
+func TestHandleIncomingFeedback_EmptyConversationIdDropped(t *testing.T) {
+	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
+	convStore := store.NewMemoryStore()
+	server := NewServer(":0", threadStore, convStore, nil)
+
+	// Even with a stream registered, an empty conv id must short-circuit
+	// before the stream lookup — that's the whole point of the validation.
+	mockStream := &captureStream{
+		sendFunc: func(resp *pb.AgentResponse) error {
+			t.Fatal("Send should not be called when conversation_id is empty")
+			return nil
+		},
+	}
+	server.streamsMu.Lock()
+	server.streams["agent-stream"] = &conversationStream{stream: mockStream}
+	server.streamsMu.Unlock()
+
+	fb := &pb.PlatformFeedback{
+		Feedback: &pb.PlatformFeedback_Reaction{Reaction: &pb.MessageReaction{Type: pb.MessageReaction_THUMBS_UP}},
+	}
+
+	beforeDropped := testutil.ToFloat64(metrics.FeedbackDropped.WithLabelValues("empty_conversation_id"))
+
+	err := server.HandleIncomingFeedback(context.Background(), fb)
+	if err == nil {
+		t.Fatal("expected error when conversation_id empty")
+	}
+	if got := testutil.ToFloat64(metrics.FeedbackDropped.WithLabelValues("empty_conversation_id")) - beforeDropped; got != 1 {
+		t.Errorf("FeedbackDropped{empty_conversation_id}: expected +1, got +%v", got)
+	}
+}
+
+func TestHandleIncomingFeedback_NoAgentStreamDropped(t *testing.T) {
+	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
+	convStore := store.NewMemoryStore()
+	server := NewServer(":0", threadStore, convStore, nil)
+
+	fb := &pb.PlatformFeedback{
+		ConversationId: "C123-thread-1",
+		Feedback: &pb.PlatformFeedback_Reaction{
+			Reaction: &pb.MessageReaction{Type: pb.MessageReaction_THUMBS_DOWN},
+		},
+	}
+
+	beforeDropped := testutil.ToFloat64(metrics.FeedbackDropped.WithLabelValues("no_agent"))
+
+	err := server.HandleIncomingFeedback(context.Background(), fb)
+	if err == nil {
+		t.Fatal("expected error when no agent stream")
+	}
+	if got := testutil.ToFloat64(metrics.FeedbackDropped.WithLabelValues("no_agent")) - beforeDropped; got != 1 {
+		t.Errorf("FeedbackDropped{no_agent}: expected +1, got +%v", got)
+	}
+}
+
+func TestHandleIncomingFeedback_SendErrorBubbles(t *testing.T) {
+	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
+	convStore := store.NewMemoryStore()
+	server := NewServer(":0", threadStore, convStore, nil)
+
+	mockStream := &captureStream{
+		sendFunc: func(resp *pb.AgentResponse) error {
+			return fmt.Errorf("stream broken")
+		},
+	}
+	server.streamsMu.Lock()
+	server.streams["agent-stream"] = &conversationStream{stream: mockStream}
+	server.streamsMu.Unlock()
+
+	fb := &pb.PlatformFeedback{
+		ConversationId: "C123-thread-1",
+		Feedback:       &pb.PlatformFeedback_Reaction{Reaction: &pb.MessageReaction{Type: pb.MessageReaction_THUMBS_UP}},
+	}
+
+	beforeDropped := testutil.ToFloat64(metrics.FeedbackDropped.WithLabelValues("send_error"))
+
+	err := server.HandleIncomingFeedback(context.Background(), fb)
+	if err == nil {
+		t.Fatal("expected error when stream Send fails")
+	}
+	if !strings.Contains(err.Error(), "stream broken") {
+		t.Errorf("expected 'stream broken' in error, got: %v", err)
+	}
+	if got := testutil.ToFloat64(metrics.FeedbackDropped.WithLabelValues("send_error")) - beforeDropped; got != 1 {
+		t.Errorf("FeedbackDropped{send_error}: expected +1, got +%v", got)
+	}
+}
+
+func TestFeedbackKind(t *testing.T) {
+	tests := []struct {
+		name string
+		fb   *pb.PlatformFeedback
+		want string
+	}{
+		{"reaction", &pb.PlatformFeedback{Feedback: &pb.PlatformFeedback_Reaction{Reaction: &pb.MessageReaction{}}}, "reaction"},
+		{"text", &pb.PlatformFeedback{Feedback: &pb.PlatformFeedback_Text{Text: &pb.TextFeedback{}}}, "text"},
+		{"unwired_variant", &pb.PlatformFeedback{Feedback: &pb.PlatformFeedback_ButtonClick{ButtonClick: &pb.ButtonClick{}}}, "unknown"},
+		{"unset", &pb.PlatformFeedback{}, "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := feedbackKind(tt.fb); got != tt.want {
+				t.Errorf("feedbackKind: expected %q, got %q", tt.want, got)
+			}
+		})
+	}
+}
+
 // --- captureStream mock ---
 
 type captureStream struct {

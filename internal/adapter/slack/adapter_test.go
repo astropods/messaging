@@ -1113,3 +1113,320 @@ func TestHandleMessage_NoBlocksPreservesText(t *testing.T) {
 		t.Errorf("got %q, want %q", got, "plain text only")
 	}
 }
+
+// --- Tests for feedback handlers ---
+
+// captureFeedbackHandler records PlatformFeedback events for assertion.
+type captureFeedbackHandler struct {
+	mu    sync.Mutex
+	calls []*pb.PlatformFeedback
+}
+
+func (c *captureFeedbackHandler) handle(_ context.Context, fb *pb.PlatformFeedback) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, fb)
+	return nil
+}
+
+func (c *captureFeedbackHandler) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.calls)
+}
+
+func (c *captureFeedbackHandler) last() *pb.PlatformFeedback {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.calls) == 0 {
+		return nil
+	}
+	return c.calls[len(c.calls)-1]
+}
+
+func TestHandleFeedbackButton_ThumbsUpForwardedToHandler(t *testing.T) {
+	a, _ := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	fbHandler := &captureFeedbackHandler{}
+	a.feedbackHandler = fbHandler.handle
+
+	cb := &slacklib.InteractionCallback{
+		User:      slacklib.User{ID: "U999", Name: "alice"},
+		Channel:   slacklib.Channel{GroupConversation: slacklib.GroupConversation{Conversation: slacklib.Conversation{ID: "C123"}}},
+		Container: slacklib.Container{ThreadTs: "1700000000.000001"},
+	}
+	cb.Message.Timestamp = "1700000000.000002"
+
+	action := &slacklib.BlockAction{ActionID: feedbackButtonsActionID, Value: "positive_feedback"}
+	a.handleFeedbackButton(t.Context(), cb, action)
+
+	if fbHandler.count() != 1 {
+		t.Fatalf("expected 1 forwarded feedback, got %d", fbHandler.count())
+	}
+	fb := fbHandler.last()
+	if fb.ConversationId != "C123-1700000000.000001" {
+		t.Errorf("ConversationId: expected 'C123-1700000000.000001', got %q", fb.ConversationId)
+	}
+	if fb.ResponseId != "1700000000.000002" {
+		t.Errorf("ResponseId: expected '1700000000.000002', got %q", fb.ResponseId)
+	}
+	if fb.User == nil || fb.User.Id != "U999" || fb.User.Username != "alice" {
+		t.Errorf("User: expected {U999, alice}, got %+v", fb.User)
+	}
+	react := fb.GetReaction()
+	if react == nil {
+		t.Fatal("expected Reaction variant")
+	}
+	if react.Type != pb.MessageReaction_THUMBS_UP {
+		t.Errorf("Type: expected THUMBS_UP, got %v", react.Type)
+	}
+	if !react.Added {
+		t.Error("expected Added=true")
+	}
+}
+
+func TestHandleFeedbackButton_ThumbsDownForwarded(t *testing.T) {
+	a, _ := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	fbHandler := &captureFeedbackHandler{}
+	a.feedbackHandler = fbHandler.handle
+
+	cb := &slacklib.InteractionCallback{
+		User:    slacklib.User{ID: "U999"},
+		Channel: slacklib.Channel{GroupConversation: slacklib.GroupConversation{Conversation: slacklib.Conversation{ID: "C123"}}},
+	}
+	cb.Message.Timestamp = "1700000000.000002"
+
+	a.handleFeedbackButton(t.Context(), cb, &slacklib.BlockAction{ActionID: feedbackButtonsActionID, Value: "negative_feedback"})
+
+	if fbHandler.count() != 1 {
+		t.Fatalf("expected 1 forwarded feedback, got %d", fbHandler.count())
+	}
+	if got := fbHandler.last().GetReaction().Type; got != pb.MessageReaction_THUMBS_DOWN {
+		t.Errorf("Type: expected THUMBS_DOWN, got %v", got)
+	}
+}
+
+func TestHandleFeedbackButton_NilHandlerNoOps(t *testing.T) {
+	a, _ := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	// no feedbackHandler set
+
+	cb := &slacklib.InteractionCallback{
+		User:    slacklib.User{ID: "U1"},
+		Channel: slacklib.Channel{GroupConversation: slacklib.GroupConversation{Conversation: slacklib.Conversation{ID: "C1"}}},
+	}
+
+	// Must not panic even though feedbackHandler is nil.
+	a.handleFeedbackButton(t.Context(), cb, &slacklib.BlockAction{ActionID: feedbackButtonsActionID, Value: "positive_feedback"})
+}
+
+func TestHandleFeedbackButton_ErrNoAgentStreamIsSwallowed(t *testing.T) {
+	a, _ := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	a.feedbackHandler = func(_ context.Context, _ *pb.PlatformFeedback) error {
+		return adapter.ErrNoAgentStream
+	}
+
+	cb := &slacklib.InteractionCallback{
+		User:    slacklib.User{ID: "U1"},
+		Channel: slacklib.Channel{GroupConversation: slacklib.GroupConversation{Conversation: slacklib.Conversation{ID: "C1"}}},
+	}
+
+	// ErrNoAgentStream is normal during dev; should not propagate (handler is non-fatal).
+	a.handleFeedbackButton(t.Context(), cb, &slacklib.BlockAction{ActionID: feedbackButtonsActionID, Value: "positive_feedback"})
+}
+
+func TestHandleViewSubmission_TextForwarded(t *testing.T) {
+	a, _ := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	fbHandler := &captureFeedbackHandler{}
+	a.feedbackHandler = fbHandler.handle
+
+	meta, _ := json.Marshal(map[string]string{
+		"channel_id":      "C123",
+		"message_ts":      "1700000000.000002",
+		"thread_ts":       "1700000000.000001",
+		"conversation_id": "C123-1700000000.000001",
+	})
+
+	cb := &slacklib.InteractionCallback{
+		User: slacklib.User{ID: "U999", Name: "alice"},
+		View: slacklib.View{
+			CallbackID:      feedbackCommentCallbackID,
+			PrivateMetadata: string(meta),
+			State: &slacklib.ViewState{
+				Values: map[string]map[string]slacklib.BlockAction{
+					feedbackCommentInputBlockID: {
+						feedbackCommentInputActionID: {Value: "  this rocked  "},
+					},
+				},
+			},
+		},
+	}
+
+	a.handleViewSubmission(t.Context(), nil, cb)
+
+	if fbHandler.count() != 1 {
+		t.Fatalf("expected 1 forwarded feedback, got %d", fbHandler.count())
+	}
+	fb := fbHandler.last()
+	if fb.ConversationId != "C123-1700000000.000001" {
+		t.Errorf("ConversationId: expected 'C123-1700000000.000001', got %q", fb.ConversationId)
+	}
+	if fb.ResponseId != "1700000000.000002" {
+		t.Errorf("ResponseId: expected message_ts roundtrip, got %q", fb.ResponseId)
+	}
+	tf := fb.GetText()
+	if tf == nil {
+		t.Fatal("expected TextFeedback variant")
+	}
+	if tf.Text != "this rocked" {
+		t.Errorf("Text: expected trimmed 'this rocked', got %q", tf.Text)
+	}
+	if tf.Prompt == "" {
+		t.Error("expected Prompt to be set")
+	}
+}
+
+func TestHandleViewSubmission_EmptySubmissionNotForwarded(t *testing.T) {
+	a, _ := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	fbHandler := &captureFeedbackHandler{}
+	a.feedbackHandler = fbHandler.handle
+
+	meta, _ := json.Marshal(map[string]string{
+		"channel_id":      "C123",
+		"message_ts":      "1700000000.000002",
+		"conversation_id": "C123-1700000000.000001",
+	})
+
+	cb := &slacklib.InteractionCallback{
+		User: slacklib.User{ID: "U999"},
+		View: slacklib.View{
+			CallbackID:      feedbackCommentCallbackID,
+			PrivateMetadata: string(meta),
+			State: &slacklib.ViewState{
+				Values: map[string]map[string]slacklib.BlockAction{
+					feedbackCommentInputBlockID: {
+						feedbackCommentInputActionID: {Value: "   "},
+					},
+				},
+			},
+		},
+	}
+
+	a.handleViewSubmission(t.Context(), nil, cb)
+
+	if fbHandler.count() != 0 {
+		t.Errorf("empty submission must not forward, got %d calls", fbHandler.count())
+	}
+}
+
+func TestHandleViewSubmission_BadPrivateMetadataDoesNotForward(t *testing.T) {
+	a, _ := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	fbHandler := &captureFeedbackHandler{}
+	a.feedbackHandler = fbHandler.handle
+
+	cb := &slacklib.InteractionCallback{
+		View: slacklib.View{
+			CallbackID:      feedbackCommentCallbackID,
+			PrivateMetadata: "this is not json",
+		},
+	}
+
+	a.handleViewSubmission(t.Context(), nil, cb)
+
+	if fbHandler.count() != 0 {
+		t.Errorf("bad metadata must not forward, got %d calls", fbHandler.count())
+	}
+}
+
+func TestHandleViewSubmission_DifferentCallbackIDDropped(t *testing.T) {
+	a, _ := newTestAdapter()
+	fbHandler := &captureFeedbackHandler{}
+	a.feedbackHandler = fbHandler.handle
+
+	cb := &slacklib.InteractionCallback{
+		View: slacklib.View{CallbackID: "some_other_modal"},
+	}
+
+	a.handleViewSubmission(t.Context(), nil, cb)
+
+	if fbHandler.count() != 0 {
+		t.Errorf("unrelated callback_id must not forward, got %d calls", fbHandler.count())
+	}
+}
+
+func TestConversationIDFromCallback(t *testing.T) {
+	tests := []struct {
+		name     string
+		callback *slacklib.InteractionCallback
+		want     string
+	}{
+		{
+			name: "uses container thread ts when present",
+			callback: func() *slacklib.InteractionCallback {
+				cb := &slacklib.InteractionCallback{
+					Channel:   slacklib.Channel{GroupConversation: slacklib.GroupConversation{Conversation: slacklib.Conversation{ID: "C1"}}},
+					Container: slacklib.Container{ThreadTs: "100.001"},
+				}
+				cb.Message.ThreadTimestamp = "should-not-use"
+				cb.Message.Timestamp = "should-not-use-either"
+				return cb
+			}(),
+			want: "C1-100.001",
+		},
+		{
+			name: "falls back to message thread timestamp",
+			callback: func() *slacklib.InteractionCallback {
+				cb := &slacklib.InteractionCallback{
+					Channel: slacklib.Channel{GroupConversation: slacklib.GroupConversation{Conversation: slacklib.Conversation{ID: "C2"}}},
+				}
+				cb.Message.ThreadTimestamp = "200.002"
+				cb.Message.Timestamp = "should-not-use"
+				return cb
+			}(),
+			want: "C2-200.002",
+		},
+		{
+			name: "falls back to message timestamp",
+			callback: func() *slacklib.InteractionCallback {
+				cb := &slacklib.InteractionCallback{
+					Channel: slacklib.Channel{GroupConversation: slacklib.GroupConversation{Conversation: slacklib.Conversation{ID: "C3"}}},
+				}
+				cb.Message.Timestamp = "300.003"
+				return cb
+			}(),
+			want: "C3-300.003",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := conversationIDFromCallback(tt.callback); got != tt.want {
+				t.Errorf("conversationIDFromCallback: expected %q, got %q", tt.want, got)
+			}
+		})
+	}
+}

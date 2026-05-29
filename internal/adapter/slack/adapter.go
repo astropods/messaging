@@ -261,25 +261,33 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 		a.handleInnerEvent(ctx, eventsAPIEvent.InnerEvent, eventsAPIEvent.TeamID)
 
 	case socketmode.EventTypeInteractive:
-		// Acknowledge interactive events (buttons, modals, etc.) — Slack
-		// retries on failure, so a missed Ack is non-fatal.
-		if err := a.socketClient.Ack(*evt.Request); err != nil {
-			slog.Warn("[Slack] Ack failed for interactive event", "err", err)
-		}
-
 		// Handle block actions (feedback buttons, etc.) and view submissions
-		// (free-form feedback modal).
+		// (free-form feedback modal). View submissions need a *payload* in the
+		// ack (response_action) to surface validation errors back to the modal,
+		// so we defer the ack to handleViewSubmission for that case. Everything
+		// else gets the immediate empty ack — Slack retries on failure, so a
+		// missed Ack is non-fatal.
 		callback, ok := evt.Data.(slack.InteractionCallback)
 		if !ok {
 			slog.Debug("[Slack] Interactive event received (not a callback)")
+			if err := a.socketClient.AckCtx(ctx, evt.Request.EnvelopeID, nil); err != nil {
+				slog.Warn("[Slack] Ack failed for interactive event", "err", err)
+			}
 			break
 		}
 		switch callback.Type {
 		case slack.InteractionTypeBlockActions:
+			if err := a.socketClient.AckCtx(ctx, evt.Request.EnvelopeID, nil); err != nil {
+				slog.Warn("[Slack] Ack failed for block actions", "err", err)
+			}
 			a.handleBlockActions(ctx, &callback)
 		case slack.InteractionTypeViewSubmission:
-			a.handleViewSubmission(ctx, &callback)
+			// handleViewSubmission acks with response_action when validation fails.
+			a.handleViewSubmission(ctx, evt.Request, &callback)
 		default:
+			if err := a.socketClient.AckCtx(ctx, evt.Request.EnvelopeID, nil); err != nil {
+				slog.Warn("[Slack] Ack failed for interactive event", "err", err)
+			}
 			slog.Debug("[Slack] Interactive event received (not yet handled)", "type", callback.Type)
 		}
 
@@ -461,9 +469,9 @@ func (a *SlackAdapter) handleBlockActions(ctx context.Context, callback *slack.I
 		// All other block actions are agent-sent interactive buttons forwarded
 		// via routeButtonClickToAgent.
 		switch action.ActionID {
-		case "feedback_buttons":
+		case feedbackButtonsActionID:
 			a.handleFeedbackButton(ctx, callback, action)
-		case "feedback_comment":
+		case feedbackCommentActionID:
 			a.handleFeedbackCommentOpen(ctx, callback, action)
 		default:
 			a.routeButtonClickToAgent(ctx, callback, action)
@@ -549,19 +557,30 @@ func (a *SlackAdapter) handleFeedbackButton(ctx context.Context, callback *slack
 	})
 }
 
-// feedbackCommentBlockID identifies the actions block that hosts our
-// 💬 comment button (so handleFeedbackButton can strip it alongside the
-// thumbs widget when removing feedback UI after a click).
-const feedbackCommentBlockID = "astropods_feedback_comment_actions"
-
-// feedbackCommentCallbackID identifies the modal view submission so
-// handleViewSubmission knows the submission came from our comment dialog.
-const feedbackCommentCallbackID = "astropods_feedback_comment_modal"
-
-// feedbackCommentInputBlockID / feedbackCommentInputActionID locate the
-// text input inside the modal — both needed to read the typed value out
-// of the view_submission state map.
+// Block / action / callback identifiers for the feedback UI. Centralised so
+// the post-render (slack_ai_api.go) and the click/submission handlers
+// (adapter.go) cannot drift out of sync — a typo in either side silently
+// routes the click to the wrong handler.
 const (
+	// feedbackButtonsActionID is the native Slack AI thumbs widget's action_id.
+	feedbackButtonsActionID = "feedback_buttons"
+
+	// feedbackCommentActionID identifies the 💬 Comment button click that
+	// opens the free-form text modal.
+	feedbackCommentActionID = "feedback_comment"
+
+	// feedbackCommentBlockID identifies the actions block that hosts the
+	// 💬 comment button (so handleFeedbackButton can strip it alongside the
+	// thumbs widget when removing feedback UI after a click).
+	feedbackCommentBlockID = "astropods_feedback_comment_actions"
+
+	// feedbackCommentCallbackID identifies the modal view submission so
+	// handleViewSubmission knows the submission came from our comment dialog.
+	feedbackCommentCallbackID = "astropods_feedback_comment_modal"
+
+	// feedbackCommentInputBlockID / feedbackCommentInputActionID locate the
+	// text input inside the modal — both needed to read the typed value out
+	// of the view_submission state map.
 	feedbackCommentInputBlockID  = "astropods_feedback_comment_input"
 	feedbackCommentInputActionID = "astropods_feedback_comment_text"
 )
@@ -619,10 +638,15 @@ func (a *SlackAdapter) handleFeedbackCommentOpen(ctx context.Context, callback *
 // handleViewSubmission handles modal submissions. Currently only the
 // feedback comment modal is wired; other view_submission callbacks are
 // logged and dropped.
-func (a *SlackAdapter) handleViewSubmission(ctx context.Context, callback *slack.InteractionCallback) {
+//
+// This function owns the Slack ack for view_submission events because empty
+// submissions are surfaced back to the modal via a response_action payload
+// (which must be sent inside the ack, not as a follow-up REST call).
+func (a *SlackAdapter) handleViewSubmission(ctx context.Context, req *socketmode.Request, callback *slack.InteractionCallback) {
 	view := callback.View
 	if view.CallbackID != feedbackCommentCallbackID {
 		slog.Debug("[Slack] Unhandled view_submission", "callback_id", view.CallbackID)
+		a.ackViewSubmission(ctx, req, nil)
 		return
 	}
 
@@ -634,6 +658,7 @@ func (a *SlackAdapter) handleViewSubmission(ctx context.Context, callback *slack
 	}
 	if err := json.Unmarshal([]byte(view.PrivateMetadata), &meta); err != nil {
 		slog.Error("[Slack] feedback_comment: bad private_metadata", "err", err)
+		a.ackViewSubmission(ctx, req, nil)
 		return
 	}
 
@@ -645,9 +670,17 @@ func (a *SlackAdapter) handleViewSubmission(ctx context.Context, callback *slack
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
-		slog.Debug("[Slack] feedback_comment: empty submission, dropping")
+		// Show the inline error in the modal so the user knows their click
+		// didn't submit anything — silent close would look like a UI bug.
+		slog.Debug("[Slack] feedback_comment: empty submission, returning validation error")
+		a.ackViewSubmission(ctx, req, slack.NewErrorsViewSubmissionResponse(map[string]string{
+			feedbackCommentInputBlockID: "Please type something before sending.",
+		}))
 		return
 	}
+
+	// Valid submission — close the modal with an empty ack.
+	a.ackViewSubmission(ctx, req, nil)
 
 	// Acknowledge in the original thread so the user knows their comment landed.
 	if meta.ChannelID != "" && meta.MessageTS != "" {
@@ -674,6 +707,22 @@ func (a *SlackAdapter) handleViewSubmission(ctx context.Context, callback *slack
 			},
 		},
 	})
+}
+
+// ackViewSubmission sends the socket-mode ack for a view_submission. payload
+// nil closes the modal; pass a *slack.ViewSubmissionResponse (e.g. errors,
+// update, push) to keep the modal open with that response_action.
+//
+// When socketClient is nil (unit-test path) or req is nil, the ack is a no-op
+// — the handler still runs its forwarding logic so behaviour can be asserted
+// without a live Slack socket.
+func (a *SlackAdapter) ackViewSubmission(ctx context.Context, req *socketmode.Request, payload any) {
+	if a.socketClient == nil || req == nil {
+		return
+	}
+	if err := a.socketClient.AckCtx(ctx, req.EnvelopeID, payload); err != nil {
+		slog.Warn("[Slack] Ack failed for view_submission", "err", err)
+	}
 }
 
 // conversationIDFromCallback reconstructs the conversation ID used elsewhere
