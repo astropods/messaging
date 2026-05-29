@@ -1,5 +1,10 @@
 name: Publish npm package
 
+# Version is read straight from sdk/node/package.json. To cut a release, bump
+# the version in package.json on main, then trigger this workflow (or publish
+# a GitHub release). The workflow never mutates package.json or pushes back
+# to the repo — npm SDK versioning is decoupled from the root VERSION file.
+
 on:
   release:
     types: [published]
@@ -9,21 +14,12 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       id-token: write
 
     steps:
-      - name: Generate app token
-        uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: ${{ secrets.CI_APP_ID }}
-          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
-
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          token: ${{ steps.app-token.outputs.token }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -36,11 +32,15 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - name: Sync version from VERSION file
+      - name: Read version
         run: |
-          VERSION=$(cat VERSION)
-          npm version "$VERSION" --no-git-tag-version --allow-same-version --prefix sdk/node
+          VERSION=$(node -p "require('./sdk/node/package.json').version")
+          if [ -z "$VERSION" ] || [ "$VERSION" = "undefined" ]; then
+            echo "::error::Could not read version from sdk/node/package.json"
+            exit 1
+          fi
           echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "::notice::Publishing @astropods/messaging@$VERSION"
 
       - name: Install dependencies
         run: bun install
@@ -59,7 +59,7 @@ jobs:
         run: |
           if npm view "@astropods/messaging@${{ env.VERSION }}" version 2>/dev/null; then
             echo "published=true" >> $GITHUB_OUTPUT
-            echo "::notice::v${{ env.VERSION }} is already published on npm"
+            echo "::notice::v${{ env.VERSION }} is already published on npm — nothing to do"
           else
             echo "published=false" >> $GITHUB_OUTPUT
           fi
@@ -68,14 +68,3 @@ jobs:
         if: steps.check-published.outputs.published == 'false'
         run: npm publish --access public
         working-directory: sdk/node
-
-      - name: Commit and tag release
-        run: |
-          git config user.name "astro-ci-bot[bot]"
-          git config user.email "${{ secrets.CI_APP_ID }}+astro-ci-bot[bot]@users.noreply.github.com"
-          git add sdk/node/package.json
-          git diff --staged --quiet || git commit -m "chore: release v${{ env.VERSION }}"
-          if ! git rev-parse "v${{ env.VERSION }}" >/dev/null 2>&1; then
-            git tag "v${{ env.VERSION }}"
-          fi
-          git push origin HEAD --tags --force-with-lease
