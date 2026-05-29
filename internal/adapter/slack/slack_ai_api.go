@@ -172,7 +172,7 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 		"elements": []map[string]interface{}{
 			{
 				"type":      "feedback_buttons",
-				"action_id": "feedback_buttons",
+				"action_id": feedbackButtonsActionID,
 				"positive_button": map[string]interface{}{
 					"text": map[string]interface{}{
 						"type": "plain_text",
@@ -193,11 +193,11 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 
 	blocks = append(blocks, map[string]interface{}{
 		"type":     "actions",
-		"block_id": "astropods_feedback_comment_actions",
+		"block_id": feedbackCommentBlockID,
 		"elements": []map[string]interface{}{
 			{
 				"type":      "button",
-				"action_id": "feedback_comment",
+				"action_id": feedbackCommentActionID,
 				"text": map[string]interface{}{
 					"type":  "plain_text",
 					"text":  "💬 Comment",

@@ -62,4 +62,18 @@ var (
 		Help:    "Latency from message receipt to successful agent forwarding, in seconds.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"platform"})
+
+	// FeedbackReceived counts platform feedback events (thumbs, comment, etc.) received from adapters.
+	// kind: reaction | text | unknown
+	FeedbackReceived = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "messaging_feedback_received_total",
+		Help: "Total platform feedback events received, by kind.",
+	}, []string{"kind"})
+
+	// FeedbackDropped counts feedback events that did not reach an agent.
+	// reason: no_agent | empty_conversation_id | send_error
+	FeedbackDropped = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "messaging_feedback_dropped_total",
+		Help: "Total feedback events dropped before reaching an agent. Labelled by reason.",
+	}, []string{"reason"})
 )

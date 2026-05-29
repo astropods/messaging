@@ -3,10 +3,17 @@ import * as protoLoader from '@grpc/proto-loader';
 import { join } from 'path';
 import { EventEmitter } from 'events';
 
+// google.protobuf.Timestamp as deserialized by @grpc/proto-loader (default opts).
+// seconds is encoded as a string because the value can exceed JS's safe-integer range.
+export interface Timestamp {
+  seconds: string;
+  nanos: number;
+}
+
 // Import types (will be generated from proto)
 export interface Message {
   id?: string;
-  timestamp?: any;
+  timestamp?: Timestamp;
   platform: string;
   platformContext?: PlatformContext;
   user: User;
@@ -101,7 +108,7 @@ export interface AgentResponse {
 export interface PlatformFeedback {
   conversationId: string;
   responseId?: string;
-  timestamp?: any;
+  timestamp?: Timestamp;
   user?: User;
   // oneof feedback — only one of these is set:
   reaction?: MessageReaction;
@@ -182,7 +189,7 @@ export interface ThreadHistoryResponse {
   conversationId: string;
   messages: ThreadMessage[];
   isComplete: boolean;
-  fetchedAt?: any;
+  fetchedAt?: Timestamp;
 }
 
 export interface ThreadMessage {
@@ -190,12 +197,12 @@ export interface ThreadMessage {
   user: User;
   content: string;
   attachments?: Attachment[];
-  timestamp: any;
+  timestamp: Timestamp;
   wasEdited?: boolean;
   isDeleted?: boolean;
   originalContent?: string;
-  editedAt?: any;
-  deletedAt?: any;
+  editedAt?: Timestamp;
+  deletedAt?: Timestamp;
   platformData?: { [key: string]: string };
 }
 

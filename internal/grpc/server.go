@@ -373,11 +373,22 @@ func (s *Server) HandleIncomingFeedback(ctx context.Context, fb *pb.PlatformFeed
 	if fb == nil {
 		return fmt.Errorf("nil feedback")
 	}
-	metrics.MessagesReceived.WithLabelValues("feedback").Inc()
+
+	kind := feedbackKind(fb)
+	metrics.FeedbackReceived.WithLabelValues(kind).Inc()
+
+	// Empty conversation_id is almost always an adapter bug (the click came
+	// from a platform UI element that wasn't tagged with the originating
+	// conversation). Warn loudly rather than silently dropping as "no agent".
+	if fb.ConversationId == "" {
+		slog.Warn("[gRPC] Feedback dropped: empty conversation_id", "kind", kind)
+		metrics.FeedbackDropped.WithLabelValues("empty_conversation_id").Inc()
+		return adapter.ErrNoAgentStream
+	}
 
 	stream := s.findStreamForConversation(fb.ConversationId)
 	if stream == nil {
-		metrics.MessagesDropped.WithLabelValues("feedback", "no_agent").Inc()
+		metrics.FeedbackDropped.WithLabelValues("no_agent").Inc()
 		return adapter.ErrNoAgentStream
 	}
 
@@ -388,11 +399,26 @@ func (s *Server) HandleIncomingFeedback(ctx context.Context, fb *pb.PlatformFeed
 	}
 
 	if err := stream.stream.Send(response); err != nil {
+		metrics.FeedbackDropped.WithLabelValues("send_error").Inc()
 		return fmt.Errorf("failed to send feedback to agent: %w", err)
 	}
 
-	slog.Debug("[gRPC] Feedback forwarded to agent", "conversation", fb.ConversationId)
+	slog.Debug("[gRPC] Feedback forwarded to agent", "conversation", fb.ConversationId, "kind", kind)
 	return nil
+}
+
+// feedbackKind returns a label string for the oneof variant of a PlatformFeedback.
+// Only the variants currently emitted by adapters are enumerated; everything
+// else rolls up under "unknown" until an adapter actually wires it.
+func feedbackKind(fb *pb.PlatformFeedback) string {
+	switch fb.Feedback.(type) {
+	case *pb.PlatformFeedback_Reaction:
+		return "reaction"
+	case *pb.PlatformFeedback_Text:
+		return "text"
+	default:
+		return "unknown"
+	}
 }
 
 // SendAudioConfig sends an AudioStreamConfig to the agent via the gRPC bidirectional stream.
