@@ -44,13 +44,29 @@ jobs:
 
       - name: Check if version is already published
         id: check-published
+        # Query the PyPI JSON API for an exact-version match. The previous
+        # implementation grepped `pip index versions` output, which is a
+        # substring match — "0.0.5" would match "0.0.50" or "0.0.5.dev1"
+        # and falsely report the release as already published, silently
+        # skipping the publish step.
         run: |
-          if pip index versions astropods-messaging 2>/dev/null | grep "Available versions:" | grep -q "${{ env.VERSION }}"; then
-            echo "published=true" >> $GITHUB_OUTPUT
-            echo "::notice::v${{ env.VERSION }} is already published on PyPI"
-          else
-            echo "published=false" >> $GITHUB_OUTPUT
-          fi
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://pypi.org/pypi/astropods-messaging/${VERSION}/json")
+          case "$STATUS" in
+            200)
+              echo "published=true" >> $GITHUB_OUTPUT
+              echo "::notice::astropods-messaging==${VERSION} is already published on PyPI"
+              ;;
+            404)
+              echo "published=false" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "::error::PyPI returned unexpected status ${STATUS} when checking ${VERSION}"
+              exit 1
+              ;;
+          esac
+        env:
+          VERSION: ${{ env.VERSION }}
 
       - name: Publish
         if: steps.check-published.outputs.published == 'false'
