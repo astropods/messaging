@@ -86,31 +86,33 @@ var (
 // etc.). Empty string is acceptable for legacy callers — the server
 // falls back to the unscoped owning-account candidate.
 //
-// When the server resolves the slack user to a linked WorkOS user, dispatch
-// rewrites msg.User.Id to that canonical WorkOS user_id and preserves the
-// raw slack id under platform_data["slack_user_id"]. Downstream consumers
-// (agents, observability) then see the same identity shape as web traffic.
+// Side effect: on success this overwrites msg.User.Id with the canonical
+// trace identity — the resolved WorkOS user_id when the Slack user has
+// linked, otherwise a namespaced "slack:<team>:<user>" form. Downstream the
+// agent SDK plumbs msg.User.Id into langfuse.user.id, so unlinked Slack
+// users land on their own per-Slack-ID row in Insights instead of the
+// generic Unattributed bucket.
 func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID string) error {
 	// Observe channels are passive watch channels — the user didn't address the
 	// bot, so per-user authz doesn't apply. Operators opt into this by listing
-	// the channel in observe_channel_ids.
+	// the channel in observe_channel_ids. Identity rewrite is also skipped: the
+	// observed user didn't address the bot, so attribution back to them on a
+	// trace would misrepresent intent.
 	observed := msg != nil && msg.PlatformContext != nil && a.observeChannels[msg.PlatformContext.ChannelId]
 
 	if !observed && a.authz != nil && msg != nil && msg.User != nil {
-		res, err := a.authz.Authorize(ctx, authz.IdentityTypeSlack, msg.User.Id, authz.AdapterSlack, teamID)
+		result, err := a.authz.Authorize(ctx, authz.IdentityTypeSlack, msg.User.Id, authz.AdapterSlack, teamID)
 		if err != nil {
 			slog.Warn("[Slack] authz check failed",
 				"user_id", msg.User.Id, "err", err)
 			return errAuthzUnavailable
 		}
-		if !res.Allowed {
+		if !result.Allowed {
 			slog.Warn("[Slack] message denied by authz",
 				"user_id", msg.User.Id)
 			return errAuthzDenied
 		}
-		if res.UserID != "" && res.UserID != msg.User.Id {
-			rewriteToWorkOSUser(msg, res.UserID)
-		}
+		msg.User.Id = canonicalUserID(result, teamID, msg.User.Id)
 	}
 	if a.msgHandler == nil {
 		return nil
@@ -118,20 +120,34 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 	return a.msgHandler(ctx, msg)
 }
 
-// rewriteToWorkOSUser replaces the slack-native user id on msg with the
-// resolved WorkOS user_id and stashes the original under
-// platform_data["slack_user_id"] so platform-specific call sites (e.g. sending
-// a DM back to the slack user) can still recover it.
-func rewriteToWorkOSUser(msg *pb.Message, workosUserID string) {
-	slackUserID := msg.User.Id
-	msg.User.Id = workosUserID
-	if msg.PlatformContext == nil {
-		msg.PlatformContext = &pb.PlatformContext{}
+// canonicalUserID converts a Slack identity to the form that should appear
+// as Langfuse user_id on the trace. Linked users get their WorkOS id (full
+// attribution); unlinked users get a workspace-qualified slack:T:U so they
+// remain identifiable and distinguishable from anonymous traffic.
+//
+// teamID / slackUserID are the values the adapter saw on the incoming
+// event. The server normally echoes them back in `result`, but we fall
+// back to the input values defensively — older servers and the degraded-
+// mode fallback both produce empty slack fields.
+func canonicalUserID(result authz.Result, teamID, slackUserID string) string {
+	if result.UserID != "" {
+		return result.UserID
 	}
-	if msg.PlatformContext.PlatformData == nil {
-		msg.PlatformContext.PlatformData = map[string]string{}
+	user := result.SlackUserID
+	if user == "" {
+		user = slackUserID
 	}
-	msg.PlatformContext.PlatformData["slack_user_id"] = slackUserID
+	team := result.SlackTeamID
+	if team == "" {
+		team = teamID
+	}
+	if team == "" {
+		// Pre-team_id callers (rare). Best we can do is namespace the bare
+		// user id so it's still distinguishable from a WorkOS user; cross-
+		// workspace collisions are accepted in this fallback.
+		return "slack:" + user
+	}
+	return "slack:" + team + ":" + user
 }
 
 // New creates a new Slack adapter

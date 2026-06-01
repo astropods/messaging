@@ -18,17 +18,19 @@ type cacheKey struct {
 }
 
 type cacheEntry struct {
-	allowed   bool
-	userID    string
+	result    Result
 	expiresAt time.Time
 }
 
-// resultCache stores authorize results keyed by request triple. Both allow and
-// deny outcomes are cached so a denied principal doesn't keep hammering the
-// server. The resolved WorkOS user_id is cached alongside the bool so callers
-// can recover the canonical identity on hits without a round-trip. Eviction is
-// lazy (on Get) to avoid a background goroutine; the working set is bounded by
-// unique (identity, adapter) pairs per deployment, which is small in practice.
+// resultCache stores authorize Results keyed by request triple. Both
+// allow and deny outcomes are cached so a denied principal doesn't keep
+// hammering the server. Eviction is lazy (on Get) to avoid a background
+// goroutine; the working set is bounded by unique (identity, adapter) pairs
+// per deployment, which is small in practice.
+//
+// The cached value carries the resolved WorkOS user_id and echoed slack
+// identity so the slack adapter can attribute traces without re-calling
+// the server for every message in a chatty thread.
 type resultCache struct {
 	mu  sync.Mutex
 	ttl time.Duration
@@ -44,23 +46,23 @@ func newResultCache(ttl time.Duration) *resultCache {
 	}
 }
 
-// get returns (allowed, userID, true) on a hit, or (_, _, false) on miss/expiry.
-func (c *resultCache) get(k cacheKey) (bool, string, bool) {
+// get returns the cached Result on a hit, or (_, false) on miss/expiry.
+func (c *resultCache) get(k cacheKey) (Result, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.m[k]
 	if !ok {
-		return false, "", false
+		return Result{}, false
 	}
 	if c.now().After(e.expiresAt) {
 		delete(c.m, k)
-		return false, "", false
+		return Result{}, false
 	}
-	return e.allowed, e.userID, true
+	return e.result, true
 }
 
-func (c *resultCache) put(k cacheKey, allowed bool, userID string) {
+func (c *resultCache) put(k cacheKey, result Result) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.m[k] = cacheEntry{allowed: allowed, userID: userID, expiresAt: c.now().Add(c.ttl)}
+	c.m[k] = cacheEntry{result: result, expiresAt: c.now().Add(c.ttl)}
 }

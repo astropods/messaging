@@ -45,6 +45,15 @@ func okRespWithUser(allowed bool, userID string) *http.Response {
 	}
 }
 
+func okRespFull(r authorizeResponse) *http.Response {
+	body, _ := json.Marshal(r)
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(string(body))),
+		Header:     http.Header{},
+	}
+}
+
 // newTestAuthorizer wires a realAuthorizer with a stub HTTP client so we
 // can test the Authorizer flow without standing up a server.
 func newTestAuthorizer(t *testing.T, anyoneAdapters []string, fn func(*http.Request) (*http.Response, error)) (*realAuthorizer, *fakeHTTPClient) {
@@ -64,26 +73,27 @@ func newTestAuthorizer(t *testing.T, anyoneAdapters []string, fn func(*http.Requ
 	return a, stub
 }
 
-// Adapter listed in anyone_adapters → no server call, allowed immediately,
-// no identity required.
-func TestAuthorize_AnyoneFastPath_NoServerCall(t *testing.T) {
-	a, stub := newTestAuthorizer(t, []string{"web"}, func(r *http.Request) (*http.Response, error) {
-		t.Errorf("unexpected server call: %s", r.URL)
-		return nil, errors.New("should not call")
+// Every request now hits the server even when the token claims an anyone
+// adapter — the resolved identity has to flow into the response so
+// downstream traces can attribute the request. The token claim is reserved
+// for degraded-mode fallback when the server is unreachable.
+func TestAuthorize_AlwaysCallsServer(t *testing.T) {
+	a, stub := newTestAuthorizer(t, []string{"slack"}, func(r *http.Request) (*http.Response, error) {
+		return okRespFull(authorizeResponse{Allowed: true, UserID: "user_alice", SlackUserID: "U01", SlackTeamID: "T1"}), nil
 	})
 
-	res, err := a.Authorize(context.Background(), "", "", "web", "")
+	result, err := a.Authorize(context.Background(), "slack", "U01", "slack", "T1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !res.Allowed {
-		t.Error("expected allowed=true via anyone fast path")
+	if !result.Allowed {
+		t.Fatal("expected allowed=true")
 	}
-	if res.UserID != "" {
-		t.Errorf("anyone-bypass must not resolve a user_id, got %q", res.UserID)
+	if result.UserID != "user_alice" || result.SlackUserID != "U01" || result.SlackTeamID != "T1" {
+		t.Errorf("expected full identity in result, got %+v", result)
 	}
-	if stub.callCount.Load() != 0 {
-		t.Errorf("expected 0 HTTP calls, got %d", stub.callCount.Load())
+	if stub.callCount.Load() != 1 {
+		t.Errorf("expected 1 HTTP call even though anyone_adapters lists slack, got %d", stub.callCount.Load())
 	}
 }
 
@@ -120,6 +130,28 @@ func TestAuthorize_ServerCall_AndCache(t *testing.T) {
 	}
 	if got := stub.callCount.Load(); got != 1 {
 		t.Errorf("expected exactly 1 HTTP call (cache should hit on the rest), got %d", got)
+	}
+}
+
+// Cached results carry the resolved identity, not just the bool. Subsequent
+// Authorize calls for the same identity must return the full Result from
+// cache so we don't lose attribution on a chatty thread.
+func TestAuthorize_CacheCarriesIdentity(t *testing.T) {
+	a, stub := newTestAuthorizer(t, nil, func(r *http.Request) (*http.Response, error) {
+		return okRespFull(authorizeResponse{Allowed: true, UserID: "user_alice", SlackUserID: "U01", SlackTeamID: "T1"}), nil
+	})
+
+	for i := 0; i < 3; i++ {
+		result, err := a.Authorize(context.Background(), "slack", "U01", "slack", "T1")
+		if err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
+		if result.UserID != "user_alice" {
+			t.Errorf("call %d: expected user_id from cache, got %q", i, result.UserID)
+		}
+	}
+	if got := stub.callCount.Load(); got != 1 {
+		t.Errorf("expected 1 HTTP call (rest from cache), got %d", got)
 	}
 }
 
@@ -183,6 +215,28 @@ func TestAuthorize_TransportError_FailClosedNotCached(t *testing.T) {
 	}
 	if got := stub.callCount.Load(); got != 2 {
 		t.Errorf("expected each call to retry the server (no cache on error), got %d calls", got)
+	}
+}
+
+// Transport error + anyone-adapters claim → degraded-mode fallback: allow
+// the request through (no resolved identity) so a server outage doesn't
+// silently take down Slack delivery for open-grant deployments.
+func TestAuthorize_TransportError_AnyoneAdapterFallback(t *testing.T) {
+	a, _ := newTestAuthorizer(t, []string{"slack"}, func(r *http.Request) (*http.Response, error) {
+		return nil, errors.New("connection refused")
+	})
+
+	result, err := a.Authorize(context.Background(), "slack", "U01", "slack", "T1")
+	if err != nil {
+		t.Fatalf("expected nil error via degraded-mode fallback, got %v", err)
+	}
+	if !result.Allowed {
+		t.Error("expected allowed=true via anyone-adapters fallback")
+	}
+	// Identity stays empty in the fallback — the adapter will namespace the
+	// slack ID itself when UserID is empty.
+	if result.UserID != "" || result.SlackUserID != "" || result.SlackTeamID != "" {
+		t.Errorf("expected empty identity in degraded-mode fallback, got %+v", result)
 	}
 }
 
@@ -263,15 +317,17 @@ func TestNewAuthorizer_RejectsMissingFields(t *testing.T) {
 	}
 }
 
+// NewAuthorizer wires a working real client end-to-end. The token's
+// anyone_adapters claim is no longer a fast path — but it still parses and
+// is held for degraded-mode fallback. Construction is the only thing this
+// test exercises; behaviour is covered above with stubbed transports.
 func TestNewAuthorizer_HappyPath(t *testing.T) {
 	tok := jwt(`{"sub":"dep-9","iss":"https://astropods.com","anyone_adapters":["web"]}`)
 	a, err := NewAuthorizer(Config{IdentityToken: tok})
 	if err != nil {
 		t.Fatalf("NewAuthorizer: %v", err)
 	}
-	// anyone_adapters=["web"] → web allowed without server call
-	res, err := a.Authorize(context.Background(), "", "", "web", "")
-	if err != nil || !res.Allowed {
-		t.Errorf("expected allow on web; got %+v err=%v", res, err)
+	if a == nil {
+		t.Fatal("expected non-nil Authorizer")
 	}
 }

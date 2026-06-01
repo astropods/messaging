@@ -11,16 +11,16 @@ func TestCache_HitWithinTTL(t *testing.T) {
 	c.now = func() time.Time { return now }
 	k := cacheKey{identityType: "user", identityID: "alice", adapter: "web"}
 
-	c.put(k, true, "alice")
-	got, userID, ok := c.get(k)
-	if !ok || !got || userID != "alice" {
-		t.Errorf("expected cache hit allowed=true user=alice; got ok=%v allowed=%v userID=%q", ok, got, userID)
+	c.put(k, Result{Allowed: true, UserID: "alice"})
+	got, ok := c.get(k)
+	if !ok || !got.Allowed || got.UserID != "alice" {
+		t.Errorf("expected cache hit allowed=true user_id=alice; got ok=%v %+v", ok, got)
 	}
 
 	now = now.Add(30 * time.Second)
-	got, userID, ok = c.get(k)
-	if !ok || !got || userID != "alice" {
-		t.Errorf("expected hit at t+30s; got ok=%v allowed=%v userID=%q", ok, got, userID)
+	got, ok = c.get(k)
+	if !ok || !got.Allowed {
+		t.Errorf("expected hit at t+30s; got ok=%v %+v", ok, got)
 	}
 }
 
@@ -30,9 +30,9 @@ func TestCache_MissAfterTTL(t *testing.T) {
 	c.now = func() time.Time { return now }
 	k := cacheKey{identityType: "user", identityID: "alice", adapter: "web"}
 
-	c.put(k, true, "alice")
+	c.put(k, Result{Allowed: true})
 	now = now.Add(61 * time.Second)
-	if _, _, ok := c.get(k); ok {
+	if _, ok := c.get(k); ok {
 		t.Errorf("expected miss after TTL")
 	}
 }
@@ -42,25 +42,34 @@ func TestCache_MissAfterTTL(t *testing.T) {
 func TestCache_CachesDeny(t *testing.T) {
 	c := newResultCache(60 * time.Second)
 	k := cacheKey{identityType: "user", identityID: "bob", adapter: "web"}
-	c.put(k, false, "")
-	got, _, ok := c.get(k)
+	c.put(k, Result{Allowed: false})
+	got, ok := c.get(k)
 	if !ok {
 		t.Fatal("expected hit")
 	}
-	if got {
+	if got.Allowed {
 		t.Error("expected allowed=false to be cached as false, got true")
 	}
 }
 
-// The resolved user_id must round-trip through the cache so callers can recover
-// the canonical WorkOS user on hits without re-querying the server.
-func TestCache_PreservesUserID(t *testing.T) {
+// The full Result must round-trip through the cache so callers can recover
+// the resolved WorkOS user_id and echoed slack identity on hits without
+// re-querying the server.
+func TestCache_PreservesResult(t *testing.T) {
 	c := newResultCache(60 * time.Second)
 	k := cacheKey{identityType: "slack", identityID: "U01", adapter: "slack", identityScope: "T1"}
-	c.put(k, true, "user_workos_42")
-	allowed, userID, ok := c.get(k)
-	if !ok || !allowed || userID != "user_workos_42" {
-		t.Errorf("expected hit with userID=user_workos_42; got ok=%v allowed=%v userID=%q", ok, allowed, userID)
+	c.put(k, Result{
+		Allowed:     true,
+		UserID:      "user_workos_42",
+		SlackUserID: "U01",
+		SlackTeamID: "T1",
+	})
+	got, ok := c.get(k)
+	if !ok || !got.Allowed {
+		t.Fatalf("expected allowed hit; got ok=%v %+v", ok, got)
+	}
+	if got.UserID != "user_workos_42" || got.SlackUserID != "U01" || got.SlackTeamID != "T1" {
+		t.Errorf("identity fields not preserved through cache: %+v", got)
 	}
 }
 
@@ -69,20 +78,20 @@ func TestCache_PreservesUserID(t *testing.T) {
 // workspaces with overlapping user_ids never collide.
 func TestCache_KeysAreTupleScoped(t *testing.T) {
 	c := newResultCache(60 * time.Second)
-	c.put(cacheKey{"user", "alice", "web", ""}, true, "alice")
-	if _, _, ok := c.get(cacheKey{"user", "alice", "slack", ""}); ok {
+	c.put(cacheKey{"user", "alice", "web", ""}, Result{Allowed: true})
+	if _, ok := c.get(cacheKey{"user", "alice", "slack", ""}); ok {
 		t.Error("different adapter must not hit")
 	}
-	if _, _, ok := c.get(cacheKey{"user", "bob", "web", ""}); ok {
+	if _, ok := c.get(cacheKey{"user", "bob", "web", ""}); ok {
 		t.Error("different identity_id must not hit")
 	}
-	if _, _, ok := c.get(cacheKey{"slack", "alice", "web", ""}); ok {
+	if _, ok := c.get(cacheKey{"slack", "alice", "web", ""}); ok {
 		t.Error("different identity_type must not hit")
 	}
 	// Same identity_id in two different slack workspaces is a collision
 	// risk — slack user_ids are only unique within one team.
-	c.put(cacheKey{"slack", "U01", "slack", "T1"}, true, "")
-	if _, _, ok := c.get(cacheKey{"slack", "U01", "slack", "T2"}); ok {
+	c.put(cacheKey{"slack", "U01", "slack", "T1"}, Result{Allowed: true})
+	if _, ok := c.get(cacheKey{"slack", "U01", "slack", "T2"}); ok {
 		t.Error("different identity_scope must not hit (cross-workspace leak)")
 	}
 }
