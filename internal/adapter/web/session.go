@@ -63,6 +63,27 @@ func (m *HeaderSessionManager) ValidateRequest(ctx context.Context, r *http.Requ
 	}, nil
 }
 
+// FixedSessionManager returns the same Session for every request. Used in
+// local mode where there is no ingress to inject a per-request identity
+// header — astro-server bakes the deploying account's owner user ID into
+// the messaging pod env via AUTH_TEST_USER_ID and we surface it here so
+// authz checks behave as if that user is signed in.
+type FixedSessionManager struct {
+	Session Session
+}
+
+// NewFixedSessionManager creates a session manager that always returns the
+// given session.
+func NewFixedSessionManager(s Session) *FixedSessionManager {
+	return &FixedSessionManager{Session: s}
+}
+
+// ValidateRequest returns the fixed session regardless of request contents.
+func (m *FixedSessionManager) ValidateRequest(_ context.Context, _ *http.Request) (*Session, error) {
+	sess := m.Session
+	return &sess, nil
+}
+
 // BearerTokenSessionManager validates bearer tokens
 type BearerTokenSessionManager struct {
 	// ValidateToken is a function that validates a token and returns session info

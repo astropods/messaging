@@ -101,6 +101,10 @@ type WebConfig struct {
 	ListenAddr      string
 	AllowedOrigins  []string
 	ServePlayground bool
+	// AuthTestUserID, when set, makes the web adapter treat every request as
+	// coming from this user. Used in local-mode deployments where no ingress
+	// is in front of messaging to inject the OIDC identity header.
+	AuthTestUserID string
 }
 
 // StorageConfig holds storage configuration
@@ -198,6 +202,7 @@ func Load() (*Config, error) {
 		ListenAddr:      getEnv("WEB_LISTEN_ADDR", ":8080"),
 		AllowedOrigins:  getEnvList("WEB_ALLOWED_ORIGINS", []string{"*"}),
 		ServePlayground: getEnvBool("WEB_SERVE_PLAYGROUND", false),
+		AuthTestUserID:  getEnv("WEB_AUTHN_TEST_USER_ID", ""),
 	}
 
 	// Metrics configuration
