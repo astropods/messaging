@@ -121,33 +121,23 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 }
 
 // canonicalUserID converts a Slack identity to the form that should appear
-// as Langfuse user_id on the trace. Linked users get their WorkOS id (full
-// attribution); unlinked users get a workspace-qualified slack:T:U so they
-// remain identifiable and distinguishable from anonymous traffic.
+// as Langfuse user_id on the trace.
 //
-// teamID / slackUserID are the values the adapter saw on the incoming
-// event. The server normally echoes them back in `result`, but we fall
-// back to the input values defensively — older servers and the degraded-
-// mode fallback both produce empty slack fields.
-func canonicalUserID(result authz.Result, teamID, slackUserID string) string {
+// Linked users get their WorkOS id (full attribution; the Insights People
+// table renders them as the matching account member with name + avatar).
+// Unlinked users keep the raw Slack id — this is the same format every
+// pre-existing trace in Langfuse already carries, so there's a single
+// aggregation key per Slack user and no historical-vs-new row duplication.
+//
+// The workspace team_id never lives in user_id; the astro-server side keeps
+// it in slack_identity_mappings (populated by the live-ingest path on
+// /authorize and a one-time backfill) so the Insights deep link still works
+// without a namespaced wire format.
+func canonicalUserID(result authz.Result, _, slackUserID string) string {
 	if result.UserID != "" {
 		return result.UserID
 	}
-	user := result.SlackUserID
-	if user == "" {
-		user = slackUserID
-	}
-	team := result.SlackTeamID
-	if team == "" {
-		team = teamID
-	}
-	if team == "" {
-		// Pre-team_id callers (rare). Best we can do is namespace the bare
-		// user id so it's still distinguishable from a WorkOS user; cross-
-		// workspace collisions are accepted in this fallback.
-		return "slack:" + user
-	}
-	return "slack:" + team + ":" + user
+	return slackUserID
 }
 
 // New creates a new Slack adapter

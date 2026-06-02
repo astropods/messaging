@@ -699,55 +699,58 @@ func TestDispatch_LinkedSlack_RewritesToWorkOSUserID(t *testing.T) {
 	}
 }
 
-// Unlinked Slack user → dispatch namespaces the slack identity so the
-// trace userId stays distinguishable from anonymous traffic and Insights
-// can render the row as "Slack user - U07ABC" instead of dumping it into
-// Unattributed.
-func TestDispatch_UnlinkedSlack_NamespacesUserID(t *testing.T) {
+// Unlinked Slack user → dispatch keeps the raw slack id on msg.User.Id.
+// Same format as every historical Langfuse trace, so the Insights "by
+// people" view aggregates pre-PR and post-PR traffic from the same human
+// into one row (no duplicates). astro-server's directory join attaches
+// team_id separately for the slack:// deep link.
+func TestDispatch_UnlinkedSlack_KeepsRawSlackID(t *testing.T) {
 	a, handler := newTestAdapter()
 	a.SetAuthorizer(&stubAuthorizer{result: authz.Result{
 		Allowed:     true,
-		SlackUserID: "U07ABC",
+		SlackUserID: "U07ABCDEF",
 		SlackTeamID: "T07XYZ",
 	}})
 
-	msg := &pb.Message{User: &pb.User{Id: "U07ABC"}}
+	msg := &pb.Message{User: &pb.User{Id: "U07ABCDEF"}}
 	if err := a.dispatch(t.Context(), msg, "T07XYZ"); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 	if handler.count() != 1 {
 		t.Fatalf("expected msgHandler called once, got %d", handler.count())
 	}
-	if want := "slack:T07XYZ:U07ABC"; msg.User.Id != want {
-		t.Errorf("expected namespaced slack id %q, got %q", want, msg.User.Id)
+	if want := "U07ABCDEF"; msg.User.Id != want {
+		t.Errorf("expected raw slack id %q, got %q", want, msg.User.Id)
 	}
 }
 
 // Degraded-mode fallback (server unreachable, anyone-adapters claim): the
 // Authorizer returns Allowed=true with empty identity fields. The adapter
-// must fall back to the input teamID/userID for namespacing — losing one
-// channel of attribution shouldn't drop traces into Unattributed.
-func TestDispatch_DegradedMode_FallsBackToInputIDs(t *testing.T) {
+// keeps the raw slack id — same as the normal unlinked path — so the trace
+// still attributes to that user.
+func TestDispatch_DegradedMode_FallsBackToRawSlackID(t *testing.T) {
 	a, handler := newTestAdapter()
 	a.SetAuthorizer(&stubAuthorizer{result: authz.Result{Allowed: true}})
 
-	msg := &pb.Message{User: &pb.User{Id: "U07ABC"}}
+	msg := &pb.Message{User: &pb.User{Id: "U07ABCDEF"}}
 	if err := a.dispatch(t.Context(), msg, "T07XYZ"); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 	if handler.count() != 1 {
 		t.Fatalf("expected msgHandler called once, got %d", handler.count())
 	}
-	if want := "slack:T07XYZ:U07ABC"; msg.User.Id != want {
-		t.Errorf("expected fallback namespacing %q, got %q", want, msg.User.Id)
+	if want := "U07ABCDEF"; msg.User.Id != want {
+		t.Errorf("expected raw slack id in degraded mode %q, got %q", want, msg.User.Id)
 	}
 }
 
-// TestCanonicalUserID pins every branch of the helper directly, separate
-// from the dispatch-level tests above. Wire format matters: the namespaced
-// "slack:T:U" form is what the Insights UI's isSlackUserId() parser in
-// astro-client expects to recognise as an unlinked Slack user — change
-// either side and the cross-repo contract breaks silently.
+// TestCanonicalUserID pins both branches of the helper directly. Wire
+// format matters: the bare slack id is the same shape every historical
+// Langfuse trace already carries, so picking a different format here would
+// re-introduce the dual-key duplication problem in Insights (one row per
+// historical bare key + a second row per new namespaced key for the same
+// human). astro-server's directory join attaches team_id to bare ids via
+// slack_identity_mappings — no team needs to live in user_id itself.
 func TestCanonicalUserID(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -757,32 +760,25 @@ func TestCanonicalUserID(t *testing.T) {
 		want        string
 	}{
 		{
-			name:        "resolved WorkOS user wins",
-			result:      authz.Result{Allowed: true, UserID: "user_alice", SlackUserID: "U07A", SlackTeamID: "T07X"},
-			teamID:      "T07X",
-			slackUserID: "U07A",
+			name:        "linked user → WorkOS id wins",
+			result:      authz.Result{Allowed: true, UserID: "user_alice", SlackUserID: "U07ABCDEF", SlackTeamID: "T07XYZ"},
+			teamID:      "T07XYZ",
+			slackUserID: "U07ABCDEF",
 			want:        "user_alice",
 		},
 		{
-			name:        "server echoes slack identity → namespaced form",
-			result:      authz.Result{Allowed: true, SlackUserID: "U07A", SlackTeamID: "T07X"},
-			teamID:      "T07X",
-			slackUserID: "U07A",
-			want:        "slack:T07X:U07A",
+			name:        "unlinked user → raw slack id (matches historical Langfuse format)",
+			result:      authz.Result{Allowed: true, SlackUserID: "U07ABCDEF", SlackTeamID: "T07XYZ"},
+			teamID:      "T07XYZ",
+			slackUserID: "U07ABCDEF",
+			want:        "U07ABCDEF",
 		},
 		{
-			name:        "degraded mode (empty result) → fall back to input ids",
+			name:        "degraded mode (empty result) → still raw slack id",
 			result:      authz.Result{Allowed: true},
-			teamID:      "T07X",
-			slackUserID: "U07A",
-			want:        "slack:T07X:U07A",
-		},
-		{
-			name:        "no team anywhere → bare-user fallback",
-			result:      authz.Result{Allowed: true},
-			teamID:      "",
-			slackUserID: "U07A",
-			want:        "slack:U07A",
+			teamID:      "T07XYZ",
+			slackUserID: "U07ABCDEF",
+			want:        "U07ABCDEF",
 		},
 	}
 	for _, tc := range cases {
