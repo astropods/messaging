@@ -743,6 +743,59 @@ func TestDispatch_DegradedMode_FallsBackToInputIDs(t *testing.T) {
 	}
 }
 
+// TestCanonicalUserID pins every branch of the helper directly, separate
+// from the dispatch-level tests above. Wire format matters: the namespaced
+// "slack:T:U" form is what the Insights UI's isSlackUserId() parser in
+// astro-client expects to recognise as an unlinked Slack user — change
+// either side and the cross-repo contract breaks silently.
+func TestCanonicalUserID(t *testing.T) {
+	cases := []struct {
+		name        string
+		result      authz.Result
+		teamID      string
+		slackUserID string
+		want        string
+	}{
+		{
+			name:        "resolved WorkOS user wins",
+			result:      authz.Result{Allowed: true, UserID: "user_alice", SlackUserID: "U07A", SlackTeamID: "T07X"},
+			teamID:      "T07X",
+			slackUserID: "U07A",
+			want:        "user_alice",
+		},
+		{
+			name:        "server echoes slack identity → namespaced form",
+			result:      authz.Result{Allowed: true, SlackUserID: "U07A", SlackTeamID: "T07X"},
+			teamID:      "T07X",
+			slackUserID: "U07A",
+			want:        "slack:T07X:U07A",
+		},
+		{
+			name:        "degraded mode (empty result) → fall back to input ids",
+			result:      authz.Result{Allowed: true},
+			teamID:      "T07X",
+			slackUserID: "U07A",
+			want:        "slack:T07X:U07A",
+		},
+		{
+			name:        "no team anywhere → bare-user fallback",
+			result:      authz.Result{Allowed: true},
+			teamID:      "",
+			slackUserID: "U07A",
+			want:        "slack:U07A",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := canonicalUserID(tc.result, tc.teamID, tc.slackUserID)
+			if got != tc.want {
+				t.Errorf("canonicalUserID(%+v, %q, %q) = %q, want %q",
+					tc.result, tc.teamID, tc.slackUserID, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSendErrorMessage_AuthzDenied_PostsSanitized(t *testing.T) {
 	srv := newFakeSlackServer(t, "")
 	defer srv.Close()

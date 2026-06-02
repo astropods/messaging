@@ -297,6 +297,26 @@ func TestAllowAll_DenyAll(t *testing.T) {
 	if res.UserID != "alice" {
 		t.Errorf("AllowAll should echo identityID as userID, got %q", res.UserID)
 	}
+
+	// Dev-mode slack call: AllowAll mirrors the server's slack branch by
+	// echoing the slack identity in SlackUserID / SlackTeamID and leaving
+	// UserID empty (there's no slack_identity_mappings table in dev). This
+	// lets the slack adapter's canonicalUserID() produce the same
+	// namespaced "slack:T:U" form locally as it would against a real server.
+	res, _ = AllowAll().Authorize(context.Background(), "slack", "U01", "slack", "T1")
+	if !res.Allowed {
+		t.Error("AllowAll should allow slack identity")
+	}
+	if res.UserID != "" {
+		t.Errorf("AllowAll on slack must leave UserID empty (no mapping in dev), got %q", res.UserID)
+	}
+	if res.SlackUserID != "U01" {
+		t.Errorf("AllowAll on slack should echo SlackUserID, got %q", res.SlackUserID)
+	}
+	if res.SlackTeamID != "T1" {
+		t.Errorf("AllowAll on slack should echo SlackTeamID, got %q", res.SlackTeamID)
+	}
+
 	res, _ = DenyAll().Authorize(context.Background(), "", "", "web", "")
 	if res.Allowed {
 		t.Error("DenyAll should deny")
