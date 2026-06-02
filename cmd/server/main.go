@@ -250,14 +250,22 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 		slog.Info("Initializing Web adapter...")
 		// In production astro-server runs the web adapter behind ALB OIDC,
 		// which injects the WorkOS user ID as x-amzn-oidc-identity. Read
-		// that header as the session userID; without it (local dev) the
-		// adapter falls back to NoopSessionManager via the option below.
+		// that header as the session userID. In local mode there's no
+		// ingress to inject the header, so astro-server passes the
+		// account owner via WEB_AUTHN_TEST_USER_ID and we synthesize a
+		// fixed session for every request. Without either, the adapter
+		// falls back to NoopSessionManager.
 		webOpts := []web.WebAdapterOption{
 			web.WithListenAddr(cfg.Web.ListenAddr),
 			web.WithAllowedOrigins(cfg.Web.AllowedOrigins),
 			web.WithServePlayground(cfg.Web.ServePlayground),
 		}
-		if cfg.Authz.IdentityToken != "" {
+		switch {
+		case cfg.Web.AuthTestUserID != "":
+			webOpts = append(webOpts, web.WithSessionManager(
+				web.NewFixedSessionManager(web.Session{UserID: cfg.Web.AuthTestUserID}),
+			))
+		case cfg.Authz.IdentityToken != "":
 			webOpts = append(webOpts, web.WithSessionManager(
 				web.NewHeaderSessionManager("x-amzn-oidc-identity", "", ""),
 			))
