@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 )
@@ -16,7 +17,7 @@ func TestFixedSessionManager_ReturnsConfiguredSessionForEveryRequest(t *testing.
 	// Two distinct requests with no auth headers should both resolve to the
 	// configured session — the manager ignores request contents.
 	for _, path := range []string{"/api/threads", "/assets/main.js"} {
-		req := httptest.NewRequest("GET", path, nil)
+		req := httptest.NewRequest(http.MethodGet, path, nil)
 		got, err := mgr.ValidateRequest(context.Background(), req)
 		if err != nil {
 			t.Fatalf("ValidateRequest(%q) error: %v", path, err)
@@ -42,13 +43,13 @@ func TestFixedSessionManager_ReturnsCopyNotSharedPointer(t *testing.T) {
 	// Session struct.
 	mgr := NewFixedSessionManager(Session{UserID: "user_a"})
 
-	first, err := mgr.ValidateRequest(context.Background(), httptest.NewRequest("GET", "/", nil))
+	first, err := mgr.ValidateRequest(context.Background(), httptest.NewRequest(http.MethodGet, "/", nil))
 	if err != nil {
 		t.Fatalf("first ValidateRequest: %v", err)
 	}
 	first.UserID = "mutated"
 
-	second, err := mgr.ValidateRequest(context.Background(), httptest.NewRequest("GET", "/", nil))
+	second, err := mgr.ValidateRequest(context.Background(), httptest.NewRequest(http.MethodGet, "/", nil))
 	if err != nil {
 		t.Fatalf("second ValidateRequest: %v", err)
 	}
