@@ -45,15 +45,6 @@ func okRespWithUser(allowed bool, userID string) *http.Response {
 	}
 }
 
-func okRespFull(r authorizeResponse) *http.Response {
-	body, _ := json.Marshal(r)
-	return &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader(string(body))),
-		Header:     http.Header{},
-	}
-}
-
 // newTestAuthorizer wires a realAuthorizer with a stub HTTP client so we
 // can test the Authorizer flow without standing up a server.
 func newTestAuthorizer(t *testing.T, anyoneAdapters []string, fn func(*http.Request) (*http.Response, error)) (*realAuthorizer, *fakeHTTPClient) {
@@ -79,18 +70,18 @@ func newTestAuthorizer(t *testing.T, anyoneAdapters []string, fn func(*http.Requ
 // for degraded-mode fallback when the server is unreachable.
 func TestAuthorize_AlwaysCallsServer(t *testing.T) {
 	a, stub := newTestAuthorizer(t, []string{"slack"}, func(r *http.Request) (*http.Response, error) {
-		return okRespFull(authorizeResponse{Allowed: true, UserID: "user_alice", SlackUserID: "U01", SlackTeamID: "T1"}), nil
+		return okRespWithUser(true, "user_alice"), nil
 	})
 
-	result, err := a.Authorize(context.Background(), "slack", "U01", "slack", "T1")
+	result, err := a.Authorize(context.Background(), "slack", "U01ABCDEF", "slack", "T1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !result.Allowed {
 		t.Fatal("expected allowed=true")
 	}
-	if result.UserID != "user_alice" || result.SlackUserID != "U01" || result.SlackTeamID != "T1" {
-		t.Errorf("expected full identity in result, got %+v", result)
+	if result.UserID != "user_alice" {
+		t.Errorf("expected resolved WorkOS user_id in result, got %+v", result)
 	}
 	if stub.callCount.Load() != 1 {
 		t.Errorf("expected 1 HTTP call even though anyone_adapters lists slack, got %d", stub.callCount.Load())
@@ -133,16 +124,16 @@ func TestAuthorize_ServerCall_AndCache(t *testing.T) {
 	}
 }
 
-// Cached results carry the resolved identity, not just the bool. Subsequent
-// Authorize calls for the same identity must return the full Result from
-// cache so we don't lose attribution on a chatty thread.
+// Cached results carry the resolved WorkOS user_id, not just the bool.
+// Subsequent Authorize calls for the same identity return the cached
+// Result so we don't lose attribution on a chatty thread.
 func TestAuthorize_CacheCarriesIdentity(t *testing.T) {
 	a, stub := newTestAuthorizer(t, nil, func(r *http.Request) (*http.Response, error) {
-		return okRespFull(authorizeResponse{Allowed: true, UserID: "user_alice", SlackUserID: "U01", SlackTeamID: "T1"}), nil
+		return okRespWithUser(true, "user_alice"), nil
 	})
 
 	for i := 0; i < 3; i++ {
-		result, err := a.Authorize(context.Background(), "slack", "U01", "slack", "T1")
+		result, err := a.Authorize(context.Background(), "slack", "U01ABCDEF", "slack", "T1")
 		if err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
@@ -220,23 +211,35 @@ func TestAuthorize_TransportError_FailClosedNotCached(t *testing.T) {
 
 // Transport error + anyone-adapters claim → degraded-mode fallback: allow
 // the request through (no resolved identity) so a server outage doesn't
-// silently take down Slack delivery for open-grant deployments.
+// silently take down Slack delivery for open-grant deployments. The
+// synthesized Result is cached at a shortened TTL so a chatty workspace
+// doesn't re-pay the DefaultRequestTimeout on every message — the second
+// call here hits the cache and the stubbed HTTP transport is never
+// invoked a second time.
 func TestAuthorize_TransportError_AnyoneAdapterFallback(t *testing.T) {
-	a, _ := newTestAuthorizer(t, []string{"slack"}, func(r *http.Request) (*http.Response, error) {
+	a, stub := newTestAuthorizer(t, []string{"slack"}, func(r *http.Request) (*http.Response, error) {
 		return nil, errors.New("connection refused")
 	})
 
-	result, err := a.Authorize(context.Background(), "slack", "U01", "slack", "T1")
+	result, err := a.Authorize(context.Background(), "slack", "U01ABCDEF", "slack", "T1")
 	if err != nil {
 		t.Fatalf("expected nil error via degraded-mode fallback, got %v", err)
 	}
 	if !result.Allowed {
 		t.Error("expected allowed=true via anyone-adapters fallback")
 	}
-	// Identity stays empty in the fallback — the adapter will namespace the
-	// slack ID itself when UserID is empty.
-	if result.UserID != "" || result.SlackUserID != "" || result.SlackTeamID != "" {
-		t.Errorf("expected empty identity in degraded-mode fallback, got %+v", result)
+	// Identity stays empty in the fallback — the slack adapter then falls
+	// back to the raw slack ID from the incoming event when UserID is empty.
+	if result.UserID != "" {
+		t.Errorf("expected empty UserID in degraded-mode fallback, got %q", result.UserID)
+	}
+
+	// Second call for the same key must hit the cache, not the transport.
+	if _, err := a.Authorize(context.Background(), "slack", "U01ABCDEF", "slack", "T1"); err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if got := stub.callCount.Load(); got != 1 {
+		t.Errorf("expected exactly 1 HTTP call; degraded result must be cached, got %d", got)
 	}
 }
 
@@ -298,23 +301,17 @@ func TestAllowAll_DenyAll(t *testing.T) {
 		t.Errorf("AllowAll should echo identityID as userID, got %q", res.UserID)
 	}
 
-	// Dev-mode slack call: AllowAll mirrors the server's slack branch by
-	// echoing the slack identity in SlackUserID / SlackTeamID and leaving
-	// UserID empty (there's no slack_identity_mappings table in dev). This
-	// lets the slack adapter's canonicalUserID() produce the same
-	// namespaced "slack:T:U" form locally as it would against a real server.
-	res, _ = AllowAll().Authorize(context.Background(), "slack", "U01", "slack", "T1")
+	// Dev-mode slack call: AllowAll leaves UserID empty (there's no
+	// slack_identity_mappings table in dev). The slack adapter's
+	// canonicalUserID() then falls back to the raw slack ID from the
+	// incoming event — the same behavior as against a real server for
+	// an unlinked Slack user.
+	res, _ = AllowAll().Authorize(context.Background(), "slack", "U01ABCDEF", "slack", "T1")
 	if !res.Allowed {
 		t.Error("AllowAll should allow slack identity")
 	}
 	if res.UserID != "" {
 		t.Errorf("AllowAll on slack must leave UserID empty (no mapping in dev), got %q", res.UserID)
-	}
-	if res.SlackUserID != "U01" {
-		t.Errorf("AllowAll on slack should echo SlackUserID, got %q", res.SlackUserID)
-	}
-	if res.SlackTeamID != "T1" {
-		t.Errorf("AllowAll on slack should echo SlackTeamID, got %q", res.SlackTeamID)
 	}
 
 	res, _ = DenyAll().Authorize(context.Background(), "", "", "web", "")

@@ -27,15 +27,17 @@ type authorizeClient struct {
 	token      string // raw JWT; opaque to this package
 }
 
-// authorizeResponse mirrors the server's JSON response. Identity fields
-// (user_id / slack_user_id / slack_team_id) are only set on allowed=true;
-// the server suppresses them on denials to avoid leaking mapping state.
+// authorizeResponse mirrors the server's JSON response. UserID (the
+// resolved WorkOS user_id) is set on allowed=true; the server also
+// echoes slack_user_id / slack_team_id on slack requests, but the
+// adapter doesn't need them — it falls back to the raw slack id from the
+// incoming event when UserID is empty — so we ignore those fields here.
+// Re-add them if a consumer ever needs the directory lookup result
+// without an extra round-trip.
 type authorizeResponse struct {
-	Allowed     bool   `json:"allowed"`
-	UserID      string `json:"user_id,omitempty"`
-	SlackUserID string `json:"slack_user_id,omitempty"`
-	SlackTeamID string `json:"slack_team_id,omitempty"`
-	Error       string `json:"error,omitempty"`
+	Allowed bool   `json:"allowed"`
+	UserID  string `json:"user_id,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // newAuthorizeClient constructs the HTTP client used to call astro-server.
@@ -109,9 +111,7 @@ func (c *authorizeClient) authorize(ctx context.Context, identityType, identityI
 		return Result{}, fmt.Errorf("authz: server error: %s", out.Error)
 	}
 	return Result{
-		Allowed:     out.Allowed,
-		UserID:      out.UserID,
-		SlackUserID: out.SlackUserID,
-		SlackTeamID: out.SlackTeamID,
+		Allowed: out.Allowed,
+		UserID:  out.UserID,
 	}, nil
 }

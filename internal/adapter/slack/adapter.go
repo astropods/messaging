@@ -88,10 +88,11 @@ var (
 //
 // Side effect: on success this overwrites msg.User.Id with the canonical
 // trace identity — the resolved WorkOS user_id when the Slack user has
-// linked, otherwise a namespaced "slack:<team>:<user>" form. Downstream the
-// agent SDK plumbs msg.User.Id into langfuse.user.id, so unlinked Slack
-// users land on their own per-Slack-ID row in Insights instead of the
-// generic Unattributed bucket.
+// linked, otherwise the raw Slack ID (e.g. "U07ABCDEF") passed through
+// unchanged. Downstream the agent SDK plumbs msg.User.Id into
+// langfuse.user.id, so unlinked Slack users land on their own
+// per-Slack-ID row in Insights instead of the generic Unattributed
+// bucket.
 func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID string) error {
 	// Observe channels are passive watch channels — the user didn't address the
 	// bot, so per-user authz doesn't apply. Operators opt into this by listing
@@ -112,7 +113,7 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 				"user_id", msg.User.Id)
 			return errAuthzDenied
 		}
-		msg.User.Id = canonicalUserID(result, teamID, msg.User.Id)
+		msg.User.Id = canonicalUserID(result, msg.User.Id)
 	}
 	if a.msgHandler == nil {
 		return nil
@@ -133,7 +134,7 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 // it in slack_identity_mappings (populated by the live-ingest path on
 // /authorize and a one-time backfill) so the Insights deep link still works
 // without a namespaced wire format.
-func canonicalUserID(result authz.Result, _, slackUserID string) string {
+func canonicalUserID(result authz.Result, slackUserID string) string {
 	if result.UserID != "" {
 		return result.UserID
 	}

@@ -681,13 +681,11 @@ func (s *stubAuthorizer) Authorize(_ context.Context, _, _, _, _ string) (authz.
 func TestDispatch_LinkedSlack_RewritesToWorkOSUserID(t *testing.T) {
 	a, handler := newTestAdapter()
 	a.SetAuthorizer(&stubAuthorizer{result: authz.Result{
-		Allowed:     true,
-		UserID:      "user_alice",
-		SlackUserID: "U07ABC",
-		SlackTeamID: "T07XYZ",
+		Allowed: true,
+		UserID:  "user_alice",
 	}})
 
-	msg := &pb.Message{User: &pb.User{Id: "U07ABC"}}
+	msg := &pb.Message{User: &pb.User{Id: "U07ABCDEF"}}
 	if err := a.dispatch(t.Context(), msg, "T07XYZ"); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
@@ -706,11 +704,7 @@ func TestDispatch_LinkedSlack_RewritesToWorkOSUserID(t *testing.T) {
 // team_id separately for the slack:// deep link.
 func TestDispatch_UnlinkedSlack_KeepsRawSlackID(t *testing.T) {
 	a, handler := newTestAdapter()
-	a.SetAuthorizer(&stubAuthorizer{result: authz.Result{
-		Allowed:     true,
-		SlackUserID: "U07ABCDEF",
-		SlackTeamID: "T07XYZ",
-	}})
+	a.SetAuthorizer(&stubAuthorizer{result: authz.Result{Allowed: true}})
 
 	msg := &pb.Message{User: &pb.User{Id: "U07ABCDEF"}}
 	if err := a.dispatch(t.Context(), msg, "T07XYZ"); err != nil {
@@ -746,47 +740,44 @@ func TestDispatch_DegradedMode_FallsBackToRawSlackID(t *testing.T) {
 
 // TestCanonicalUserID pins both branches of the helper directly. Wire
 // format matters: the bare slack id is the same shape every historical
-// Langfuse trace already carries, so picking a different format here would
-// re-introduce the dual-key duplication problem in Insights (one row per
-// historical bare key + a second row per new namespaced key for the same
-// human). astro-server's directory join attaches team_id to bare ids via
-// slack_identity_mappings — no team needs to live in user_id itself.
+// Langfuse trace already carries, so picking a different format here
+// would re-introduce the dual-key duplication problem in Insights (one
+// row per historical bare key + a second row per any other key for the
+// same human). astro-server's directory join attaches team_id to bare
+// ids via slack_identity_mappings — no team needs to live in user_id
+// itself.
 func TestCanonicalUserID(t *testing.T) {
 	cases := []struct {
 		name        string
 		result      authz.Result
-		teamID      string
 		slackUserID string
 		want        string
 	}{
 		{
 			name:        "linked user → WorkOS id wins",
-			result:      authz.Result{Allowed: true, UserID: "user_alice", SlackUserID: "U07ABCDEF", SlackTeamID: "T07XYZ"},
-			teamID:      "T07XYZ",
+			result:      authz.Result{Allowed: true, UserID: "user_alice"},
 			slackUserID: "U07ABCDEF",
 			want:        "user_alice",
 		},
 		{
 			name:        "unlinked user → raw slack id (matches historical Langfuse format)",
-			result:      authz.Result{Allowed: true, SlackUserID: "U07ABCDEF", SlackTeamID: "T07XYZ"},
-			teamID:      "T07XYZ",
+			result:      authz.Result{Allowed: true},
 			slackUserID: "U07ABCDEF",
 			want:        "U07ABCDEF",
 		},
 		{
 			name:        "degraded mode (empty result) → still raw slack id",
 			result:      authz.Result{Allowed: true},
-			teamID:      "T07XYZ",
 			slackUserID: "U07ABCDEF",
 			want:        "U07ABCDEF",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := canonicalUserID(tc.result, tc.teamID, tc.slackUserID)
+			got := canonicalUserID(tc.result, tc.slackUserID)
 			if got != tc.want {
-				t.Errorf("canonicalUserID(%+v, %q, %q) = %q, want %q",
-					tc.result, tc.teamID, tc.slackUserID, got, tc.want)
+				t.Errorf("canonicalUserID(%+v, %q) = %q, want %q",
+					tc.result, tc.slackUserID, got, tc.want)
 			}
 		})
 	}

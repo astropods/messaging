@@ -53,23 +53,42 @@ func TestCache_CachesDeny(t *testing.T) {
 }
 
 // The full Result must round-trip through the cache so callers can recover
-// the resolved WorkOS user_id and echoed slack identity on hits without
-// re-querying the server.
+// the resolved WorkOS user_id on hits without re-querying the server.
 func TestCache_PreservesResult(t *testing.T) {
 	c := newResultCache(60 * time.Second)
-	k := cacheKey{identityType: "slack", identityID: "U01", adapter: "slack", identityScope: "T1"}
-	c.put(k, Result{
-		Allowed:     true,
-		UserID:      "user_workos_42",
-		SlackUserID: "U01",
-		SlackTeamID: "T1",
-	})
+	k := cacheKey{identityType: "slack", identityID: "U01ABCDEF", adapter: "slack", identityScope: "T1"}
+	c.put(k, Result{Allowed: true, UserID: "user_workos_42"})
 	got, ok := c.get(k)
 	if !ok || !got.Allowed {
 		t.Fatalf("expected allowed hit; got ok=%v %+v", ok, got)
 	}
-	if got.UserID != "user_workos_42" || got.SlackUserID != "U01" || got.SlackTeamID != "T1" {
-		t.Errorf("identity fields not preserved through cache: %+v", got)
+	if got.UserID != "user_workos_42" {
+		t.Errorf("UserID not preserved through cache: %+v", got)
+	}
+}
+
+// putWithTTL lets callers override the default TTL for a single entry.
+// Used by the degraded-mode fallback to cache the synthesized "allow via
+// anyone-adapters claim" Result for a shorter window than normal so the
+// outage's stale attribution clears quickly once the server recovers.
+func TestCache_PutWithTTL_HonorsCallerOverride(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	c := newResultCache(60 * time.Second)
+	c.now = func() time.Time { return now }
+	k := cacheKey{identityType: "slack", identityID: "U01ABCDEF", adapter: "slack", identityScope: "T1"}
+
+	c.putWithTTL(k, Result{Allowed: true}, 10*time.Second)
+
+	// Inside the override window: hit.
+	now = now.Add(9 * time.Second)
+	if _, ok := c.get(k); !ok {
+		t.Error("expected hit at t+9s (within 10s override)")
+	}
+
+	// Past the override but well inside the default 60s: must miss.
+	now = now.Add(2 * time.Second) // t+11s
+	if _, ok := c.get(k); ok {
+		t.Error("expected miss at t+11s — putWithTTL must not fall back to default TTL")
 	}
 }
 

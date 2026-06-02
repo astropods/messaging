@@ -28,9 +28,9 @@ type cacheEntry struct {
 // goroutine; the working set is bounded by unique (identity, adapter) pairs
 // per deployment, which is small in practice.
 //
-// The cached value carries the resolved WorkOS user_id and echoed slack
-// identity so the slack adapter can attribute traces without re-calling
-// the server for every message in a chatty thread.
+// The cached value carries the resolved WorkOS user_id so the slack adapter
+// can attribute traces without re-calling the server for every message in
+// a chatty thread.
 type resultCache struct {
 	mu  sync.Mutex
 	ttl time.Duration
@@ -62,7 +62,18 @@ func (c *resultCache) get(k cacheKey) (Result, bool) {
 }
 
 func (c *resultCache) put(k cacheKey, result Result) {
+	c.putWithTTL(k, result, c.ttl)
+}
+
+// putWithTTL caches with a caller-specified TTL. Used by the degraded-mode
+// fallback to cache the synthesized Result for a shorter window than the
+// default — long enough to absorb a burst of messages without each one
+// paying the full request timeout, short enough that the server's
+// recovery is reflected quickly (otherwise linked users would keep
+// attributing to their raw slack id instead of their WorkOS id for the
+// full default TTL after the outage clears).
+func (c *resultCache) putWithTTL(k cacheKey, result Result, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.m[k] = cacheEntry{result: result, expiresAt: c.now().Add(c.ttl)}
+	c.m[k] = cacheEntry{result: result, expiresAt: c.now().Add(ttl)}
 }

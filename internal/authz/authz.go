@@ -27,23 +27,26 @@ const DefaultCacheTTL = 60 * time.Second
 // fail-closed (deny) so a slow server can't accidentally widen access.
 const DefaultRequestTimeout = 5 * time.Second
 
+// DegradedCacheTTL bounds how long the synthesized "allow via anyone-
+// adapters claim" Result lives in the cache during a server outage.
+// Short enough that recovery is reflected promptly (otherwise linked
+// users would attribute to their raw slack id for the full DefaultCacheTTL
+// after the outage clears); long enough that a chatty workspace doesn't
+// re-pay the DefaultRequestTimeout on every message.
+const DegradedCacheTTL = 10 * time.Second
+
 // Result is the outcome of an authorization check.
 //
 // UserID carries the canonical WorkOS user_id when the server could resolve
 // one — echoed back for identity_type=user, or looked up via
 // slack_identity_mappings for identity_type=slack — and is empty otherwise
-// (anyone-bypass, unmapped slack user, or any deny path).
-//
-// SlackUserID / SlackTeamID echo back the input identityID / identityScope
-// when identity_type=slack and the request was allowed. The slack adapter
-// uses these to build a namespaced "slack:<team>:<user>" trace user_id for
-// unmapped slack users so they remain distinguishable from anonymous traffic
-// on Insights.
+// (anyone-bypass, unmapped slack user, or any deny path). For unmapped
+// slack users the slack adapter falls back to the raw slack id directly
+// from the incoming event, so we don't carry the echoed slack identity
+// here even though the server response includes it.
 type Result struct {
-	Allowed     bool
-	UserID      string
-	SlackUserID string
-	SlackTeamID string
+	Allowed bool
+	UserID  string
 }
 
 // Authorizer is the entry point used by adapters to check whether a request
@@ -91,7 +94,7 @@ type Config struct {
 // fallback only — used when the server is unreachable so an outage doesn't
 // silently take down Slack delivery for open-grant deployments. Even then
 // the resolved identity stays empty, so attribution gracefully drops to the
-// namespaced slack ID at the adapter layer.
+// raw slack ID at the adapter layer.
 type realAuthorizer struct {
 	deploymentID   string
 	anyoneAdapters []string
@@ -169,12 +172,19 @@ func (a *realAuthorizer) Authorize(ctx context.Context, identityType, identityID
 		// Degraded-mode fallback: if the token claim says this adapter has
 		// an `anyone` grant, let traffic through even when the server is
 		// unreachable so a server outage doesn't take down Slack delivery.
-		// Identity stays empty — the slack adapter falls back to the
-		// namespaced slack ID for trace attribution.
+		// Identity stays empty — the slack adapter falls back to the raw
+		// slack ID for trace attribution. Cached at a shortened TTL
+		// (DegradedCacheTTL) so a chatty workspace doesn't pay the
+		// per-message request timeout while the outage lasts, but the
+		// cache window stays short so server recovery is reflected
+		// promptly (linked users go back to attributing to their WorkOS
+		// id within ~10s of the server coming back).
 		if slices.Contains(a.anyoneAdapters, adapter) {
 			a.logger.Warn("authorize call failed; serving via anyone-adapters token claim",
 				"identity_type", identityType, "adapter", adapter, "error", err)
-			return Result{Allowed: true}, nil
+			degraded := Result{Allowed: true}
+			a.cache.putWithTTL(key, degraded, DegradedCacheTTL)
+			return degraded, nil
 		}
 		// Otherwise fail closed; don't cache so we retry on the next request.
 		a.logger.Warn("authorize call failed",
@@ -205,18 +215,16 @@ func AllowAll() Authorizer { return allowAll{} }
 
 type allowAll struct{}
 
-func (allowAll) Authorize(_ context.Context, identityType, identityID, _, identityScope string) (Result, error) {
-	// Echo identity back so dev mode behaves like the server's identity path
-	// (the input is already the WorkOS user_id for web; for slack the adapter
-	// will namespace it via the echoed slack fields since there's no real
-	// mapping in dev).
-	r := Result{Allowed: true, UserID: identityID}
+func (allowAll) Authorize(_ context.Context, identityType, identityID, _, _ string) (Result, error) {
+	// Echo identity back so dev mode behaves like the server's identity
+	// path for user/web traffic. For slack we leave UserID empty (there's
+	// no slack_identity_mappings table in dev) — the slack adapter then
+	// falls back to the raw slack id from the incoming event, matching
+	// what canonicalUserID does against a real server for unmapped users.
 	if identityType == IdentityTypeSlack {
-		r.UserID = ""
-		r.SlackUserID = identityID
-		r.SlackTeamID = identityScope
+		return Result{Allowed: true}, nil
 	}
-	return r, nil
+	return Result{Allowed: true, UserID: identityID}, nil
 }
 
 // DenyAll returns an Authorizer that denies every request. Used as the
