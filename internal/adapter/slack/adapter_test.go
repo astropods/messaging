@@ -618,73 +618,7 @@ type denyAuthorizer struct{ calls int }
 
 func (d *denyAuthorizer) Authorize(_ context.Context, _, _, _, _ string) (authz.Result, error) {
 	d.calls++
-	return authz.Result{}, nil
-}
-
-// allowAuthorizer always allows and returns the configured WorkOS user_id.
-// Mirrors the server's response shape for a slack identity with a linked
-// WorkOS user, so we can pin down the dispatch-side rewrite behavior.
-type allowAuthorizer struct {
-	userID string
-	calls  int
-}
-
-func (a *allowAuthorizer) Authorize(_ context.Context, _, _, _, _ string) (authz.Result, error) {
-	a.calls++
-	return authz.Result{Allowed: true, UserID: a.userID}, nil
-}
-
-// When the server returns a resolved WorkOS user_id, dispatch rewrites
-// msg.User.Id to that canonical ID and preserves the raw slack id on
-// platform_data["slack_user_id"]. Downstream agents then see the same
-// identity shape as web traffic.
-func TestDispatch_RewritesUserIDToWorkOSUser(t *testing.T) {
-	a, handler := newTestAdapter()
-	a.SetAuthorizer(&allowAuthorizer{userID: "user_workos_42"})
-
-	msg := &pb.Message{
-		User:            &pb.User{Id: "U123"},
-		PlatformContext: &pb.PlatformContext{ChannelId: "C1"},
-	}
-
-	if err := a.dispatch(t.Context(), msg, "T1"); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-	if msg.User.Id != "user_workos_42" {
-		t.Errorf("msg.User.Id: got %q, want user_workos_42", msg.User.Id)
-	}
-	if got := msg.PlatformContext.PlatformData["slack_user_id"]; got != "U123" {
-		t.Errorf("platform_data[slack_user_id]: got %q, want U123", got)
-	}
-	if handler.count() != 1 {
-		t.Errorf("msgHandler should be invoked once; got %d", handler.count())
-	}
-}
-
-// When the server doesn't return a resolved user_id (unmapped slack user
-// allowed via org/anyone grant), msg.User.Id stays as the raw slack id —
-// that's the only identity we have. No platform_data shim is added.
-func TestDispatch_NoResolvedUserIDLeavesMsgUntouched(t *testing.T) {
-	a, handler := newTestAdapter()
-	a.SetAuthorizer(&allowAuthorizer{userID: ""})
-
-	msg := &pb.Message{
-		User:            &pb.User{Id: "U123"},
-		PlatformContext: &pb.PlatformContext{ChannelId: "C1"},
-	}
-
-	if err := a.dispatch(t.Context(), msg, "T1"); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-	if msg.User.Id != "U123" {
-		t.Errorf("msg.User.Id should not change when no resolved user_id; got %q", msg.User.Id)
-	}
-	if _, present := msg.PlatformContext.PlatformData["slack_user_id"]; present {
-		t.Error("platform_data[slack_user_id] should not be set when no rewrite happens")
-	}
-	if handler.count() != 1 {
-		t.Errorf("msgHandler should be invoked once; got %d", handler.count())
-	}
+	return authz.Result{Allowed: false}, nil
 }
 
 func TestDispatch_AuthzDenied_ReturnsDeniedSentinel(t *testing.T) {
@@ -704,7 +638,8 @@ func TestDispatch_AuthzDenied_ReturnsDeniedSentinel(t *testing.T) {
 }
 
 // Observe channels are passive watch channels — the user didn't address the
-// bot, so dispatch must skip the per-user authz check.
+// bot, so dispatch must skip the per-user authz check (and the identity
+// rewrite, which would misattribute the trace).
 func TestDispatch_ObserveChannel_SkipsAuthz(t *testing.T) {
 	a, handler := newTestAdapter()
 	a.observeChannels = map[string]bool{"C123456": true}
@@ -724,6 +659,127 @@ func TestDispatch_ObserveChannel_SkipsAuthz(t *testing.T) {
 	}
 	if handler.count() != 1 {
 		t.Errorf("msgHandler should be invoked for observed message; got %d", handler.count())
+	}
+	if msg.User.Id != "U123" {
+		t.Errorf("msg.User.Id should not be rewritten for observed message; got %q", msg.User.Id)
+	}
+}
+
+// stubAuthorizer returns a canned Result so we can assert that dispatch
+// rewrites pb.Message.User.Id based on the resolved identity. This is the
+// core of the Slack→WorkOS attribution round-trip.
+type stubAuthorizer struct {
+	result authz.Result
+}
+
+func (s *stubAuthorizer) Authorize(_ context.Context, _, _, _, _ string) (authz.Result, error) {
+	return s.result, nil
+}
+
+// Linked Slack user → dispatch rewrites pb.Message.User.Id to the canonical
+// WorkOS user_id so Langfuse traces carry the user's Astro identity.
+func TestDispatch_LinkedSlack_RewritesToWorkOSUserID(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.SetAuthorizer(&stubAuthorizer{result: authz.Result{
+		Allowed: true,
+		UserID:  "user_alice",
+	}})
+
+	msg := &pb.Message{User: &pb.User{Id: "U07ABCDEF"}}
+	if err := a.dispatch(t.Context(), msg, "T07XYZ"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if handler.count() != 1 {
+		t.Fatalf("expected msgHandler called once, got %d", handler.count())
+	}
+	if msg.User.Id != "user_alice" {
+		t.Errorf("expected canonical user_id rewrite, got %q", msg.User.Id)
+	}
+}
+
+// Unlinked Slack user → dispatch keeps the raw slack id on msg.User.Id.
+// Same format as every historical Langfuse trace, so the Insights "by
+// people" view aggregates pre-PR and post-PR traffic from the same human
+// into one row (no duplicates). astro-server's directory join attaches
+// team_id separately for the slack:// deep link.
+func TestDispatch_UnlinkedSlack_KeepsRawSlackID(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.SetAuthorizer(&stubAuthorizer{result: authz.Result{Allowed: true}})
+
+	msg := &pb.Message{User: &pb.User{Id: "U07ABCDEF"}}
+	if err := a.dispatch(t.Context(), msg, "T07XYZ"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if handler.count() != 1 {
+		t.Fatalf("expected msgHandler called once, got %d", handler.count())
+	}
+	if want := "U07ABCDEF"; msg.User.Id != want {
+		t.Errorf("expected raw slack id %q, got %q", want, msg.User.Id)
+	}
+}
+
+// Degraded-mode fallback (server unreachable, anyone-adapters claim): the
+// Authorizer returns Allowed=true with empty identity fields. The adapter
+// keeps the raw slack id — same as the normal unlinked path — so the trace
+// still attributes to that user.
+func TestDispatch_DegradedMode_FallsBackToRawSlackID(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.SetAuthorizer(&stubAuthorizer{result: authz.Result{Allowed: true}})
+
+	msg := &pb.Message{User: &pb.User{Id: "U07ABCDEF"}}
+	if err := a.dispatch(t.Context(), msg, "T07XYZ"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if handler.count() != 1 {
+		t.Fatalf("expected msgHandler called once, got %d", handler.count())
+	}
+	if want := "U07ABCDEF"; msg.User.Id != want {
+		t.Errorf("expected raw slack id in degraded mode %q, got %q", want, msg.User.Id)
+	}
+}
+
+// TestCanonicalUserID pins both branches of the helper directly. Wire
+// format matters: the bare slack id is the same shape every historical
+// Langfuse trace already carries, so picking a different format here
+// would re-introduce the dual-key duplication problem in Insights (one
+// row per historical bare key + a second row per any other key for the
+// same human). astro-server's directory join attaches team_id to bare
+// ids via slack_identity_mappings — no team needs to live in user_id
+// itself.
+func TestCanonicalUserID(t *testing.T) {
+	cases := []struct {
+		name        string
+		result      authz.Result
+		slackUserID string
+		want        string
+	}{
+		{
+			name:        "linked user → WorkOS id wins",
+			result:      authz.Result{Allowed: true, UserID: "user_alice"},
+			slackUserID: "U07ABCDEF",
+			want:        "user_alice",
+		},
+		{
+			name:        "unlinked user → raw slack id (matches historical Langfuse format)",
+			result:      authz.Result{Allowed: true},
+			slackUserID: "U07ABCDEF",
+			want:        "U07ABCDEF",
+		},
+		{
+			name:        "degraded mode (empty result) → still raw slack id",
+			result:      authz.Result{Allowed: true},
+			slackUserID: "U07ABCDEF",
+			want:        "U07ABCDEF",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := canonicalUserID(tc.result, tc.slackUserID)
+			if got != tc.want {
+				t.Errorf("canonicalUserID(%+v, %q) = %q, want %q",
+					tc.result, tc.slackUserID, got, tc.want)
+			}
+		})
 	}
 }
 

@@ -31,7 +31,7 @@ type denyAuthorizer struct{ calls int }
 
 func (d *denyAuthorizer) Authorize(_ context.Context, _, _, _, _ string) (authz.Result, error) {
 	d.calls++
-	return authz.Result{}, nil
+	return authz.Result{Allowed: false}, nil
 }
 
 var _ authz.Authorizer = (*denyAuthorizer)(nil)

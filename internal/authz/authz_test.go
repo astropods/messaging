@@ -64,26 +64,27 @@ func newTestAuthorizer(t *testing.T, anyoneAdapters []string, fn func(*http.Requ
 	return a, stub
 }
 
-// Adapter listed in anyone_adapters → no server call, allowed immediately,
-// no identity required.
-func TestAuthorize_AnyoneFastPath_NoServerCall(t *testing.T) {
-	a, stub := newTestAuthorizer(t, []string{"web"}, func(r *http.Request) (*http.Response, error) {
-		t.Errorf("unexpected server call: %s", r.URL)
-		return nil, errors.New("should not call")
+// Every request now hits the server even when the token claims an anyone
+// adapter — the resolved identity has to flow into the response so
+// downstream traces can attribute the request. The token claim is reserved
+// for degraded-mode fallback when the server is unreachable.
+func TestAuthorize_AlwaysCallsServer(t *testing.T) {
+	a, stub := newTestAuthorizer(t, []string{"slack"}, func(r *http.Request) (*http.Response, error) {
+		return okRespWithUser(true, "user_alice"), nil
 	})
 
-	res, err := a.Authorize(context.Background(), "", "", "web", "")
+	result, err := a.Authorize(context.Background(), "slack", "U01ABCDEF", "slack", "T1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !res.Allowed {
-		t.Error("expected allowed=true via anyone fast path")
+	if !result.Allowed {
+		t.Fatal("expected allowed=true")
 	}
-	if res.UserID != "" {
-		t.Errorf("anyone-bypass must not resolve a user_id, got %q", res.UserID)
+	if result.UserID != "user_alice" {
+		t.Errorf("expected resolved WorkOS user_id in result, got %+v", result)
 	}
-	if stub.callCount.Load() != 0 {
-		t.Errorf("expected 0 HTTP calls, got %d", stub.callCount.Load())
+	if stub.callCount.Load() != 1 {
+		t.Errorf("expected 1 HTTP call even though anyone_adapters lists slack, got %d", stub.callCount.Load())
 	}
 }
 
@@ -120,6 +121,28 @@ func TestAuthorize_ServerCall_AndCache(t *testing.T) {
 	}
 	if got := stub.callCount.Load(); got != 1 {
 		t.Errorf("expected exactly 1 HTTP call (cache should hit on the rest), got %d", got)
+	}
+}
+
+// Cached results carry the resolved WorkOS user_id, not just the bool.
+// Subsequent Authorize calls for the same identity return the cached
+// Result so we don't lose attribution on a chatty thread.
+func TestAuthorize_CacheCarriesIdentity(t *testing.T) {
+	a, stub := newTestAuthorizer(t, nil, func(r *http.Request) (*http.Response, error) {
+		return okRespWithUser(true, "user_alice"), nil
+	})
+
+	for i := 0; i < 3; i++ {
+		result, err := a.Authorize(context.Background(), "slack", "U01ABCDEF", "slack", "T1")
+		if err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
+		if result.UserID != "user_alice" {
+			t.Errorf("call %d: expected user_id from cache, got %q", i, result.UserID)
+		}
+	}
+	if got := stub.callCount.Load(); got != 1 {
+		t.Errorf("expected 1 HTTP call (rest from cache), got %d", got)
 	}
 }
 
@@ -186,6 +209,40 @@ func TestAuthorize_TransportError_FailClosedNotCached(t *testing.T) {
 	}
 }
 
+// Transport error + anyone-adapters claim → degraded-mode fallback: allow
+// the request through (no resolved identity) so a server outage doesn't
+// silently take down Slack delivery for open-grant deployments. The
+// synthesized Result is cached at a shortened TTL so a chatty workspace
+// doesn't re-pay the DefaultRequestTimeout on every message — the second
+// call here hits the cache and the stubbed HTTP transport is never
+// invoked a second time.
+func TestAuthorize_TransportError_AnyoneAdapterFallback(t *testing.T) {
+	a, stub := newTestAuthorizer(t, []string{"slack"}, func(r *http.Request) (*http.Response, error) {
+		return nil, errors.New("connection refused")
+	})
+
+	result, err := a.Authorize(context.Background(), "slack", "U01ABCDEF", "slack", "T1")
+	if err != nil {
+		t.Fatalf("expected nil error via degraded-mode fallback, got %v", err)
+	}
+	if !result.Allowed {
+		t.Error("expected allowed=true via anyone-adapters fallback")
+	}
+	// Identity stays empty in the fallback — the slack adapter then falls
+	// back to the raw slack ID from the incoming event when UserID is empty.
+	if result.UserID != "" {
+		t.Errorf("expected empty UserID in degraded-mode fallback, got %q", result.UserID)
+	}
+
+	// Second call for the same key must hit the cache, not the transport.
+	if _, err := a.Authorize(context.Background(), "slack", "U01ABCDEF", "slack", "T1"); err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if got := stub.callCount.Load(); got != 1 {
+		t.Errorf("expected exactly 1 HTTP call; degraded result must be cached, got %d", got)
+	}
+}
+
 // 5xx from the server is treated like a transport error: error returned,
 // fail closed, no cache.
 func TestAuthorize_ServerError_FailClosed(t *testing.T) {
@@ -243,6 +300,20 @@ func TestAllowAll_DenyAll(t *testing.T) {
 	if res.UserID != "alice" {
 		t.Errorf("AllowAll should echo identityID as userID, got %q", res.UserID)
 	}
+
+	// Dev-mode slack call: AllowAll leaves UserID empty (there's no
+	// slack_identity_mappings table in dev). The slack adapter's
+	// canonicalUserID() then falls back to the raw slack ID from the
+	// incoming event — the same behavior as against a real server for
+	// an unlinked Slack user.
+	res, _ = AllowAll().Authorize(context.Background(), "slack", "U01ABCDEF", "slack", "T1")
+	if !res.Allowed {
+		t.Error("AllowAll should allow slack identity")
+	}
+	if res.UserID != "" {
+		t.Errorf("AllowAll on slack must leave UserID empty (no mapping in dev), got %q", res.UserID)
+	}
+
 	res, _ = DenyAll().Authorize(context.Background(), "", "", "web", "")
 	if res.Allowed {
 		t.Error("DenyAll should deny")
@@ -263,15 +334,17 @@ func TestNewAuthorizer_RejectsMissingFields(t *testing.T) {
 	}
 }
 
+// NewAuthorizer wires a working real client end-to-end. The token's
+// anyone_adapters claim is no longer a fast path — but it still parses and
+// is held for degraded-mode fallback. Construction is the only thing this
+// test exercises; behaviour is covered above with stubbed transports.
 func TestNewAuthorizer_HappyPath(t *testing.T) {
 	tok := jwt(`{"sub":"dep-9","iss":"https://astropods.com","anyone_adapters":["web"]}`)
 	a, err := NewAuthorizer(Config{IdentityToken: tok})
 	if err != nil {
 		t.Fatalf("NewAuthorizer: %v", err)
 	}
-	// anyone_adapters=["web"] → web allowed without server call
-	res, err := a.Authorize(context.Background(), "", "", "web", "")
-	if err != nil || !res.Allowed {
-		t.Errorf("expected allow on web; got %+v err=%v", res, err)
+	if a == nil {
+		t.Fatal("expected non-nil Authorizer")
 	}
 }
