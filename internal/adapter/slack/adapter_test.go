@@ -738,6 +738,52 @@ func TestDispatch_DegradedMode_FallsBackToRawSlackID(t *testing.T) {
 	}
 }
 
+// Linked Slack user → dispatch preserves the raw Slack user id on
+// PlatformContext.UserId even though Message.user.id is rewritten to the
+// Astro user ID. Consumers that need to call back into Slack (mentions,
+// DMs, lookups) rely on this field.
+func TestDispatch_LinkedSlack_PreservesPlatformContextUserID(t *testing.T) {
+	a, _ := newTestAdapter()
+	a.SetAuthorizer(&stubAuthorizer{result: authz.Result{
+		Allowed: true,
+		UserID:  "user_alice",
+	}})
+
+	msg := &pb.Message{
+		User:            &pb.User{Id: "U07ABCDEF"},
+		PlatformContext: &pb.PlatformContext{ChannelId: "C123"},
+	}
+	if err := a.dispatch(t.Context(), msg, "T07XYZ"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if msg.User.Id != "user_alice" {
+		t.Errorf("expected canonical user_id rewrite, got %q", msg.User.Id)
+	}
+	if got, want := msg.PlatformContext.UserId, "U07ABCDEF"; got != want {
+		t.Errorf("PlatformContext.PlatformUserId: want %q, got %q", want, got)
+	}
+}
+
+// Observe-channel messages skip authz, but PlatformContext.UserId is still
+// set so downstream consumers have a uniform place to read the raw Slack
+// user id across all ingress paths.
+func TestDispatch_ObserveChannel_PreservesPlatformContextUserID(t *testing.T) {
+	a, _ := newTestAdapter()
+	a.observeChannels = map[string]bool{"C123456": true}
+	a.SetAuthorizer(&denyAuthorizer{})
+
+	msg := &pb.Message{
+		User:            &pb.User{Id: "U07ABCDEF"},
+		PlatformContext: &pb.PlatformContext{ChannelId: "C123456"},
+	}
+	if err := a.dispatch(t.Context(), msg, ""); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if got, want := msg.PlatformContext.UserId, "U07ABCDEF"; got != want {
+		t.Errorf("PlatformContext.PlatformUserId: want %q, got %q", want, got)
+	}
+}
+
 // TestCanonicalUserID pins both branches of the helper directly. Wire
 // format matters: the bare slack id is the same shape every historical
 // Langfuse trace already carries, so picking a different format here
