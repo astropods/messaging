@@ -72,9 +72,9 @@ export interface PlatformContext {
    * Raw platform-native user ID of the sender as it appears in the source
    * event (Slack `U…`, Discord snowflake, Teams AAD oid). Adapters may
    * rewrite `Message.user.id` to a resolved cross-platform identity (e.g.
-   * WorkOS user_id for linked Slack users) for trace attribution; this field
-   * preserves the original so consumers that need to call back into the
-   * source platform (mentions, DMs, lookups) can still find the user.
+   * the Astro user ID for linked Slack users) for trace attribution; this
+   * field preserves the original so consumers that need to call back into
+   * the source platform (mentions, DMs, lookups) can still find the user.
    */
   userId?: string;
 }

@@ -740,7 +740,7 @@ func TestDispatch_DegradedMode_FallsBackToRawSlackID(t *testing.T) {
 
 // Linked Slack user → dispatch preserves the raw Slack user id on
 // PlatformContext.UserId even though Message.user.id is rewritten to the
-// WorkOS identity. Consumers that need to call back into Slack (mentions,
+// Astro user ID. Consumers that need to call back into Slack (mentions,
 // DMs, lookups) rely on this field.
 func TestDispatch_LinkedSlack_PreservesPlatformContextUserID(t *testing.T) {
 	a, _ := newTestAdapter()
