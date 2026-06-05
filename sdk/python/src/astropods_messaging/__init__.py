@@ -4,7 +4,7 @@ from .astro.messaging.v1.service_pb2 import (
     HealthCheckRequest,
     HealthCheckResponse,
 )
-from .astro.messaging.v1.message_pb2 import Message, User, Attachment
+from .astro.messaging.v1.message_pb2 import Message, PlatformContext, User, Attachment
 from .astro.messaging.v1.response_pb2 import (
     AgentResponse,
     StatusUpdate,
@@ -33,6 +33,7 @@ __all__ = [
     "HealthCheckRequest",
     "HealthCheckResponse",
     "Message",
+    "PlatformContext",
     "User",
     "Attachment",
     "AgentResponse",
