@@ -291,6 +291,38 @@ func TestAuthorize_IdentityScopeSentAndScopedInCache(t *testing.T) {
 	}
 }
 
+func TestAuthorize_SendsSlackProfileMetadata(t *testing.T) {
+	a, _ := newTestAuthorizer(t, nil, func(r *http.Request) (*http.Response, error) {
+		q := r.URL.Query()
+		if got := q.Get("slack_display_name"); got != "Jesse Morgan" {
+			t.Errorf("slack_display_name: got %q", got)
+		}
+		if got := q.Get("slack_username"); got != "jesse" {
+			t.Errorf("slack_username: got %q", got)
+		}
+		if got := q.Get("slack_avatar_url"); got != "https://avatars.slack-edge.com/jesse.png" {
+			t.Errorf("slack_avatar_url: got %q", got)
+		}
+		if got := q.Get("slack_is_bot"); got != "false" {
+			t.Errorf("slack_is_bot: got %q", got)
+		}
+		if got := q.Get("slack_deleted"); got != "true" {
+			t.Errorf("slack_deleted: got %q", got)
+		}
+		return okResp(true), nil
+	})
+
+	if _, err := a.Authorize(context.Background(), "slack", "U01", "slack", "T1", SlackUserProfile{
+		Present:     true,
+		DisplayName: "Jesse Morgan",
+		Username:    "jesse",
+		AvatarURL:   "https://avatars.slack-edge.com/jesse.png",
+		Deleted:     true,
+	}); err != nil {
+		t.Fatalf("authorize with profile metadata: %v", err)
+	}
+}
+
 // AllowAll / DenyAll do what they say.
 func TestAllowAll_DenyAll(t *testing.T) {
 	res, _ := AllowAll().Authorize(context.Background(), "user", "alice", "web", "")

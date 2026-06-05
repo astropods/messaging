@@ -49,6 +49,19 @@ type Result struct {
 	UserID  string
 }
 
+// SlackUserProfile is optional metadata the Slack adapter can attach to an
+// authorize request after resolving users.info with the workspace bot token.
+// It is not part of the authorization decision; astro-server stores it in the
+// observed Slack directory for Insights display.
+type SlackUserProfile struct {
+	Present     bool
+	DisplayName string
+	Username    string
+	AvatarURL   string
+	IsBot       bool
+	Deleted     bool
+}
+
 // Authorizer is the entry point used by adapters to check whether a request
 // should be allowed.
 type Authorizer interface {
@@ -70,7 +83,7 @@ type Authorizer interface {
 	// behavior (today's owning-account candidate fallback). Callers should
 	// prefer Result.UserID when forwarding identity downstream so adapters
 	// converge on the canonical WorkOS user_id.
-	Authorize(ctx context.Context, identityType, identityID, adapter, identityScope string) (Result, error)
+	Authorize(ctx context.Context, identityType, identityID, adapter, identityScope string, slackProfile ...SlackUserProfile) (Result, error)
 }
 
 // Config configures a real Authorizer.
@@ -156,7 +169,7 @@ func NewAuthorizer(cfg Config) (Authorizer, error) {
 // degraded-mode fallback below so an unreachable server doesn't take down
 // open-grant deployments. Hitting the server on every request is what lets
 // the resolved WorkOS user_id flow back for Slack trace attribution.
-func (a *realAuthorizer) Authorize(ctx context.Context, identityType, identityID, adapter, identityScope string) (Result, error) {
+func (a *realAuthorizer) Authorize(ctx context.Context, identityType, identityID, adapter, identityScope string, slackProfile ...SlackUserProfile) (Result, error) {
 	key := cacheKey{
 		identityType:  identityType,
 		identityID:    identityID,
@@ -167,7 +180,11 @@ func (a *realAuthorizer) Authorize(ctx context.Context, identityType, identityID
 		return cached, nil
 	}
 
-	result, err := a.client.authorize(ctx, identityType, identityID, adapter, identityScope)
+	var profile *SlackUserProfile
+	if len(slackProfile) > 0 && slackProfile[0].Present {
+		profile = &slackProfile[0]
+	}
+	result, err := a.client.authorize(ctx, identityType, identityID, adapter, identityScope, profile)
 	if err != nil {
 		// Degraded-mode fallback: if the token claim says this adapter has
 		// an `anyone` grant, let traffic through even when the server is
@@ -215,7 +232,7 @@ func AllowAll() Authorizer { return allowAll{} }
 
 type allowAll struct{}
 
-func (allowAll) Authorize(_ context.Context, identityType, identityID, _, _ string) (Result, error) {
+func (allowAll) Authorize(_ context.Context, identityType, identityID, _, _ string, _ ...SlackUserProfile) (Result, error) {
 	// Echo identity back so dev mode behaves like the server's identity
 	// path for user/web traffic. For slack we leave UserID empty (there's
 	// no slack_identity_mappings table in dev) — the slack adapter then
@@ -234,6 +251,6 @@ func DenyAll() Authorizer { return denyAll{} }
 
 type denyAll struct{}
 
-func (denyAll) Authorize(_ context.Context, _, _, _, _ string) (Result, error) {
+func (denyAll) Authorize(_ context.Context, _, _, _, _ string, _ ...SlackUserProfile) (Result, error) {
 	return Result{}, nil
 }

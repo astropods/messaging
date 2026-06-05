@@ -386,7 +386,7 @@ Uses PyPA trusted publishing — no token storage required.
 
 1. Create an app at https://api.slack.com/apps
 2. Enable **Socket Mode** and generate an app-level token (`connections:write` scope)
-3. Add bot token scopes: `chat:write`, `channels:history`, `groups:history`, `im:history`, `app_mentions:read`
+3. Add bot token scopes: `chat:write`, `channels:history`, `groups:history`, `im:history`, `app_mentions:read`, `users:read`
 4. Subscribe to events: `message.channels`, `message.groups`, `message.im`, `app_mention`
 5. Install to workspace
 

@@ -58,7 +58,7 @@ func newAuthorizeClient(serverURL, token string, timeout time.Duration) *authori
 // identityScope is sent as identity_scope when non-empty; the server uses
 // it to disambiguate identity_id values that aren't globally unique
 // (slack user_id needs team_id). Empty scope is the unscoped behavior.
-func (c *authorizeClient) authorize(ctx context.Context, identityType, identityID, adapter, identityScope string) (Result, error) {
+func (c *authorizeClient) authorize(ctx context.Context, identityType, identityID, adapter, identityScope string, slackProfile *SlackUserProfile) (Result, error) {
 	if c.serverURL == "" {
 		return Result{}, errors.New("authz: server URL not configured")
 	}
@@ -79,6 +79,13 @@ func (c *authorizeClient) authorize(ctx context.Context, identityType, identityI
 	}
 	if identityScope != "" {
 		q.Set("identity_scope", identityScope)
+	}
+	if slackProfile != nil && slackProfile.Present {
+		q.Set("slack_display_name", slackProfile.DisplayName)
+		q.Set("slack_username", slackProfile.Username)
+		q.Set("slack_avatar_url", slackProfile.AvatarURL)
+		q.Set("slack_is_bot", fmt.Sprint(slackProfile.IsBot))
+		q.Set("slack_deleted", fmt.Sprint(slackProfile.Deleted))
 	}
 	q.Set("adapter", adapter)
 	u.RawQuery = q.Encode()

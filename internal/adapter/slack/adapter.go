@@ -55,6 +55,10 @@ type SlackAdapter struct {
 	// msgDedup suppresses duplicate top-level deliveries (Slack retries) in
 	// observe channels.
 	msgDedup *slackMsgDedup
+
+	// profileCache memoizes users.info results so the Slack profile enrichment
+	// path doesn't add one Slack API call per message.
+	profileCache *slackUserProfileCache
 }
 
 // SetAuthorizer wires the authorizer used to gate every incoming slack
@@ -102,7 +106,8 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 	observed := msg != nil && msg.PlatformContext != nil && a.observeChannels[msg.PlatformContext.ChannelId]
 
 	if !observed && a.authz != nil && msg != nil && msg.User != nil {
-		result, err := a.authz.Authorize(ctx, authz.IdentityTypeSlack, msg.User.Id, authz.AdapterSlack, teamID)
+		profile := a.lookupSlackUserProfile(ctx, teamID, msg.User.Id)
+		result, err := a.authz.Authorize(ctx, authz.IdentityTypeSlack, msg.User.Id, authz.AdapterSlack, teamID, profile)
 		if err != nil {
 			slog.Warn("[Slack] authz check failed",
 				"user_id", msg.User.Id, "err", err)
@@ -146,12 +151,16 @@ func New() *SlackAdapter {
 	return &SlackAdapter{
 		stopChan:       make(chan struct{}),
 		contentBuffers: make(map[string]string),
+		profileCache:   newSlackUserProfileCache(),
 	}
 }
 
 // Initialize sets up the Slack adapter with configuration
 func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) error {
 	a.config = config
+	if a.profileCache == nil {
+		a.profileCache = newSlackUserProfileCache()
+	}
 
 	// Initialize Slack client
 	a.client = slack.New(
@@ -603,9 +612,9 @@ func (a *SlackAdapter) handleFeedbackCommentOpen(ctx context.Context, callback *
 	}
 
 	privateMeta, err := json.Marshal(map[string]string{
-		"channel_id":     callback.Channel.ID,
-		"message_ts":     callback.Message.Timestamp,
-		"thread_ts":      callback.Message.ThreadTimestamp,
+		"channel_id":      callback.Channel.ID,
+		"message_ts":      callback.Message.Timestamp,
+		"thread_ts":       callback.Message.ThreadTimestamp,
 		"conversation_id": conversationIDFromCallback(callback),
 	})
 	if err != nil {
@@ -810,7 +819,7 @@ func (a *SlackAdapter) routeButtonClickToAgent(ctx context.Context, callback *sl
 			ChannelId:    channelID,
 			ThreadId:     threadTS,
 			ThreadRootId: threadRootID,
-			EventKind: pb.PlatformContext_EVENT_KIND_BUTTON_CLICK,
+			EventKind:    pb.PlatformContext_EVENT_KIND_BUTTON_CLICK,
 			BotUserId:    a.botUserID,
 		},
 		User: &pb.User{Id: callback.User.ID},
@@ -910,7 +919,7 @@ func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, ev *sla
 			ChannelId:    channelID,
 			ThreadId:     threadTS,
 			ThreadRootId: threadTS,
-			EventKind: pb.PlatformContext_EVENT_KIND_ASSISTANT_THREAD_STARTED,
+			EventKind:    pb.PlatformContext_EVENT_KIND_ASSISTANT_THREAD_STARTED,
 			BotUserId:    a.botUserID,
 		},
 		User: &pb.User{Id: userID},
@@ -975,7 +984,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 			ChannelId:    ev.Channel,
 			ThreadId:     threadID,
 			ThreadRootId: ev.ThreadTimeStamp, // empty for top-level mentions
-			EventKind: pb.PlatformContext_EVENT_KIND_APP_MENTION,
+			EventKind:    pb.PlatformContext_EVENT_KIND_APP_MENTION,
 			BotUserId:    a.botUserID,
 		},
 		User: &pb.User{
@@ -1036,7 +1045,7 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 			ChannelId:    ev.Item.Channel,
 			ThreadId:     threadID,
 			ThreadRootId: parentThreadTs, // empty when reaction is on a top-level message
-			EventKind: pb.PlatformContext_EVENT_KIND_REACTION,
+			EventKind:    pb.PlatformContext_EVENT_KIND_REACTION,
 			BotUserId:    a.botUserID,
 		},
 		User: &pb.User{
