@@ -81,6 +81,9 @@ func (c *authorizeClient) authorize(ctx context.Context, identityType, identityI
 		q.Set("identity_scope", identityScope)
 	}
 	if slackProfile != nil && slackProfile.Present {
+		// The authorize endpoint is currently GET-based, so Slack profile fields
+		// appear in the query string. Treat astro-server access logs for this
+		// route as containing Slack user PII.
 		q.Set("slack_display_name", slackProfile.DisplayName)
 		q.Set("slack_username", slackProfile.Username)
 		q.Set("slack_avatar_url", slackProfile.AvatarURL)

@@ -12,6 +12,7 @@ import (
 const (
 	slackUserProfileCacheTTL        = 24 * time.Hour
 	slackUserProfileFailureCacheTTL = 5 * time.Minute
+	slackUserProfileCacheMaxEntries = 10000
 	slackUserProfileLookupTimeout   = 2 * time.Second
 )
 
@@ -57,11 +58,29 @@ func (c *slackUserProfileCache) set(teamID, userID string, profile authz.SlackUs
 	}
 	key := teamID + ":" + userID
 	c.mu.Lock()
+	now := c.now()
+	if _, ok := c.entries[key]; !ok && len(c.entries) >= slackUserProfileCacheMaxEntries {
+		c.sweepExpiredLocked(now)
+	}
+	if _, ok := c.entries[key]; !ok && len(c.entries) >= slackUserProfileCacheMaxEntries {
+		for evictKey := range c.entries {
+			delete(c.entries, evictKey)
+			break
+		}
+	}
 	c.entries[key] = slackUserProfileCacheEntry{
 		profile:   profile,
-		expiresAt: c.now().Add(ttl),
+		expiresAt: now.Add(ttl),
 	}
 	c.mu.Unlock()
+}
+
+func (c *slackUserProfileCache) sweepExpiredLocked(now time.Time) {
+	for key, entry := range c.entries {
+		if !now.Before(entry.expiresAt) {
+			delete(c.entries, key)
+		}
+	}
 }
 
 func (a *SlackAdapter) lookupSlackUserProfile(ctx context.Context, teamID, userID string) authz.SlackUserProfile {
