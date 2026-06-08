@@ -93,11 +93,14 @@ var (
 // Side effect: on success this overwrites msg.User.Id with the canonical
 // trace identity — the resolved WorkOS user_id when the Slack user has
 // linked, otherwise the raw Slack ID (e.g. "U07ABCDEF") passed through
-// unchanged. Downstream the agent SDK plumbs msg.User.Id into
-// langfuse.user.id, so unlinked Slack users land on their own
-// per-Slack-ID row in Insights instead of the generic Unattributed
-// bucket.
+// unchanged. The Slack team_id is stamped onto PlatformContext separately so
+// the agent adapter can tag the trace without folding workspace identity into
+// user_id. Downstream the agent SDK plumbs msg.User.Id into langfuse.user.id,
+// so unlinked Slack users land on their own per-Slack-ID row in Insights
+// instead of the generic Unattributed bucket.
 func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID string) error {
+	stampSlackTeamContext(msg, teamID)
+
 	// Observe channels are passive watch channels — the user didn't address the
 	// bot, so per-user authz doesn't apply. Operators opt into this by listing
 	// the channel in observe_channel_ids. Identity rewrite is also skipped: the
@@ -126,6 +129,20 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 	return a.msgHandler(ctx, msg)
 }
 
+func stampSlackTeamContext(msg *pb.Message, teamID string) {
+	if msg == nil || teamID == "" {
+		return
+	}
+	if msg.PlatformContext == nil {
+		msg.PlatformContext = &pb.PlatformContext{}
+	}
+	msg.PlatformContext.WorkspaceId = teamID
+	if msg.PlatformContext.PlatformData == nil {
+		msg.PlatformContext.PlatformData = map[string]string{}
+	}
+	msg.PlatformContext.PlatformData["team_id"] = teamID
+}
+
 // canonicalUserID converts a Slack identity to the form that should appear
 // as Langfuse user_id on the trace.
 //
@@ -135,10 +152,9 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 // pre-existing trace in Langfuse already carries, so there's a single
 // aggregation key per Slack user and no historical-vs-new row duplication.
 //
-// The workspace team_id never lives in user_id; the astro-server side keeps
-// it in slack_identity_mappings (populated by the live-ingest path on
-// /authorize and a one-time backfill) so the Insights deep link still works
-// without a namespaced wire format.
+// The workspace team_id never lives in user_id; it travels separately on
+// PlatformContext and in astro-server's Slack directory tables so Insights can
+// build deep links without a namespaced wire format.
 func canonicalUserID(result authz.Result, slackUserID string) string {
 	if result.UserID != "" {
 		return result.UserID

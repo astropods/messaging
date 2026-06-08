@@ -769,8 +769,9 @@ func TestDispatch_LinkedSlack_RewritesToWorkOSUserID(t *testing.T) {
 // Unlinked Slack user → dispatch keeps the raw slack id on msg.User.Id.
 // Same format as every historical Langfuse trace, so the Insights "by
 // people" view aggregates pre-PR and post-PR traffic from the same human
-// into one row (no duplicates). astro-server's directory join attaches
-// team_id separately for the slack:// deep link.
+// into one row (no duplicates). Slack team_id travels separately on
+// PlatformContext and in astro-server's directory tables for the slack:// deep
+// link.
 func TestDispatch_UnlinkedSlack_KeepsRawSlackID(t *testing.T) {
 	a, handler := newTestAdapter()
 	a.SetAuthorizer(&stubAuthorizer{result: authz.Result{Allowed: true}})
@@ -784,6 +785,59 @@ func TestDispatch_UnlinkedSlack_KeepsRawSlackID(t *testing.T) {
 	}
 	if want := "U07ABCDEF"; msg.User.Id != want {
 		t.Errorf("expected raw slack id %q, got %q", want, msg.User.Id)
+	}
+}
+
+func TestDispatch_StampsSlackTeamContext(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.SetAuthorizer(&stubAuthorizer{result: authz.Result{Allowed: true}})
+
+	msg := &pb.Message{
+		User: &pb.User{Id: "U07ABCDEF"},
+		PlatformContext: &pb.PlatformContext{
+			WorkspaceId: "TOLD",
+			PlatformData: map[string]string{
+				"team_id": "TOLD",
+				"keep":    "yes",
+			},
+		},
+	}
+	if err := a.dispatch(t.Context(), msg, "T07XYZ"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if handler.count() != 1 {
+		t.Fatalf("expected msgHandler called once, got %d", handler.count())
+	}
+	if msg.PlatformContext == nil {
+		t.Fatal("expected platform context to be present")
+	}
+	if msg.PlatformContext.WorkspaceId != "T07XYZ" {
+		t.Errorf("expected workspace_id T07XYZ, got %q", msg.PlatformContext.WorkspaceId)
+	}
+	if got := msg.PlatformContext.PlatformData["team_id"]; got != "T07XYZ" {
+		t.Errorf("expected platform_data team_id T07XYZ, got %q", got)
+	}
+	if got := msg.PlatformContext.PlatformData["keep"]; got != "yes" {
+		t.Errorf("expected existing platform_data key to be preserved, got %q", got)
+	}
+}
+
+func TestDispatch_StampsSlackTeamContextWhenMissing(t *testing.T) {
+	a, _ := newTestAdapter()
+	a.SetAuthorizer(&stubAuthorizer{result: authz.Result{Allowed: true}})
+
+	msg := &pb.Message{User: &pb.User{Id: "U07ABCDEF"}}
+	if err := a.dispatch(t.Context(), msg, "T07XYZ"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if msg.PlatformContext == nil {
+		t.Fatal("expected platform context to be created")
+	}
+	if msg.PlatformContext.WorkspaceId != "T07XYZ" {
+		t.Errorf("expected workspace_id T07XYZ, got %q", msg.PlatformContext.WorkspaceId)
+	}
+	if got := msg.PlatformContext.PlatformData["team_id"]; got != "T07XYZ" {
+		t.Errorf("expected platform_data team_id T07XYZ, got %q", got)
 	}
 }
 
