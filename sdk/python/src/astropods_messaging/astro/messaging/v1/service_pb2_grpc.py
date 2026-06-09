@@ -8,7 +8,7 @@ from . import message_pb2 as astro_dot_messaging_dot_v1_dot_message__pb2
 from . import response_pb2 as astro_dot_messaging_dot_v1_dot_response__pb2
 from . import service_pb2 as astro_dot_messaging_dot_v1_dot_service__pb2
 
-GRPC_GENERATED_VERSION = '1.80.0'
+GRPC_GENERATED_VERSION = '1.81.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -28,7 +28,7 @@ if _version_not_supported:
     )
 
 
-class AgentMessagingStub(object):
+class AgentMessagingStub:
     """Main gRPC service for agent messaging
     """
 
@@ -70,7 +70,7 @@ class AgentMessagingStub(object):
                 _registered_method=True)
 
 
-class AgentMessagingServicer(object):
+class AgentMessagingServicer:
     """Main gRPC service for agent messaging
     """
 
@@ -159,7 +159,7 @@ def add_AgentMessagingServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class AgentMessaging(object):
+class AgentMessaging:
     """Main gRPC service for agent messaging
     """
 

@@ -101,6 +101,15 @@ var (
 func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID string) error {
 	stampSlackTeamContext(msg, teamID)
 
+	// Preserve the raw Slack user ID on PlatformContext.UserId before any
+	// rewrite. canonicalUserID below may replace msg.User.Id with the Astro
+	// user ID, but consumers that need to call back into Slack (mentions, DMs,
+	// lookups) still need the original U… id. Set unconditionally so it's
+	// present on observed and unauthz'd paths too.
+	if msg != nil && msg.User != nil && msg.PlatformContext != nil {
+		msg.PlatformContext.UserId = msg.User.Id
+	}
+
 	// Observe channels are passive watch channels — the user didn't address the
 	// bot, so per-user authz doesn't apply. Operators opt into this by listing
 	// the channel in observe_channel_ids. Identity rewrite is also skipped: the

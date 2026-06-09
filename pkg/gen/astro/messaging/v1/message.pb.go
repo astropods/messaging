@@ -284,7 +284,14 @@ type PlatformContext struct {
 	// tell "in a thread or not" — distinct from `thread_id` which is the agent's
 	// reply target (also populated for top-level invocations where the agent's
 	// response should open a new thread under the user's message).
-	ThreadRootId  string `protobuf:"bytes,14,opt,name=thread_root_id,json=threadRootId,proto3" json:"thread_root_id,omitempty"`
+	ThreadRootId string `protobuf:"bytes,14,opt,name=thread_root_id,json=threadRootId,proto3" json:"thread_root_id,omitempty"`
+	// UserId is the raw platform-native user ID of the sender as it appears in
+	// the source event (Slack U…, Discord snowflake, Teams AAD oid). Adapters
+	// may rewrite `Message.user.id` to a resolved cross-platform identity
+	// (e.g. the Astro user ID for linked Slack users) for trace attribution;
+	// this field preserves the original so consumers that need to call back
+	// into the source platform (mentions, DMs, lookups) can still find the user.
+	UserId        string `protobuf:"bytes,15,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -378,6 +385,13 @@ func (x *PlatformContext) GetEventKind() PlatformContext_EventKind {
 func (x *PlatformContext) GetThreadRootId() string {
 	if x != nil {
 		return x.ThreadRootId
+	}
+	return ""
+}
+
+func (x *PlatformContext) GetUserId() string {
+	if x != nil {
+		return x.UserId
 	}
 	return ""
 }
@@ -583,7 +597,7 @@ const file_astro_messaging_v1_message_proto_rawDesc = "" +
 	"\x04user\x18\x05 \x01(\v2\x18.astro.messaging.v1.UserR\x04user\x12\x18\n" +
 	"\acontent\x18\x06 \x01(\tR\acontent\x12@\n" +
 	"\vattachments\x18\a \x03(\v2\x1e.astro.messaging.v1.AttachmentR\vattachments\x12'\n" +
-	"\x0fconversation_id\x18\b \x01(\tR\x0econversationId\"\xef\x05\n" +
+	"\x0fconversation_id\x18\b \x01(\tR\x0econversationId\"\x88\x06\n" +
 	"\x0fPlatformContext\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1d\n" +
@@ -597,7 +611,8 @@ const file_astro_messaging_v1_message_proto_rawDesc = "" +
 	"\vbot_user_id\x18\f \x01(\tR\tbotUserId\x12L\n" +
 	"\n" +
 	"event_kind\x18\r \x01(\x0e2-.astro.messaging.v1.PlatformContext.EventKindR\teventKind\x12$\n" +
-	"\x0ethread_root_id\x18\x0e \x01(\tR\fthreadRootId\x1a?\n" +
+	"\x0ethread_root_id\x18\x0e \x01(\tR\fthreadRootId\x12\x17\n" +
+	"\auser_id\x18\x0f \x01(\tR\x06userId\x1a?\n" +
 	"\x11PlatformDataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x89\x02\n" +
