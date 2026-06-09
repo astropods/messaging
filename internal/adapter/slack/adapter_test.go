@@ -586,7 +586,7 @@ type errAuthorizer struct {
 	err   error
 }
 
-func (e *errAuthorizer) Authorize(_ context.Context, _, _, _, _ string, _ ...authz.SlackUserProfile) (authz.Result, error) {
+func (e *errAuthorizer) Authorize(_ context.Context, _, _, _, _ string) (authz.Result, error) {
 	e.calls++
 	return authz.Result{}, e.err
 }
@@ -616,7 +616,7 @@ func TestDispatch_AuthzTransportError_ReturnsUnavailableSentinel(t *testing.T) {
 // denyAuthorizer always returns allowed=false with no error.
 type denyAuthorizer struct{ calls int }
 
-func (d *denyAuthorizer) Authorize(_ context.Context, _, _, _, _ string, _ ...authz.SlackUserProfile) (authz.Result, error) {
+func (d *denyAuthorizer) Authorize(_ context.Context, _, _, _, _ string) (authz.Result, error) {
 	d.calls++
 	return authz.Result{Allowed: false}, nil
 }
@@ -672,77 +672,8 @@ type stubAuthorizer struct {
 	result authz.Result
 }
 
-func (s *stubAuthorizer) Authorize(_ context.Context, _, _, _, _ string, _ ...authz.SlackUserProfile) (authz.Result, error) {
+func (s *stubAuthorizer) Authorize(_ context.Context, _, _, _, _ string) (authz.Result, error) {
 	return s.result, nil
-}
-
-type capturingProfileAuthorizer struct {
-	profile authz.SlackUserProfile
-	calls   int
-}
-
-func (c *capturingProfileAuthorizer) Authorize(_ context.Context, _, _, _, _ string, profiles ...authz.SlackUserProfile) (authz.Result, error) {
-	c.calls++
-	if len(profiles) > 0 {
-		c.profile = profiles[0]
-	}
-	return authz.Result{Allowed: true}, nil
-}
-
-func TestDispatch_SendsSlackProfileToAuthz(t *testing.T) {
-	a, handler := newTestAdapter()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/users.info" {
-			t.Fatalf("unexpected slack API path: %s", r.URL.Path)
-		}
-		if err := r.ParseForm(); err != nil {
-			t.Fatalf("parse slack form: %v", err)
-		}
-		if got := r.Form.Get("user"); got != "U07ABCDEF" {
-			t.Fatalf("users.info user: got %q", got)
-		}
-		_ = json.NewEncoder(w).Encode(struct {
-			Ok   bool          `json:"ok"`
-			User slacklib.User `json:"user"`
-		}{
-			Ok: true,
-			User: slacklib.User{
-				ID:       "U07ABCDEF",
-				Name:     "jesse",
-				RealName: "Jesse Morgan",
-				Profile: slacklib.UserProfile{
-					DisplayName: "Jesse Morgan",
-					Image72:     "https://avatars.slack-edge.com/jesse.png",
-				},
-			},
-		})
-	}))
-	defer server.Close()
-
-	a.client = slacklib.New("test-token", slacklib.OptionAPIURL(server.URL+"/"))
-	az := &capturingProfileAuthorizer{}
-	a.SetAuthorizer(az)
-
-	msg := &pb.Message{User: &pb.User{Id: "U07ABCDEF"}}
-	if err := a.dispatch(t.Context(), msg, "T07XYZ"); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-	if handler.count() != 1 {
-		t.Fatalf("expected msgHandler called once, got %d", handler.count())
-	}
-	if az.calls != 1 {
-		t.Fatalf("expected one authz call, got %d", az.calls)
-	}
-	if !az.profile.Present {
-		t.Fatalf("expected profile metadata to be present")
-	}
-	if az.profile.DisplayName != "Jesse Morgan" || az.profile.Username != "jesse" {
-		t.Errorf("unexpected profile names: %+v", az.profile)
-	}
-	if az.profile.AvatarURL != "https://avatars.slack-edge.com/jesse.png" {
-		t.Errorf("unexpected avatar URL: %+v", az.profile)
-	}
 }
 
 // Linked Slack user → dispatch rewrites pb.Message.User.Id to the canonical

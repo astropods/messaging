@@ -29,7 +29,7 @@ import (
 // these tests pin down.
 type denyAuthorizer struct{ calls int }
 
-func (d *denyAuthorizer) Authorize(_ context.Context, _, _, _, _ string, _ ...authz.SlackUserProfile) (authz.Result, error) {
+func (d *denyAuthorizer) Authorize(_ context.Context, _, _, _, _ string) (authz.Result, error) {
 	d.calls++
 	return authz.Result{Allowed: false}, nil
 }

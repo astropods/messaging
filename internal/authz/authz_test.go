@@ -291,35 +291,25 @@ func TestAuthorize_IdentityScopeSentAndScopedInCache(t *testing.T) {
 	}
 }
 
-func TestAuthorize_SendsSlackProfileMetadata(t *testing.T) {
+func TestAuthorize_DoesNotSendSlackProfileMetadata(t *testing.T) {
 	a, _ := newTestAuthorizer(t, nil, func(r *http.Request) (*http.Response, error) {
 		q := r.URL.Query()
-		if got := q.Get("slack_display_name"); got != "Jesse Morgan" {
-			t.Errorf("slack_display_name: got %q", got)
-		}
-		if got := q.Get("slack_username"); got != "jesse" {
-			t.Errorf("slack_username: got %q", got)
-		}
-		if got := q.Get("slack_avatar_url"); got != "https://avatars.slack-edge.com/jesse.png" {
-			t.Errorf("slack_avatar_url: got %q", got)
-		}
-		if got := q.Get("slack_is_bot"); got != "false" {
-			t.Errorf("slack_is_bot: got %q", got)
-		}
-		if got := q.Get("slack_deleted"); got != "true" {
-			t.Errorf("slack_deleted: got %q", got)
+		for _, key := range []string{
+			"slack_display_name",
+			"slack_username",
+			"slack_avatar_url",
+			"slack_is_bot",
+			"slack_deleted",
+		} {
+			if _, ok := q[key]; ok {
+				t.Errorf("unexpected Slack profile query param %q in authorize request", key)
+			}
 		}
 		return okResp(true), nil
 	})
 
-	if _, err := a.Authorize(context.Background(), "slack", "U01", "slack", "T1", SlackUserProfile{
-		Present:     true,
-		DisplayName: "Jesse Morgan",
-		Username:    "jesse",
-		AvatarURL:   "https://avatars.slack-edge.com/jesse.png",
-		Deleted:     true,
-	}); err != nil {
-		t.Fatalf("authorize with profile metadata: %v", err)
+	if _, err := a.Authorize(context.Background(), "slack", "U01", "slack", "T1"); err != nil {
+		t.Fatalf("authorize: %v", err)
 	}
 }
 
