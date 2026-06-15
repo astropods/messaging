@@ -137,7 +137,8 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 	blocks := make([]map[string]interface{}, 0, len(chunks)+1)
 	for _, chunk := range chunks {
 		blocks = append(blocks, map[string]interface{}{
-			"type": "section",
+			"type":   "section",
+			"expand": true,
 			"text": map[string]interface{}{
 				"type": "mrkdwn",
 				"text": chunk,

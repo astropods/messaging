@@ -263,6 +263,51 @@ func TestSlackAIClient_PostMessageWithFeedback_Success(t *testing.T) {
 	if !ok || len(blocks) < 2 {
 		t.Errorf("expected at least 2 blocks (content + feedback), got %v", capturedBody["blocks"])
 	}
+	for _, raw := range blocks {
+		block, ok := raw.(map[string]any)
+		if !ok || block["type"] != "section" {
+			continue
+		}
+		if block["expand"] != true {
+			t.Errorf("expected content section block to set expand=true, got %v", block["expand"])
+		}
+	}
+}
+
+func TestSlackAIClient_PostMessageWithFeedback_LongContentExpandsEverySection(t *testing.T) {
+	var capturedBody map[string]any
+	client, cleanup := newTestAIClient(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "9999.000001"})
+	})
+	defer cleanup()
+
+	longContent := strings.Repeat("This is a long assistant response sentence.\n", 100)
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", longContent, "1234.000001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	blocks, ok := capturedBody["blocks"].([]any)
+	if !ok {
+		t.Fatal("expected blocks in payload")
+	}
+
+	sectionCount := 0
+	for _, raw := range blocks {
+		block, ok := raw.(map[string]any)
+		if !ok || block["type"] != "section" {
+			continue
+		}
+		sectionCount++
+		if block["expand"] != true {
+			t.Errorf("expected section %d to set expand=true, got %v", sectionCount, block["expand"])
+		}
+	}
+	if sectionCount < 2 {
+		t.Fatalf("expected long response to create multiple section blocks, got %d", sectionCount)
+	}
 }
 
 func TestSlackAIClient_PostMessageWithFeedback_DevMode(t *testing.T) {
