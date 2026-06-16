@@ -1,12 +1,12 @@
 ## Summary
 
-Slack assistant replies no longer collapse each long response section behind repeated "Show more" links.
+Long Slack assistant replies now render as multiple threaded replies instead of one dense message with repeated "Show more" affordances.
 
 ## Design
 
-Astro-generated Slack `section` blocks now set Slack's `expand` flag when posting assistant responses. Slack can otherwise collapse long section text even when the message is valid Block Kit, which made one answer render as several partial previews with separate "Show more" controls.
+Astro still buffers streamed assistant output until the response completes, but the Slack formatter now slices long content at Slack's section text limit and sends each slice as its own reply in the same thread.
 
-The existing chunking remains in place for Slack's section text limits; the change only updates the render hint sent with each generated content section.
+Each reply contains one content section. That keeps Slack's native expansion behavior scoped to the reply itself instead of stacking several collapsed sections inside a single message. The final reply carries the agent footer and feedback controls so users can still rate or comment on the complete answer without seeing duplicate controls on every chunk.
 
 ## Migration
 

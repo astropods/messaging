@@ -268,16 +268,18 @@ func TestSlackAIClient_PostMessageWithFeedback_Success(t *testing.T) {
 		if !ok || block["type"] != "section" {
 			continue
 		}
-		if block["expand"] != true {
-			t.Errorf("expected content section block to set expand=true, got %v", block["expand"])
+		if _, ok := block["expand"]; ok {
+			t.Errorf("section block should not force Slack expand behavior: %v", block)
 		}
 	}
 }
 
-func TestSlackAIClient_PostMessageWithFeedback_LongContentExpandsEverySection(t *testing.T) {
-	var capturedBody map[string]any
+func TestSlackAIClient_PostMessageWithFeedback_LongContentUsesThreadReplies(t *testing.T) {
+	var capturedBodies []map[string]any
 	client, cleanup := newTestAIClient(func(w http.ResponseWriter, r *http.Request) {
+		var capturedBody map[string]any
 		json.NewDecoder(r.Body).Decode(&capturedBody)
+		capturedBodies = append(capturedBodies, capturedBody)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "9999.000001"})
 	})
@@ -289,24 +291,53 @@ func TestSlackAIClient_PostMessageWithFeedback_LongContentExpandsEverySection(t 
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	blocks, ok := capturedBody["blocks"].([]any)
-	if !ok {
-		t.Fatal("expected blocks in payload")
+	if len(capturedBodies) < 2 {
+		t.Fatalf("expected long response to be posted as multiple thread replies, got %d", len(capturedBodies))
 	}
 
-	sectionCount := 0
-	for _, raw := range blocks {
-		block, ok := raw.(map[string]any)
-		if !ok || block["type"] != "section" {
-			continue
+	for i, body := range capturedBodies {
+		if body["channel"] != "C123" {
+			t.Errorf("reply %d expected channel C123, got %v", i, body["channel"])
 		}
-		sectionCount++
-		if block["expand"] != true {
-			t.Errorf("expected section %d to set expand=true, got %v", sectionCount, block["expand"])
+		if body["thread_ts"] != "1234.000001" {
+			t.Errorf("reply %d expected thread_ts 1234.000001, got %v", i, body["thread_ts"])
+		}
+
+		blocks, ok := body["blocks"].([]any)
+		if !ok {
+			t.Fatalf("reply %d expected blocks in payload", i)
+		}
+
+		sectionCount := 0
+		for _, raw := range blocks {
+			block, ok := raw.(map[string]any)
+			if !ok || block["type"] != "section" {
+				continue
+			}
+			sectionCount++
+			if _, ok := block["expand"]; ok {
+				t.Errorf("reply %d section block should not force Slack expand behavior: %v", i, block)
+			}
+		}
+		if sectionCount != 1 {
+			t.Fatalf("reply %d expected exactly one content section, got %d", i, sectionCount)
 		}
 	}
-	if sectionCount < 2 {
-		t.Fatalf("expected long response to create multiple section blocks, got %d", sectionCount)
+
+	firstBodyJSON, err := json.Marshal(capturedBodies[0])
+	if err != nil {
+		t.Fatalf("failed to marshal first body: %v", err)
+	}
+	if strings.Contains(string(firstBodyJSON), "feedback_buttons") {
+		t.Fatalf("expected feedback controls only on the final reply, got first body: %s", firstBodyJSON)
+	}
+
+	finalBodyJSON, err := json.Marshal(capturedBodies[len(capturedBodies)-1])
+	if err != nil {
+		t.Fatalf("failed to marshal final body: %v", err)
+	}
+	if !strings.Contains(string(finalBodyJSON), "feedback_buttons") {
+		t.Fatalf("expected feedback controls on the final reply, got final body: %s", finalBodyJSON)
 	}
 }
 

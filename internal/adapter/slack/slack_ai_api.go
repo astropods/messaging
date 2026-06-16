@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	slackAPIBaseURL = "https://slack.com/api"
+	slackAPIBaseURL          = "https://slack.com/api"
+	slackSectionTextMaxChars = 3000
 )
 
 // SlackAIClient handles calls to Slack AI APIs that aren't in the slack-go library yet
@@ -130,35 +131,51 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 	// Convert standard Markdown to Slack mrkdwn before building blocks.
 	content = markdownToMrkdwn(content)
 
-	// Slack section blocks have a 3000 char text limit. Split long content
-	// into multiple sections so messages with tables or lists aren't rejected.
-	chunks := splitIntoChunks(content, 3000)
+	// Slack section blocks have a 3000 char text limit. For longer answers,
+	// send multiple threaded replies instead of stacking many sections in one
+	// message. That keeps Slack's native "Show more" affordance to at most one
+	// per reply instead of one per section.
+	chunks := splitIntoChunks(content, slackSectionTextMaxChars)
+	var lastTimestamp string
 
-	blocks := make([]map[string]interface{}, 0, len(chunks)+1)
-	for _, chunk := range chunks {
-		blocks = append(blocks, map[string]interface{}{
-			"type":   "section",
-			"expand": true,
+	for i, chunk := range chunks {
+		isLast := i == len(chunks)-1
+		timestamp, err := c.postAssistantReply(ctx, channelID, chunk, threadID, isLast)
+		if err != nil {
+			return "", err
+		}
+		lastTimestamp = timestamp
+	}
+
+	return lastTimestamp, nil
+}
+
+func (c *SlackAIClient) postAssistantReply(ctx context.Context, channelID, content, threadID string, includeFeedback bool) (string, error) {
+	blocks := []map[string]interface{}{
+		{
+			"type": "section",
 			"text": map[string]interface{}{
 				"type": "mrkdwn",
-				"text": chunk,
+				"text": content,
 			},
-		})
+		},
 	}
 
-	if footer := buildFooterText(c.devMode, c.agentID); footer != "" {
-		blocks = append(blocks, map[string]interface{}{
-			"type": "context",
-			"elements": []map[string]interface{}{
-				{
-					"type": "mrkdwn",
-					"text": footer,
+	if includeFeedback {
+		if footer := buildFooterText(c.devMode, c.agentID); footer != "" {
+			blocks = append(blocks, map[string]interface{}{
+				"type": "context",
+				"elements": []map[string]interface{}{
+					{
+						"type": "mrkdwn",
+						"text": footer,
+					},
 				},
-			},
-		})
+			})
+		}
 	}
 
-	// Two feedback affordances on every agent reply:
+	// Two feedback affordances on the final agent reply:
 	//   1. Native Slack AI thumbs widget (context_actions/feedback_buttons) —
 	//      one-click 👍/👎 that the platform renders with built-in styling.
 	//   2. A 💬 button in an actions block — opens a modal where the user
@@ -168,51 +185,47 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 	// Both flow through handleBlockActions and end up calling forwardFeedback,
 	// so the agent's developer sees a single on_feedback callback regardless
 	// of which path the user took.
-	blocks = append(blocks, map[string]interface{}{
-		"type": "context_actions",
-		"elements": []map[string]interface{}{
-			{
-				"type":      "feedback_buttons",
-				"action_id": feedbackButtonsActionID,
-				"positive_button": map[string]interface{}{
-					"text": map[string]interface{}{
-						"type": "plain_text",
-						"text": "👍",
+	if includeFeedback {
+		blocks = append(blocks, map[string]interface{}{
+			"type": "context_actions",
+			"elements": []map[string]interface{}{
+				{
+					"type":      "feedback_buttons",
+					"action_id": feedbackButtonsActionID,
+					"positive_button": map[string]interface{}{
+						"text": map[string]interface{}{
+							"type": "plain_text",
+							"text": "👍",
+						},
+						"value": "positive_feedback",
 					},
-					"value": "positive_feedback",
-				},
-				"negative_button": map[string]interface{}{
-					"text": map[string]interface{}{
-						"type": "plain_text",
-						"text": "👎",
+					"negative_button": map[string]interface{}{
+						"text": map[string]interface{}{
+							"type": "plain_text",
+							"text": "👎",
+						},
+						"value": "negative_feedback",
 					},
-					"value": "negative_feedback",
 				},
 			},
-		},
-	})
+		})
 
-	blocks = append(blocks, map[string]interface{}{
-		"type":     "actions",
-		"block_id": feedbackCommentBlockID,
-		"elements": []map[string]interface{}{
-			{
-				"type":      "button",
-				"action_id": feedbackCommentActionID,
-				"text": map[string]interface{}{
-					"type":  "plain_text",
-					"text":  "💬 Comment",
-					"emoji": true,
+		blocks = append(blocks, map[string]interface{}{
+			"type":     "actions",
+			"block_id": feedbackCommentBlockID,
+			"elements": []map[string]interface{}{
+				{
+					"type":      "button",
+					"action_id": feedbackCommentActionID,
+					"text": map[string]interface{}{
+						"type":  "plain_text",
+						"text":  "💬 Comment",
+						"emoji": true,
+					},
+					"value": "open_comment_modal",
 				},
-				"value": "open_comment_modal",
 			},
-		},
-	})
-
-	// Slack caps at 50 blocks per message; keep the last two blocks
-	// (the feedback widgets) so feedback stays available even on huge replies.
-	if len(blocks) > 50 {
-		blocks = append(blocks[:48], blocks[len(blocks)-2:]...)
+		})
 	}
 
 	payload := map[string]interface{}{
