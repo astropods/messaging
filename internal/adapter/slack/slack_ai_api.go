@@ -142,17 +142,21 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 	// Convert standard Markdown to Slack mrkdwn before building blocks.
 	mrkdwn := markdownToMrkdwn(content)
 
-	// Slack section blocks have a 3000 char text limit. Split long content
-	// into multiple sections so messages with tables or lists aren't rejected.
+	// Break the reply into small section blocks so Slack renders each one in
+	// full instead of folding long text behind a "See more". splitForSectionBlocks
+	// targets ~250 chars on line/sentence boundaries; the inner splitIntoChunks
+	// is a safety net for any chunk still over Slack's hard 3000-char limit.
 	var sections []map[string]interface{}
-	for _, chunk := range splitIntoChunks(mrkdwn, 3000) {
-		sections = append(sections, map[string]interface{}{
-			"type": "section",
-			"text": map[string]interface{}{
-				"type": "mrkdwn",
-				"text": chunk,
-			},
-		})
+	for _, chunk := range splitForSectionBlocks(mrkdwn, sectionBlockTargetChars) {
+		for _, sec := range splitIntoChunks(chunk, 3000) {
+			sections = append(sections, map[string]interface{}{
+				"type": "section",
+				"text": map[string]interface{}{
+					"type": "mrkdwn",
+					"text": sec,
+				},
+			})
+		}
 	}
 
 	// Footer + feedback widgets must stay together on the final message.
@@ -441,6 +445,162 @@ func splitIntoChunks(text string, maxLen int) []string {
 	}
 
 	return chunks
+}
+
+// sectionBlockTargetChars is the size we aim for per section block. Slack
+// folds section text longer than a few hundred characters behind a "See more",
+// so keeping each block small renders the whole reply inline. Matches the
+// threshold the Yoda agent uses for the same reason.
+const sectionBlockTargetChars = 250
+
+// reSentenceBoundary matches sentence-ending punctuation followed by
+// whitespace, used to break an over-long line without splitting mid-word.
+var reSentenceBoundary = regexp.MustCompile(`[.!?]\s+`)
+
+// splitSentences breaks a line at sentence boundaries, keeping the terminal
+// punctuation with its sentence and dropping the whitespace between sentences.
+// Go's regexp has no lookbehind, so this slices around the matched boundaries
+// rather than using regexp.Split (which would discard the punctuation).
+func splitSentences(line string) []string {
+	locs := reSentenceBoundary.FindAllStringIndex(line, -1)
+	if len(locs) == 0 {
+		return []string{line}
+	}
+	var out []string
+	prev := 0
+	for _, loc := range locs {
+		out = append(out, line[prev:loc[0]+1]) // include the punctuation char
+		prev = loc[1]                           // resume after the whitespace
+	}
+	if prev < len(line) {
+		out = append(out, line[prev:])
+	}
+	return out
+}
+
+// wordWrap breaks s into pieces no longer than maxChars, splitting on spaces so
+// words stay intact. A single word longer than maxChars (e.g. a long URL) is
+// hard-split as a last resort. Returns the trimmed input unchanged when it
+// already fits.
+func wordWrap(s string, maxChars int) []string {
+	s = strings.TrimSpace(s)
+	if len(s) <= maxChars {
+		return []string{s}
+	}
+
+	var out []string
+	current := ""
+	for _, word := range strings.Fields(s) {
+		// A single oversized word can't fit any line — hard-split it.
+		for len(word) > maxChars {
+			if current != "" {
+				out = append(out, current)
+				current = ""
+			}
+			out = append(out, word[:maxChars])
+			word = word[maxChars:]
+		}
+		switch {
+		case current == "":
+			current = word
+		case len(current)+1+len(word) > maxChars:
+			out = append(out, current)
+			current = word
+		default:
+			current += " " + word
+		}
+	}
+	if current != "" {
+		out = append(out, current)
+	}
+	return out
+}
+
+// splitForSectionBlocks splits mrkdwn text into chunks of roughly targetChars,
+// small enough that Slack renders each section block in full rather than
+// collapsing it behind a "See more" fold. It breaks on line boundaries, and on
+// sentence boundaries within a line that is itself longer than the target.
+// Two structures are kept intact so formatting survives: fenced code blocks
+// (```…```, which convertTables also emits for tables) and runs of consecutive
+// blockquote lines (so Slack draws one continuous bar). Chunks may still exceed
+// targetChars when a single sentence or code block is longer; the caller caps
+// them at Slack's hard 3000-char section limit.
+func splitForSectionBlocks(text string, targetChars int) []string {
+	var out []string
+	current := ""
+
+	flush := func() {
+		if strings.TrimSpace(current) != "" {
+			out = append(out, strings.TrimSpace(current))
+		}
+		current = ""
+	}
+	appendLine := func(line string) {
+		if current != "" {
+			current += "\n" + line
+		} else {
+			current = line
+		}
+	}
+
+	inFence := false
+	for _, line := range strings.Split(text, "\n") {
+		// Keep fenced code blocks whole — never split between the ``` pair.
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			if !inFence {
+				flush() // start the fence in its own chunk
+			}
+			appendLine(line)
+			inFence = !inFence
+			if !inFence {
+				flush() // closing fence — emit the whole block
+			}
+			continue
+		}
+		if inFence {
+			appendLine(line)
+			continue
+		}
+
+		// Glue adjacent blockquote lines so Slack renders one bar, not several.
+		lastLine := current
+		if idx := strings.LastIndex(current, "\n"); idx != -1 {
+			lastLine = current[idx+1:]
+		}
+		if strings.HasPrefix(strings.TrimLeft(lastLine, " \t"), ">") &&
+			strings.HasPrefix(strings.TrimLeft(line, " \t"), ">") {
+			appendLine(line)
+			continue
+		}
+
+		if len(line) > targetChars {
+			// Over-long line: split on sentence boundaries, then word-wrap any
+			// sentence that is itself longer than the target (a single long
+			// clause with no .!? break would otherwise stay one oversized block
+			// and Slack would fold it behind a "See more").
+			for _, sent := range splitSentences(line) {
+				for _, piece := range wordWrap(sent, targetChars) {
+					if current != "" && len(current)+len(piece)+1 > targetChars {
+						flush()
+						current = piece
+					} else if current != "" {
+						current += " " + piece
+					} else {
+						current = piece
+					}
+				}
+			}
+			continue
+		}
+
+		if current != "" && len(current)+len(line)+1 > targetChars {
+			flush()
+		}
+		appendLine(line)
+	}
+	flush()
+
+	return out
 }
 
 // PostBlocks posts a message containing only Slack Block Kit blocks (no feedback widget).

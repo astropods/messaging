@@ -600,6 +600,134 @@ func TestBatchBlocks(t *testing.T) {
 	}
 }
 
+func TestSplitForSectionBlocks_ShortTextStaysWhole(t *testing.T) {
+	chunks := splitForSectionBlocks("Hello there. How are you?", 250)
+	if len(chunks) != 1 || chunks[0] != "Hello there. How are you?" {
+		t.Errorf("short text should stay one chunk, got %#v", chunks)
+	}
+}
+
+func TestSplitForSectionBlocks_KeepsEveryChunkUnderTarget(t *testing.T) {
+	// A long single paragraph of real sentences must break into multiple
+	// chunks so Slack doesn't collapse it behind "See more".
+	sentence := "This is a reasonably long sentence that carries some weight. "
+	para := strings.Repeat(sentence, 20) // ~1200 chars, no newlines
+	chunks := splitForSectionBlocks(para, 250)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected the long paragraph to split, got %d chunk(s)", len(chunks))
+	}
+	for i, c := range chunks {
+		// Chunks may slightly exceed the target (a whole sentence is never
+		// split), but should stay in the same ballpark — never near 3000.
+		if len(c) > 400 {
+			t.Errorf("chunk %d is %d chars, expected near the 250 target", i, len(c))
+		}
+	}
+	// Sentence punctuation is preserved across the split.
+	if !strings.Contains(strings.Join(chunks, " "), "weight.") {
+		t.Error("expected sentence punctuation to be preserved")
+	}
+}
+
+func TestSplitForSectionBlocks_KeepsCodeFenceWhole(t *testing.T) {
+	// A fenced block longer than the target must not be split across chunks,
+	// or the ``` pairing breaks.
+	code := "```\n" + strings.Repeat("x = 1\n", 100) + "```"
+	text := "Intro line.\n" + code + "\nOutro line."
+	chunks := splitForSectionBlocks(text, 250)
+
+	fenceChunks := 0
+	for _, c := range chunks {
+		if strings.Contains(c, "```") {
+			fenceChunks++
+			if strings.Count(c, "```") != 2 {
+				t.Errorf("code fence split across chunks: %q", c)
+			}
+		}
+	}
+	if fenceChunks != 1 {
+		t.Errorf("expected the code block to occupy exactly one chunk, got %d", fenceChunks)
+	}
+}
+
+func TestSplitForSectionBlocks_GluesBlockquoteRun(t *testing.T) {
+	text := "> line one\n> line two\n> line three"
+	chunks := splitForSectionBlocks(text, 250)
+	if len(chunks) != 1 {
+		t.Fatalf("expected a blockquote run to stay together, got %d chunks: %#v", len(chunks), chunks)
+	}
+}
+
+func TestSplitForSectionBlocks_WrapsUnbreakableSentence(t *testing.T) {
+	// A long clause with no sentence-ending punctuation (commas, "e.g.", an
+	// em-dash) used to stay a single oversized block that Slack folded behind a
+	// "See more". It must now be word-wrapped so every block stays at/near the
+	// target.
+	line := "Reference a comparable account in financial services that discovered " +
+		"broad free-tier sprawl and consolidated under a single contract to unlock " +
+		"a specific workflow outcome (e.g., shared reporting templates across " +
+		"business units, centralized audit trails, or cross-team data governance " +
+		"visibility) — the kind of outcome that turns scattered free usage into a " +
+		"single governed contract with measurable savings and clearer ownership"
+
+	const target = 250
+	chunks := splitForSectionBlocks(line, target)
+	if len(chunks) < 2 {
+		t.Fatalf("expected the unbreakable clause to wrap into multiple chunks, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if len(c) > target {
+			t.Errorf("chunk %d is %d chars, exceeds target %d (would trigger See more): %q", i, len(c), target, c)
+		}
+	}
+	// Nothing dropped: joining the chunks reproduces the words in order.
+	joined := strings.Join(chunks, " ")
+	for _, w := range []string{"Reference", "free-tier", "(e.g.,", "governance", "ownership"} {
+		if !strings.Contains(joined, w) {
+			t.Errorf("word %q was dropped during wrapping", w)
+		}
+	}
+}
+
+func TestWordWrap(t *testing.T) {
+	if got := wordWrap("short text", 250); len(got) != 1 || got[0] != "short text" {
+		t.Errorf("short text should pass through unchanged, got %#v", got)
+	}
+
+	wrapped := wordWrap(strings.Repeat("word ", 100), 50)
+	for i, p := range wrapped {
+		if len(p) > 50 {
+			t.Errorf("piece %d exceeds max: %d chars", i, len(p))
+		}
+	}
+
+	// A single word longer than the max is hard-split.
+	long := strings.Repeat("x", 120)
+	got := wordWrap(long, 50)
+	if len(got) != 3 {
+		t.Fatalf("expected a 120-char word to hard-split into 3 pieces of ≤50, got %d", len(got))
+	}
+	for i, p := range got {
+		if len(p) > 50 {
+			t.Errorf("hard-split piece %d exceeds max: %d chars", i, len(p))
+		}
+	}
+}
+
+func TestSplitSentences(t *testing.T) {
+	got := splitSentences("First sentence. Second one! Third?")
+	want := []string{"First sentence.", "Second one!", "Third?"}
+	if len(got) != len(want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if strings.TrimSpace(got[i]) != want[i] {
+			t.Errorf("sentence %d: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 // --- Tests for postJSON error paths ---
 
 func TestSlackAIClient_postJSON_InvalidJSON(t *testing.T) {
