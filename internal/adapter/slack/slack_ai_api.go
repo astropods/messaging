@@ -124,19 +124,29 @@ func (c *SlackAIClient) SetTitle(ctx context.Context, channelID, threadTS, title
 	return nil
 }
 
-// PostMessageWithFeedback posts a message with feedback buttons
+// slackMaxBlocksPerMessage is Slack's hard cap on the number of blocks a single
+// chat.postMessage may carry. Replies that exceed it are fanned out across
+// multiple messages in the same thread.
+const slackMaxBlocksPerMessage = 50
+
+// PostMessageWithFeedback posts an agent reply, with feedback widgets attached.
 // https://api.slack.com/methods/chat.postMessage
+//
+// Long replies are split into section blocks (Slack caps section text at 3000
+// chars) which can easily exceed the 50-block-per-message limit. Rather than
+// truncate — which silently dropped the middle of big answers — the blocks are
+// fanned out across multiple messages in the same thread.
+// The footer and feedback widgets ride on the final message so the reply ends
+// with a single set of controls. Returns the timestamp of the first message.
 func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, content, threadID string) (string, error) {
 	// Convert standard Markdown to Slack mrkdwn before building blocks.
-	content = markdownToMrkdwn(content)
+	mrkdwn := markdownToMrkdwn(content)
 
 	// Slack section blocks have a 3000 char text limit. Split long content
 	// into multiple sections so messages with tables or lists aren't rejected.
-	chunks := splitIntoChunks(content, 3000)
-
-	blocks := make([]map[string]interface{}, 0, len(chunks)+1)
-	for _, chunk := range chunks {
-		blocks = append(blocks, map[string]interface{}{
+	var sections []map[string]interface{}
+	for _, chunk := range splitIntoChunks(mrkdwn, 3000) {
+		sections = append(sections, map[string]interface{}{
 			"type": "section",
 			"text": map[string]interface{}{
 				"type": "mrkdwn",
@@ -144,6 +154,68 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 			},
 		})
 	}
+
+	// Footer + feedback widgets must stay together on the final message.
+	trailing := c.feedbackTrailingBlocks()
+
+	messages := batchBlocks(sections, trailing, slackMaxBlocksPerMessage)
+
+	var firstTS string
+	for i, blocks := range messages {
+		// The first message carries the full reply text as the notification
+		// fallback; continuations are marked so previews read sensibly.
+		text := mrkdwn
+		if i > 0 {
+			text = "(continued)"
+		}
+
+		payload := map[string]interface{}{
+			"channel": channelID,
+			"text":    text,
+			"blocks":  blocks,
+		}
+		if threadID != "" {
+			payload["thread_ts"] = threadID
+		}
+
+		slog.Debug("[SlackAI] Posting message", "channel", channelID, "part", i+1, "parts", len(messages))
+
+		var result struct {
+			OK        bool   `json:"ok"`
+			Error     string `json:"error,omitempty"`
+			Timestamp string `json:"ts,omitempty"`
+		}
+
+		if err := c.postJSON(ctx, "chat.postMessage", payload, &result); err != nil {
+			slog.Error("[SlackAI] Error posting message", "err", err, "part", i+1)
+			return firstTS, err
+		}
+		if !result.OK {
+			slog.Error("[SlackAI] Slack API returned error", "error", result.Error, "part", i+1)
+			return firstTS, fmt.Errorf("slack API error: %s", result.Error)
+		}
+
+		if i == 0 {
+			firstTS = result.Timestamp
+		}
+	}
+
+	slog.Debug("[SlackAI] Message posted successfully", "timestamp", firstTS, "parts", len(messages))
+	return firstTS, nil
+}
+
+// feedbackTrailingBlocks builds the optional footer plus the two feedback
+// affordances that close out a reply:
+//   1. Native Slack AI thumbs widget (context_actions/feedback_buttons) —
+//      one-click 👍/👎 that the platform renders with built-in styling.
+//   2. A 💬 button in an actions block — opens a modal where the user can
+//      leave free-form text. Kept separate because feedback_buttons only
+//      accepts positive_button + negative_button and rejects a third option.
+// Both flow through handleBlockActions and end up calling forwardFeedback, so
+// the agent developer sees a single on_feedback callback regardless of path.
+// These blocks stay together on the last message of a fanned-out reply.
+func (c *SlackAIClient) feedbackTrailingBlocks() []map[string]interface{} {
+	blocks := make([]map[string]interface{}, 0, 3)
 
 	if footer := buildFooterText(c.devMode, c.agentID); footer != "" {
 		blocks = append(blocks, map[string]interface{}{
@@ -157,16 +229,6 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 		})
 	}
 
-	// Two feedback affordances on every agent reply:
-	//   1. Native Slack AI thumbs widget (context_actions/feedback_buttons) —
-	//      one-click 👍/👎 that the platform renders with built-in styling.
-	//   2. A 💬 button in an actions block — opens a modal where the user
-	//      can leave free-form text. We keep this separate because the
-	//      feedback_buttons element only accepts positive_button +
-	//      negative_button and rejects a third option.
-	// Both flow through handleBlockActions and end up calling forwardFeedback,
-	// so the agent's developer sees a single on_feedback callback regardless
-	// of which path the user took.
 	blocks = append(blocks, map[string]interface{}{
 		"type": "context_actions",
 		"elements": []map[string]interface{}{
@@ -208,42 +270,37 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 		},
 	})
 
-	// Slack caps at 50 blocks per message; keep the last two blocks
-	// (the feedback widgets) so feedback stays available even on huge replies.
-	if len(blocks) > 50 {
-		blocks = append(blocks[:48], blocks[len(blocks)-2:]...)
+	return blocks
+}
+
+// batchBlocks splits content blocks into groups no larger than maxBlocks,
+// keeping the trailing blocks (footer + feedback widgets) together on the final
+// group — appended to the last content group when they fit, otherwise sent as
+// their own final group. Always returns at least one group; when there is no
+// content the trailing blocks are the only group.
+func batchBlocks(content, trailing []map[string]interface{}, maxBlocks int) [][]map[string]interface{} {
+	var groups [][]map[string]interface{}
+	for i := 0; i < len(content); i += maxBlocks {
+		end := i + maxBlocks
+		if end > len(content) {
+			end = len(content)
+		}
+		group := make([]map[string]interface{}, end-i)
+		copy(group, content[i:end])
+		groups = append(groups, group)
 	}
 
-	payload := map[string]interface{}{
-		"channel": channelID,
-		"text":    content,
-		"blocks":  blocks,
+	if len(groups) == 0 {
+		return [][]map[string]interface{}{trailing}
 	}
 
-	if threadID != "" {
-		payload["thread_ts"] = threadID
+	last := groups[len(groups)-1]
+	if len(last)+len(trailing) <= maxBlocks {
+		groups[len(groups)-1] = append(last, trailing...)
+	} else {
+		groups = append(groups, trailing)
 	}
-
-	slog.Debug("[SlackAI] Posting message with feedback buttons", "channel", channelID)
-
-	var result struct {
-		OK        bool   `json:"ok"`
-		Error     string `json:"error,omitempty"`
-		Timestamp string `json:"ts,omitempty"`
-	}
-
-	if err := c.postJSON(ctx, "chat.postMessage", payload, &result); err != nil {
-		slog.Error("[SlackAI] Error posting message", "err", err)
-		return "", err
-	}
-
-	if !result.OK {
-		slog.Error("[SlackAI] Slack API returned error", "error", result.Error)
-		return "", fmt.Errorf("slack API error: %s", result.Error)
-	}
-
-	slog.Debug("[SlackAI] Message posted successfully", "timestamp", result.Timestamp)
-	return result.Timestamp, nil
+	return groups
 }
 
 var (

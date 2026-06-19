@@ -3,9 +3,11 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -468,6 +470,133 @@ func TestSlackAIClient_PostMessageWithFeedback_APIError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "too_many_attachments") {
 		t.Errorf("expected error to contain 'too_many_attachments', got: %v", err)
+	}
+}
+
+// hasFeedbackWidget reports whether a posted message's blocks include the
+// feedback affordances (the native thumbs widget or the comment button).
+func hasFeedbackWidget(blocks []any) bool {
+	for _, b := range blocks {
+		block, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		if block["type"] == "context_actions" || block["block_id"] == feedbackCommentBlockID {
+			return true
+		}
+	}
+	return false
+}
+
+// A reply long enough to exceed Slack's 50-block cap must fan out across
+// multiple threaded messages rather than being truncated. The feedback widgets
+// ride only on the final message, and no content section is dropped.
+func TestSlackAIClient_PostMessageWithFeedback_FansOutLongReply(t *testing.T) {
+	var (
+		bodies []map[string]any
+		mu     sync.Mutex
+	)
+	client, cleanup := newTestAIClient(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		bodies = append(bodies, body)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "9999.000001"})
+	})
+	defer cleanup()
+
+	// 60 lines of ~2900 chars each → splitIntoChunks(3000) yields 60 section
+	// blocks, well over the 50-block limit. Each line is tagged so we can
+	// confirm every one survives the fan-out.
+	const numLines = 60
+	lines := make([]string, numLines)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("L%02d-", i) + strings.Repeat("x", 2900)
+	}
+	content := strings.Join(lines, "\n")
+
+	if _, err := client.PostMessageWithFeedback(context.Background(), "C123", content, "1234.000001"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(bodies) < 2 {
+		t.Fatalf("expected the long reply to fan out across multiple messages, got %d", len(bodies))
+	}
+
+	// Every message stays within Slack's block cap, threads correctly, and only
+	// the final one carries the feedback widgets.
+	var allText strings.Builder
+	for i, body := range bodies {
+		if body["thread_ts"] != "1234.000001" {
+			t.Errorf("message %d: expected thread_ts to be set", i)
+		}
+		blocks, _ := body["blocks"].([]any)
+		if len(blocks) > slackMaxBlocksPerMessage {
+			t.Errorf("message %d: %d blocks exceeds cap of %d", i, len(blocks), slackMaxBlocksPerMessage)
+		}
+		isLast := i == len(bodies)-1
+		if got := hasFeedbackWidget(blocks); got != isLast {
+			t.Errorf("message %d: feedback widget present=%v, want %v (isLast=%v)", i, got, isLast, isLast)
+		}
+		for _, b := range blocks {
+			block, _ := b.(map[string]any)
+			if text, ok := block["text"].(map[string]any); ok {
+				if s, ok := text["text"].(string); ok {
+					allText.WriteString(s)
+				}
+			}
+		}
+	}
+
+	// No content dropped: every line tag appears in the posted section text.
+	for i := range lines {
+		tag := fmt.Sprintf("L%02d-", i)
+		if !strings.Contains(allText.String(), tag) {
+			t.Errorf("content line %s was dropped from the fanned-out reply", tag)
+		}
+	}
+}
+
+func TestBatchBlocks(t *testing.T) {
+	block := func(id string) map[string]any { return map[string]any{"id": id} }
+	mk := func(n int) []map[string]any {
+		out := make([]map[string]any, n)
+		for i := range out {
+			out[i] = block(fmt.Sprintf("c%d", i))
+		}
+		return out
+	}
+	trailing := []map[string]any{block("t0"), block("t1"), block("t2")}
+
+	tests := []struct {
+		name       string
+		content    int
+		wantGroups []int // block count per group
+	}{
+		{"empty content → trailing only", 0, []int{3}},
+		{"fits in one message", 10, []int{13}},
+		{"exactly at cap with trailing", 47, []int{50}},
+		{"trailing overflows into its own message", 48, []int{48, 3}},
+		{"spills to a second message", 60, []int{50, 13}},
+		{"full first message, trailing-only tail", 50, []int{50, 3}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			groups := batchBlocks(mk(tt.content), trailing, 50)
+			if len(groups) != len(tt.wantGroups) {
+				t.Fatalf("got %d groups, want %d", len(groups), len(tt.wantGroups))
+			}
+			for i, want := range tt.wantGroups {
+				if len(groups[i]) != want {
+					t.Errorf("group %d: got %d blocks, want %d", i, len(groups[i]), want)
+				}
+			}
+		})
 	}
 }
 
