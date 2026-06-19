@@ -54,8 +54,21 @@ func newTestSlackAdapter(t *testing.T) (*SlackAdapter, *[]slackCall, func()) {
 		})
 		callsMu.Unlock()
 
-		// Return a successful Slack API response
 		w.Header().Set("Content-Type", "application/json")
+
+		// canPostToThread probes conversations.replies before any threaded
+		// post. Echo the requested ts back as a live parent so the guard
+		// allows the post through.
+		if r.URL.Path == "/conversations.replies" {
+			ts, _ := body["ts"].(string)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"ok":       true,
+				"messages": []map[string]interface{}{{"ts": ts}},
+			})
+			return
+		}
+
+		// Return a successful Slack API response
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"ok":      true,
 			"ts":      "1234567890.000001",
@@ -122,6 +135,60 @@ func TestSlackAdapter_HandleAgentResponse_ContentEnd_PostsMessage(t *testing.T) 
 	}
 	if !found {
 		t.Error("expected chat.postMessage call for END chunk")
+	}
+}
+
+// When the thread parent has been deleted, Slack would silently promote a
+// threaded reply to a top-level channel message. canPostToThread detects the
+// missing parent (thread_not_found) and the adapter skips the post entirely
+// rather than leak the reply into the channel.
+func TestSlackAdapter_HandleAgentResponse_ContentEnd_SkipsWhenParentDeleted(t *testing.T) {
+	var (
+		calls   []slackCall
+		callsMu sync.Mutex
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		callsMu.Lock()
+		calls = append(calls, slackCall{Method: r.URL.Path})
+		callsMu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		// Parent is gone: conversations.replies reports thread_not_found.
+		if r.URL.Path == "/conversations.replies" {
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "thread_not_found"})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "1234567890.000001"})
+	}))
+	defer server.Close()
+
+	a := &SlackAdapter{
+		client:         slackapi.New("xoxb-test-token", slackapi.OptionAPIURL(server.URL+"/")),
+		aiClient:       &SlackAIClient{botToken: "xoxb-test-token", httpClient: server.Client(), baseURL: server.URL},
+		rateLimiter:    NewRateLimiter(100, 100),
+		config:         adapter.Config{},
+		contentBuffers: make(map[string]string),
+	}
+
+	convID := "C123-1234567890.000001"
+	for _, resp := range []*pb.AgentResponse{
+		{ConversationId: convID, Payload: &pb.AgentResponse_Content{Content: &pb.ContentChunk{Type: pb.ContentChunk_START}}},
+		{ConversationId: convID, Payload: &pb.AgentResponse_Content{Content: &pb.ContentChunk{Type: pb.ContentChunk_DELTA, Content: "Here is my answer"}}},
+		{ConversationId: convID, Payload: &pb.AgentResponse_Content{Content: &pb.ContentChunk{Type: pb.ContentChunk_END}}},
+	} {
+		if err := a.HandleAgentResponse(t.Context(), resp); err != nil {
+			t.Fatalf("HandleAgentResponse failed: %v", err)
+		}
+	}
+
+	callsMu.Lock()
+	defer callsMu.Unlock()
+	for _, call := range calls {
+		if call.Method == "/chat.postMessage" {
+			t.Fatal("expected no chat.postMessage when the thread parent is deleted")
+		}
 	}
 }
 
