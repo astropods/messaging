@@ -14,6 +14,13 @@
 //	go run ./cmd/slackreplytest -channel C0123456789 -input cmd/slackreplytest/testdata/reply.md
 //	cat reply.md | go run ./cmd/slackreplytest -channel C0123456789 -input -
 //
+// Pass -markdown-block to post the raw content as one native Slack markdown
+// block (letting Slack render it) instead of the custom pipeline, to compare
+// the two renderings side by side:
+//
+//	go run ./cmd/slackreplytest -channel C0123456789 -input cmd/slackreplytest/testdata/reply.md
+//	go run ./cmd/slackreplytest -channel C0123456789 -input cmd/slackreplytest/testdata/reply.md -markdown-block
+//
 // The bot token must belong to an app configured as a Slack AI assistant —
 // PostMessageWithFeedback attaches the native feedback widgets, which a plain
 // bot will reject with invalid_blocks. That is the same requirement the adapter
@@ -29,6 +36,7 @@ import (
 	"strings"
 
 	"github.com/astropods/messaging/internal/adapter/slack"
+	slackapi "github.com/slack-go/slack"
 )
 
 func main() {
@@ -40,6 +48,7 @@ func main() {
 		dev     = flag.Bool("dev", false, "enable dev-mode footer")
 		agentID = flag.String("agent-id", "", "agent ID rendered in the footer")
 		verbose = flag.Bool("v", true, "log each posted message part to stderr")
+		mdBlock = flag.Bool("markdown-block", false, "post the raw content as one native Slack markdown block (lets Slack render it) instead of the custom pipeline")
 	)
 	flag.Parse()
 
@@ -63,11 +72,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "posting %d chars to %s (thread=%q)\n", len(content), *channel, *thread)
+	fmt.Fprintf(os.Stderr, "posting %d chars to %s (thread=%q, markdown-block=%v)\n", len(content), *channel, *thread, *mdBlock)
 
-	client := slack.NewSlackAIClient(token, *dev, *agentID)
-
-	ts, err := client.PostMessageWithFeedback(context.Background(), *channel, content, *thread)
+	var ts string
+	if *mdBlock {
+		ts, err = postMarkdownBlock(token, *channel, *thread, content)
+	} else {
+		client := slack.NewSlackAIClient(token, *dev, *agentID)
+		ts, err = client.PostMessageWithFeedback(context.Background(), *channel, content, *thread)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "post failed: %v\n", err)
 		os.Exit(1)
@@ -76,6 +89,25 @@ func main() {
 	// If we started a new thread, replies fan out under this ts; print it so you
 	// can re-run with -thread <ts> to test follow-up behavior.
 	fmt.Println(ts)
+}
+
+// postMarkdownBlock posts the raw content as a single native Slack markdown
+// block and lets Slack do the rendering (and any server-side block splitting).
+// This is the comparison path for evaluating whether the markdown block can
+// replace the adapter's custom conversion pipeline. No feedback widgets are
+// attached — the point is to eyeball content rendering (tables, code, "See
+// more"). Returns the posted message timestamp.
+func postMarkdownBlock(token, channel, thread, content string) (string, error) {
+	api := slackapi.New(token)
+	opts := []slackapi.MsgOption{
+		slackapi.MsgOptionText("markdown-block render test", false), // notification fallback only
+		slackapi.MsgOptionBlocks(slackapi.NewMarkdownBlock("", content)),
+	}
+	if thread != "" {
+		opts = append(opts, slackapi.MsgOptionTS(thread))
+	}
+	_, ts, err := api.PostMessageContext(context.Background(), channel, opts...)
+	return ts, err
 }
 
 // resolveContent returns the message body: a generated sample when -sample > 0,

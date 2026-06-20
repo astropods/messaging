@@ -44,7 +44,27 @@ go run . -channel C0123456789 -thread 1718000000.000100
 
 # Dev-mode footer / agent id in the footer
 go run . -channel C0123456789 -dev -agent-id my-agent
+
+# Compare: post the raw content as one native Slack markdown block (Slack renders it)
+go run . -channel C0123456789 -input testdata/reply.md                  # custom pipeline
+go run . -channel C0123456789 -input testdata/reply.md -markdown-block   # native markdown block
 ```
+
+## Comparing the custom pipeline vs Slack's native markdown block
+
+`slack-go` exposes a native `markdown` block (`slack.NewMarkdownBlock`) built for
+LLM output: you hand Slack raw Markdown and it does the rendering and any
+server-side block splitting. `-markdown-block` posts the content that way (no
+feedback widgets — the point is to eyeball content rendering) so you can compare
+it against the adapter's hand-rolled conversion. Look at whether the native block:
+
+- renders Markdown **tables** (early versions did not),
+- avoids the per-block **"See more"** fold on long content and code, and
+- stays within limits (per-block character cap, and how its server-side split
+  interacts with the 50-block message limit).
+
+If it renders cleanly, most of the custom pipeline in `slack_ai_api.go` could be
+replaced by a single markdown block plus a thin length guard.
 
 (From the module root, substitute `go run ./cmd/slackreplytest` and prefix the
 `-input` paths with `cmd/slackreplytest/`.)
@@ -64,6 +84,7 @@ to test follow-up replies in the same thread. Each posted part is logged to
 | `-dev` | false | Enable the dev-mode footer |
 | `-agent-id` | "" | Agent ID rendered in the footer |
 | `-v` | true | Log each posted message part to stderr |
+| `-markdown-block` | false | Post raw content as one native Slack markdown block instead of the custom pipeline |
 
 When neither `-input` nor `-sample` is given, a built-in 40-paragraph sample is
 used.
