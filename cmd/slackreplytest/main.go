@@ -105,7 +105,7 @@ func postMarkdownBlock(token, channel, thread, content string) (string, error) {
 	// So split content into ≤12k chunks and post one markdown block per message,
 	// fanning out into the thread — the same shape the production pipeline uses.
 	const maxMarkdownBlockChars = 11900
-	chunks := chunkOnNewlines(content, maxMarkdownBlockChars)
+	chunks := chunkForMarkdownBlocks(content, maxMarkdownBlockChars)
 	fmt.Fprintf(os.Stderr, "markdown-block: %d message(s)\n", len(chunks))
 
 	var firstTS string
@@ -134,24 +134,40 @@ func postMarkdownBlock(token, channel, thread, content string) (string, error) {
 	return firstTS, nil
 }
 
-// chunkOnNewlines splits s into pieces of at most max characters, breaking on
-// the last newline within the limit so Markdown structures aren't cut mid-line.
-func chunkOnNewlines(s string, max int) []string {
+// chunkForMarkdownBlocks splits s into pieces of at most max characters,
+// breaking only on line boundaries that fall outside a fenced code block — so a
+// ```code``` block is never cut in two (which would drop its closing fence and
+// reinterpret the rest of the message as Markdown).
+func chunkForMarkdownBlocks(s string, max int) []string {
 	if len(s) <= max {
 		return []string{s}
 	}
-	var out []string
-	for len(s) > max {
-		cut := strings.LastIndex(s[:max], "\n")
-		if cut < 1 {
-			cut = max
+	var (
+		out     []string
+		cur     strings.Builder
+		inFence bool
+	)
+	flush := func() {
+		if cur.Len() > 0 {
+			out = append(out, strings.TrimRight(cur.String(), "\n"))
+			cur.Reset()
 		}
-		out = append(out, s[:cut])
-		s = strings.TrimPrefix(s[cut:], "\n")
 	}
-	if s != "" {
-		out = append(out, s)
+	for _, line := range strings.Split(s, "\n") {
+		// Only break when we're not inside a fence; checked before toggling so a
+		// split can land just before an opening fence but never inside one.
+		if !inFence && cur.Len() > 0 && cur.Len()+len(line)+1 > max {
+			flush()
+		}
+		if cur.Len() > 0 {
+			cur.WriteByte('\n')
+		}
+		cur.WriteString(line)
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			inFence = !inFence
+		}
 	}
+	flush()
 	return out
 }
 
