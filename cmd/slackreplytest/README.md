@@ -96,6 +96,8 @@ used.
 
 ## Fixtures
 
-`testdata/reply.md` is a realistic long agent reply (headings, a table, a code
-block, a blockquote run, links, and long paragraphs) for exercising the split
-without hand-crafting input each time.
+- `testdata/reply.md` — a realistic long agent reply (headings, tables, code
+  blocks, a blockquote run, links, long paragraphs) for exercising the split.
+- `testdata/plain.md` — otherwise-plain prose (no headings/bold/links) with one
+  fenced code block and one table embedded, to test how each path handles
+  structured islands inside unformatted text.
