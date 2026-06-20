@@ -473,24 +473,9 @@ func TestSlackAIClient_PostMessageWithFeedback_APIError(t *testing.T) {
 	}
 }
 
-// hasFeedbackWidget reports whether a posted message's blocks include the
-// feedback affordances (the native thumbs widget or the comment button).
-func hasFeedbackWidget(blocks []any) bool {
-	for _, b := range blocks {
-		block, ok := b.(map[string]any)
-		if !ok {
-			continue
-		}
-		if block["type"] == "context_actions" || block["block_id"] == feedbackCommentBlockID {
-			return true
-		}
-	}
-	return false
-}
-
-// A reply long enough to exceed Slack's 50-block cap must fan out across
-// multiple threaded messages rather than being truncated. The feedback widgets
-// ride only on the final message, and no content section is dropped.
+// A reply longer than the per-block limit fans out across multiple threaded
+// messages, each carrying one markdown block; the feedback widgets ride only on
+// the final message and no content is dropped.
 func TestSlackAIClient_PostMessageWithFeedback_FansOutLongReply(t *testing.T) {
 	var (
 		bodies []map[string]any
@@ -507,13 +492,12 @@ func TestSlackAIClient_PostMessageWithFeedback_FansOutLongReply(t *testing.T) {
 	})
 	defer cleanup()
 
-	// 60 lines of ~2900 chars each → splitIntoChunks(3000) yields 60 section
-	// blocks, well over the 50-block limit. Each line is tagged so we can
-	// confirm every one survives the fan-out.
-	const numLines = 60
+	// ~40 lines of ~600 chars → well over the 10k per-block limit, forcing a
+	// fan-out. Each line is tagged so we can confirm none is dropped.
+	const numLines = 40
 	lines := make([]string, numLines)
 	for i := range lines {
-		lines[i] = fmt.Sprintf("L%02d-", i) + strings.Repeat("x", 2900)
+		lines[i] = fmt.Sprintf("L%02d-", i) + strings.Repeat("x", 600)
 	}
 	content := strings.Join(lines, "\n")
 
@@ -523,316 +507,42 @@ func TestSlackAIClient_PostMessageWithFeedback_FansOutLongReply(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-
 	if len(bodies) < 2 {
 		t.Fatalf("expected the long reply to fan out across multiple messages, got %d", len(bodies))
 	}
 
-	// Every message stays within Slack's block cap, threads correctly, and only
-	// the final one carries the feedback widgets.
 	var allText strings.Builder
 	for i, body := range bodies {
 		if body["thread_ts"] != "1234.000001" {
 			t.Errorf("message %d: expected thread_ts to be set", i)
 		}
 		blocks, _ := body["blocks"].([]any)
-		if len(blocks) > slackMaxBlocksPerMessage {
-			t.Errorf("message %d: %d blocks exceeds cap of %d", i, len(blocks), slackMaxBlocksPerMessage)
+		if len(blocks) == 0 {
+			t.Fatalf("message %d: no blocks", i)
 		}
-		isLast := i == len(bodies)-1
-		if got := hasFeedbackWidget(blocks); got != isLast {
-			t.Errorf("message %d: feedback widget present=%v, want %v (isLast=%v)", i, got, isLast, isLast)
+		// The first block is always the markdown content block.
+		md, _ := blocks[0].(map[string]any)
+		if md["type"] != "markdown" {
+			t.Errorf("message %d: expected first block to be markdown, got %v", i, md["type"])
 		}
-		for _, b := range blocks {
-			block, _ := b.(map[string]any)
-			if text, ok := block["text"].(map[string]any); ok {
-				if s, ok := text["text"].(string); ok {
-					allText.WriteString(s)
-				}
+		if s, ok := md["text"].(string); ok {
+			allText.WriteString(s)
+			if len(s) > maxMarkdownBlockChars {
+				t.Errorf("message %d: markdown block is %d chars, exceeds cap %d", i, len(s), maxMarkdownBlockChars)
 			}
 		}
+		// Feedback widgets ride only on the last message.
+		hasFeedback := len(blocks) > 1
+		if isLast := i == len(bodies)-1; hasFeedback != isLast {
+			t.Errorf("message %d: feedback present=%v, want %v", i, hasFeedback, isLast)
+		}
 	}
-
-	// No content dropped: every line tag appears in the posted section text.
 	for i := range lines {
 		tag := fmt.Sprintf("L%02d-", i)
 		if !strings.Contains(allText.String(), tag) {
 			t.Errorf("content line %s was dropped from the fanned-out reply", tag)
 		}
 	}
-}
-
-func TestBatchBlocks(t *testing.T) {
-	block := func(id string) map[string]any { return map[string]any{"id": id} }
-	mk := func(n int) []map[string]any {
-		out := make([]map[string]any, n)
-		for i := range out {
-			out[i] = block(fmt.Sprintf("c%d", i))
-		}
-		return out
-	}
-	trailing := []map[string]any{block("t0"), block("t1"), block("t2")}
-
-	tests := []struct {
-		name       string
-		content    int
-		wantGroups []int // block count per group
-	}{
-		{"empty content → trailing only", 0, []int{3}},
-		{"fits in one message", 10, []int{13}},
-		{"exactly at cap with trailing", 47, []int{50}},
-		{"trailing overflows into its own message", 48, []int{48, 3}},
-		{"spills to a second message", 60, []int{50, 13}},
-		{"full first message, trailing-only tail", 50, []int{50, 3}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			groups := batchBlocks(mk(tt.content), trailing, 50)
-			if len(groups) != len(tt.wantGroups) {
-				t.Fatalf("got %d groups, want %d", len(groups), len(tt.wantGroups))
-			}
-			for i, want := range tt.wantGroups {
-				if len(groups[i]) != want {
-					t.Errorf("group %d: got %d blocks, want %d", i, len(groups[i]), want)
-				}
-			}
-		})
-	}
-}
-
-func TestSplitForSectionBlocks_ShortTextStaysWhole(t *testing.T) {
-	chunks := splitForSectionBlocks("Hello there. How are you?", 250)
-	if len(chunks) != 1 || chunks[0] != "Hello there. How are you?" {
-		t.Errorf("short text should stay one chunk, got %#v", chunks)
-	}
-}
-
-func TestSplitForSectionBlocks_KeepsEveryChunkUnderTarget(t *testing.T) {
-	// A long single paragraph of real sentences must break into multiple
-	// chunks so Slack doesn't collapse it behind "See more".
-	sentence := "This is a reasonably long sentence that carries some weight. "
-	para := strings.Repeat(sentence, 20) // ~1200 chars, no newlines
-	chunks := splitForSectionBlocks(para, 250)
-
-	if len(chunks) < 2 {
-		t.Fatalf("expected the long paragraph to split, got %d chunk(s)", len(chunks))
-	}
-	for i, c := range chunks {
-		// Chunks may slightly exceed the target (a whole sentence is never
-		// split), but should stay in the same ballpark — never near 3000.
-		if len(c) > 400 {
-			t.Errorf("chunk %d is %d chars, expected near the 250 target", i, len(c))
-		}
-	}
-	// Sentence punctuation is preserved across the split.
-	if !strings.Contains(strings.Join(chunks, " "), "weight.") {
-		t.Error("expected sentence punctuation to be preserved")
-	}
-}
-
-func TestSplitForSectionBlocks_KeepsCodeFenceWhole(t *testing.T) {
-	// A fenced block longer than the target must not be split across chunks,
-	// or the ``` pairing breaks.
-	code := "```\n" + strings.Repeat("x = 1\n", 100) + "```"
-	text := "Intro line.\n" + code + "\nOutro line."
-	chunks := splitForSectionBlocks(text, 250)
-
-	fenceChunks := 0
-	for _, c := range chunks {
-		if strings.Contains(c, "```") {
-			fenceChunks++
-			if strings.Count(c, "```") != 2 {
-				t.Errorf("code fence split across chunks: %q", c)
-			}
-		}
-	}
-	if fenceChunks != 1 {
-		t.Errorf("expected the code block to occupy exactly one chunk, got %d", fenceChunks)
-	}
-}
-
-func TestSplitForSectionBlocks_GluesBlockquoteRun(t *testing.T) {
-	text := "> line one\n> line two\n> line three"
-	chunks := splitForSectionBlocks(text, 250)
-	if len(chunks) != 1 {
-		t.Fatalf("expected a blockquote run to stay together, got %d chunks: %#v", len(chunks), chunks)
-	}
-}
-
-func TestSplitForSectionBlocks_WrapsUnbreakableSentence(t *testing.T) {
-	// A long clause with no sentence-ending punctuation (commas, "e.g.", an
-	// em-dash) used to stay a single oversized block that Slack folded behind a
-	// "See more". It must now be word-wrapped so every block stays at/near the
-	// target.
-	line := "Reference a comparable account in financial services that discovered " +
-		"broad free-tier sprawl and consolidated under a single contract to unlock " +
-		"a specific workflow outcome (e.g., shared reporting templates across " +
-		"business units, centralized audit trails, or cross-team data governance " +
-		"visibility) — the kind of outcome that turns scattered free usage into a " +
-		"single governed contract with measurable savings and clearer ownership"
-
-	const target = 250
-	chunks := splitForSectionBlocks(line, target)
-	if len(chunks) < 2 {
-		t.Fatalf("expected the unbreakable clause to wrap into multiple chunks, got %d", len(chunks))
-	}
-	for i, c := range chunks {
-		if len(c) > target {
-			t.Errorf("chunk %d is %d chars, exceeds target %d (would trigger See more): %q", i, len(c), target, c)
-		}
-	}
-	// Nothing dropped: joining the chunks reproduces the words in order.
-	joined := strings.Join(chunks, " ")
-	for _, w := range []string{"Reference", "free-tier", "(e.g.,", "governance", "ownership"} {
-		if !strings.Contains(joined, w) {
-			t.Errorf("word %q was dropped during wrapping", w)
-		}
-	}
-}
-
-func TestWordWrap(t *testing.T) {
-	if got := wordWrap("short text", 250); len(got) != 1 || got[0] != "short text" {
-		t.Errorf("short text should pass through unchanged, got %#v", got)
-	}
-
-	wrapped := wordWrap(strings.Repeat("word ", 100), 50)
-	for i, p := range wrapped {
-		if len(p) > 50 {
-			t.Errorf("piece %d exceeds max: %d chars", i, len(p))
-		}
-	}
-
-	// A single word longer than the max is hard-split.
-	long := strings.Repeat("x", 120)
-	got := wordWrap(long, 50)
-	if len(got) != 3 {
-		t.Fatalf("expected a 120-char word to hard-split into 3 pieces of ≤50, got %d", len(got))
-	}
-	for i, p := range got {
-		if len(p) > 50 {
-			t.Errorf("hard-split piece %d exceeds max: %d chars", i, len(p))
-		}
-	}
-}
-
-func TestSplitSentences(t *testing.T) {
-	got := splitSentences("First sentence. Second one! Third?")
-	want := []string{"First sentence.", "Second one!", "Third?"}
-	if len(got) != len(want) {
-		t.Fatalf("got %#v, want %#v", got, want)
-	}
-	for i := range want {
-		if strings.TrimSpace(got[i]) != want[i] {
-			t.Errorf("sentence %d: got %q, want %q", i, got[i], want[i])
-		}
-	}
-}
-
-func TestStripCodeFenceLang(t *testing.T) {
-	got := stripCodeFenceLang("```python\nimport os\n```")
-	if strings.Contains(got, "```python") {
-		t.Errorf("language hint not stripped: %q", got)
-	}
-	if !strings.HasPrefix(got, "```\n") {
-		t.Errorf("expected a bare opening fence, got %q", got)
-	}
-	if !strings.Contains(got, "import os") || strings.Count(got, "```") != 2 {
-		t.Errorf("code body / closing fence not preserved: %q", got)
-	}
-}
-
-func TestBuildContentBlocks_InterleavesTablesAndProse(t *testing.T) {
-	content := "Intro paragraph here.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nOutro paragraph here."
-	blocks := buildContentBlocks(content)
-
-	if len(blocks) < 3 {
-		t.Fatalf("expected at least 3 blocks (prose, table, prose), got %d", len(blocks))
-	}
-	if blocks[0]["type"] != "section" {
-		t.Errorf("first block should be a section, got %v", blocks[0]["type"])
-	}
-	foundTable := false
-	for _, b := range blocks {
-		if b["type"] == "table" {
-			foundTable = true
-		}
-	}
-	if !foundTable {
-		t.Error("expected a native table block, got none")
-	}
-	if last := blocks[len(blocks)-1]; last["type"] != "section" {
-		t.Errorf("last block should be the outro section, got %v", last["type"])
-	}
-}
-
-func TestBuildTableBlocks(t *testing.T) {
-	md := "| Name | Link |\n|------|------|\n| **bold** | [text](http://x) |\n| plain | y |"
-	blocks := buildTableBlocks(md)
-	if len(blocks) != 1 {
-		t.Fatalf("expected 1 table block, got %d", len(blocks))
-	}
-	tb := blocks[0]
-	if tb["type"] != "table" {
-		t.Fatalf("expected type table, got %v", tb["type"])
-	}
-	if cols, _ := tb["column_settings"].([]map[string]interface{}); len(cols) != 2 {
-		t.Errorf("expected 2 column settings, got %d", len(cols))
-	}
-	rows, _ := tb["rows"].([]interface{})
-	if len(rows) != 3 { // header + 2 data rows
-		t.Fatalf("expected 3 rows (header + 2 data), got %d", len(rows))
-	}
-
-	// First data cell renders **bold** as a bold text element.
-	bold := cellElements(t, rows[1], 0)
-	if len(bold) == 0 || bold[0]["type"] != "text" {
-		t.Fatalf("expected a text element, got %#v", bold)
-	}
-	if style, _ := bold[0]["style"].(map[string]interface{}); style["bold"] != true {
-		t.Errorf("expected bold style on first data cell, got %#v", bold[0])
-	}
-	// Second data cell renders the Markdown link as a link element.
-	link := cellElements(t, rows[1], 1)
-	if len(link) == 0 || link[0]["type"] != "link" || link[0]["url"] != "http://x" {
-		t.Errorf("expected a link element to http://x, got %#v", link)
-	}
-}
-
-func TestBuildTableBlocks_SplitsLargeTable(t *testing.T) {
-	var b strings.Builder
-	b.WriteString("| A | B |\n|---|---|\n")
-	for i := range 150 {
-		fmt.Fprintf(&b, "| r%d | v%d |\n", i, i)
-	}
-	blocks := buildTableBlocks(b.String())
-	if len(blocks) < 2 {
-		t.Fatalf("expected the 150-row table to split, got %d block(s)", len(blocks))
-	}
-	for i, blk := range blocks {
-		rows, _ := blk["rows"].([]interface{})
-		if len(rows) > slackTableMaxRows {
-			t.Errorf("block %d has %d rows, exceeds %d", i, len(rows), slackTableMaxRows)
-		}
-		if header := cellElements(t, rows[0], 0); len(header) == 0 || header[0]["text"] != "A" {
-			t.Errorf("block %d should repeat the header, got %#v", i, header)
-		}
-	}
-}
-
-// cellElements returns the rich_text_section elements of cell c in a table row.
-func cellElements(t *testing.T, row interface{}, c int) []map[string]interface{} {
-	t.Helper()
-	cells, ok := row.([]interface{})
-	if !ok || c >= len(cells) {
-		t.Fatalf("bad row at cell %d: %#v", c, row)
-	}
-	cell, _ := cells[c].(map[string]interface{})
-	sections, _ := cell["elements"].([]map[string]interface{})
-	if len(sections) == 0 {
-		t.Fatalf("no rich_text_section in cell: %#v", cell)
-	}
-	els, _ := sections[0]["elements"].([]map[string]interface{})
-	return els
 }
 
 // --- Tests for postJSON error paths ---
@@ -913,159 +623,6 @@ func TestSlackAIClient_postJSON_SetsHeaders(t *testing.T) {
 	}
 	if auth := capturedHeaders.Get("Authorization"); auth != "Bearer xoxb-test-token" {
 		t.Errorf("expected Authorization 'Bearer xoxb-test-token', got %q", auth)
-	}
-}
-
-// --- Tests for convertLinks ---
-
-func TestConvertLinks(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"simple link", "[click here](https://example.com)", "<https://example.com|click here>"},
-		{"jira link", "[FLOWS-123](https://jira.atlassian.net/browse/FLOWS-123)", "<https://jira.atlassian.net/browse/FLOWS-123|FLOWS-123>"},
-		{"multiple links", "[a](https://a.com) and [b](https://b.com)", "<https://a.com|a> and <https://b.com|b>"},
-		{"no links", "plain text", "plain text"},
-		{"link in sentence", "see [docs](https://docs.io) for info", "see <https://docs.io|docs> for info"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := convertLinks(tt.in)
-			if got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-// --- Tests for convertBold ---
-
-func TestConvertBold(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"double asterisk", "**bold text**", "*bold text*"},
-		{"multiple bold", "**a** and **b**", "*a* and *b*"},
-		{"bold in sentence", "this is **important** stuff", "this is *important* stuff"},
-		{"single asterisk unchanged", "*italic*", "*italic*"},
-		{"empty bold", "****", "****"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := convertBold(tt.in)
-			if got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-// --- Tests for convertHeadings ---
-
-func TestConvertHeadings(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"h1", "# Title", "*Title*"},
-		{"h2", "## Section", "*Section*"},
-		{"h3", "### Subsection", "*Subsection*"},
-		{"h6", "###### Deep", "*Deep*"},
-		{"heading with surrounding text", "before\n## Middle\nafter", "before\n*Middle*\nafter"},
-		{"not a heading", "this # is not a heading", "this # is not a heading"},
-		{"multiple headings", "# One\n## Two", "*One*\n*Two*"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := convertHeadings(tt.in)
-			if got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-// --- Tests for markdownToMrkdwn (combined) ---
-
-func TestMarkdownToMrkdwn_Combined(t *testing.T) {
-	input := "## Release Notes\n\n**New Features**\n\n- [FLOWS-123](https://jira.com/browse/FLOWS-123): Added feature"
-	got := markdownToMrkdwn(input)
-
-	if !strings.Contains(got, "*Release Notes*") {
-		t.Errorf("heading not converted: %s", got)
-	}
-	if !strings.Contains(got, "*New Features*") {
-		t.Errorf("bold not converted: %s", got)
-	}
-	if !strings.Contains(got, "<https://jira.com/browse/FLOWS-123|FLOWS-123>") {
-		t.Errorf("link not converted: %s", got)
-	}
-}
-
-func TestMarkdownToMrkdwn_PlainText(t *testing.T) {
-	input := "just some plain text"
-	got := markdownToMrkdwn(input)
-	if got != input {
-		t.Errorf("plain text should be unchanged, got %q", got)
-	}
-}
-
-// --- Tests for convertTables ---
-
-func TestConvertTables_SimpleTable(t *testing.T) {
-	input := "| Key | Summary |\n|-----|----------|\n| A-1 | Fix bug |"
-	got := convertTables(input)
-
-	if !strings.HasPrefix(got, "```\n") {
-		t.Errorf("expected code fence opening, got: %q", got)
-	}
-	if !strings.HasSuffix(got, "\n```") {
-		t.Errorf("expected code fence closing, got: %q", got)
-	}
-	if strings.Contains(got, "|---|") {
-		t.Error("separator row should be stripped")
-	}
-	if !strings.Contains(got, "Key") && !strings.Contains(got, "Summary") {
-		t.Error("header cells should be preserved")
-	}
-}
-
-func TestConvertTables_TableWithSurroundingText(t *testing.T) {
-	input := "Before the table\n| A | B |\n|---|---|\n| 1 | 2 |\nAfter the table"
-	got := convertTables(input)
-
-	if !strings.HasPrefix(got, "Before the table\n```\n") {
-		t.Errorf("text before table should be preserved, got: %q", got)
-	}
-	if !strings.HasSuffix(got, "```\nAfter the table") {
-		t.Errorf("text after table should be preserved, got: %q", got)
-	}
-}
-
-func TestConvertTables_NoTable(t *testing.T) {
-	input := "Just some regular text\nwith multiple lines"
-	got := convertTables(input)
-	if got != input {
-		t.Errorf("text without tables should be unchanged, got: %q", got)
-	}
-}
-
-func TestConvertTables_SeparatorRowStripped(t *testing.T) {
-	input := "| H1 | H2 |\n|:---|---:|\n| a | b |"
-	got := convertTables(input)
-
-	lines := strings.Split(got, "\n")
-	for _, line := range lines {
-		if strings.TrimSpace(line) != "" && strings.TrimSpace(line) != "```" {
-			if strings.Contains(line, "---") {
-				t.Errorf("separator row should be removed, found: %q", line)
-			}
-		}
 	}
 }
 
