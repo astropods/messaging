@@ -11,13 +11,20 @@ being up to 3000 chars each, were collapsed by Slack behind a "See more" fold.
 
 Replies now render in full and inline.
 
-- `splitForSectionBlocks` breaks the reply into ~250-char section blocks (on
+- `buildContentBlocks` lifts Markdown tables out of the reply and renders them as
+  native Slack `table` blocks (rich_text cells preserve inline bold and links,
+  split at the 100-row limit with the header repeated), the approach the Yoda
+  agent uses. Tables no longer render as monospace code fences.
+- `splitForSectionBlocks` breaks the prose into ~250-char section blocks (on
   line and sentence boundaries) so Slack renders each block without a "See more"
-  fold, the approach the Yoda agent uses. A single over-long clause with no
-  sentence break (commas, "e.g.", an em-dash) is word-wrapped so it can't remain
-  one oversized block. Fenced code blocks and runs of blockquote lines are kept
-  intact; `splitIntoChunks` remains a safety net for any chunk still over the
-  hard 3000-char section limit.
+  fold. A single over-long clause with no sentence break (commas, "e.g.", an
+  em-dash) is word-wrapped so it can't remain one oversized block. Fenced code
+  blocks and runs of blockquote lines are kept intact; `splitIntoChunks` remains
+  a safety net for any chunk still over the hard 3000-char section limit.
+- Code-fence language hints (```python) are stripped, since Slack mrkdwn has no
+  syntax highlighting and would otherwise render the hint as a literal first
+  line. A long code block stays one block (and may carry a "See more"), since
+  splitting it would break the fence — that is an intentional trade-off.
 - The reply fans out across multiple messages in the same thread instead of
   being truncated. `batchBlocks` splits the section blocks into groups of at
   most 50, gluing the footer + feedback widgets (`feedbackTrailingBlocks`) onto

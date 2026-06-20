@@ -139,36 +139,21 @@ const slackMaxBlocksPerMessage = 50
 // The footer and feedback widgets ride on the final message so the reply ends
 // with a single set of controls. Returns the timestamp of the first message.
 func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, content, threadID string) (string, error) {
-	// Convert standard Markdown to Slack mrkdwn before building blocks.
-	mrkdwn := markdownToMrkdwn(content)
-
-	// Break the reply into small section blocks so Slack renders each one in
-	// full instead of folding long text behind a "See more". splitForSectionBlocks
-	// targets ~250 chars on line/sentence boundaries; the inner splitIntoChunks
-	// is a safety net for any chunk still over Slack's hard 3000-char limit.
-	var sections []map[string]interface{}
-	for _, chunk := range splitForSectionBlocks(mrkdwn, sectionBlockTargetChars) {
-		for _, sec := range splitIntoChunks(chunk, 3000) {
-			sections = append(sections, map[string]interface{}{
-				"type": "section",
-				"text": map[string]interface{}{
-					"type": "mrkdwn",
-					"text": sec,
-				},
-			})
-		}
-	}
+	// Turn the reply into blocks: prose becomes small section blocks (so Slack
+	// renders each inline rather than folding it behind a "See more"), and
+	// Markdown tables become native Slack table blocks.
+	contentBlocks := buildContentBlocks(content)
 
 	// Footer + feedback widgets must stay together on the final message.
 	trailing := c.feedbackTrailingBlocks()
 
-	messages := batchBlocks(sections, trailing, slackMaxBlocksPerMessage)
+	messages := batchBlocks(contentBlocks, trailing, slackMaxBlocksPerMessage)
 
 	var firstTS string
 	for i, blocks := range messages {
 		// The first message carries the full reply text as the notification
 		// fallback; continuations are marked so previews read sensibly.
-		text := mrkdwn
+		text := content
 		if i > 0 {
 			text = "(continued)"
 		}
@@ -307,12 +292,221 @@ func batchBlocks(content, trailing []map[string]interface{}, maxBlocks int) [][]
 	return groups
 }
 
+// slackTableMaxRows is Slack's cap on rows (including the header) in a single
+// table block. Larger tables are split, with the header repeated per chunk.
+const slackTableMaxRows = 100
+
+// buildContentBlocks turns a Markdown reply into Slack blocks. Markdown tables
+// are lifted out and rendered as native table blocks; the prose between them is
+// converted to mrkdwn and chunked into small section blocks (so Slack renders
+// each inline instead of folding it behind a "See more"). A chunk still over
+// Slack's hard 3000-char section limit is split by splitIntoChunks as a
+// safety net.
+func buildContentBlocks(content string) []map[string]interface{} {
+	var blocks []map[string]interface{}
+
+	addProse := func(segment string) {
+		if strings.TrimSpace(segment) == "" {
+			return
+		}
+		mrkdwn := markdownToMrkdwn(segment)
+		for _, chunk := range splitForSectionBlocks(mrkdwn, sectionBlockTargetChars) {
+			for _, sec := range splitIntoChunks(chunk, 3000) {
+				blocks = append(blocks, sectionBlock(sec))
+			}
+		}
+	}
+
+	last := 0
+	for _, loc := range reTableBlock.FindAllStringIndex(content, -1) {
+		addProse(content[last:loc[0]])
+		if table := buildTableBlocks(content[loc[0]:loc[1]]); len(table) > 0 {
+			blocks = append(blocks, table...)
+		} else {
+			// Couldn't parse it as a table — fall back to rendering it as prose
+			// rather than dropping the content.
+			addProse(content[loc[0]:loc[1]])
+		}
+		last = loc[1]
+	}
+	addProse(content[last:])
+
+	return blocks
+}
+
+// sectionBlock builds an mrkdwn section block.
+func sectionBlock(text string) map[string]interface{} {
+	return map[string]interface{}{
+		"type": "section",
+		"text": map[string]interface{}{
+			"type": "mrkdwn",
+			"text": text,
+		},
+	}
+}
+
+// buildTableBlocks converts a Markdown table into one or more native Slack
+// table blocks (rich_text cells preserve inline bold and links). Tables longer
+// than slackTableMaxRows are split, with the header row repeated on each block.
+// Returns nil if the input doesn't parse as a header + separator + ≥1 row.
+func buildTableBlocks(tableMd string) []map[string]interface{} {
+	var lines []string
+	for _, l := range strings.Split(tableMd, "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) < 3 { // header + separator + at least one data row
+		return nil
+	}
+
+	header := splitTableCells(lines[0])
+	numCols := len(header)
+	if numCols == 0 {
+		return nil
+	}
+	headerRow := make([]interface{}, numCols)
+	for i, h := range header {
+		headerRow[i] = tableCell(h)
+	}
+
+	var dataRows [][]interface{}
+	for _, line := range lines[2:] { // lines[1] is the |---|---| separator
+		cells := splitTableCells(line)
+		row := make([]interface{}, numCols)
+		for i := range numCols {
+			if i < len(cells) {
+				row[i] = tableCell(cells[i])
+			} else {
+				row[i] = tableCell("")
+			}
+		}
+		dataRows = append(dataRows, row)
+	}
+
+	colSettings := make([]map[string]interface{}, numCols)
+	for i := range colSettings {
+		colSettings[i] = map[string]interface{}{"is_wrapped": true}
+	}
+
+	chunk := slackTableMaxRows - 1 // leave room for the repeated header
+	var blocks []map[string]interface{}
+	for i := 0; i < len(dataRows); i += chunk {
+		end := i + chunk
+		if end > len(dataRows) {
+			end = len(dataRows)
+		}
+		rows := make([]interface{}, 0, end-i+1)
+		rows = append(rows, headerRow)
+		for _, r := range dataRows[i:end] {
+			rows = append(rows, r)
+		}
+		blocks = append(blocks, map[string]interface{}{
+			"type":            "table",
+			"column_settings": colSettings,
+			"rows":            rows,
+		})
+	}
+	return blocks
+}
+
+// splitTableCells splits a Markdown table row into trimmed cell strings,
+// dropping the leading and trailing pipes.
+func splitTableCells(line string) []string {
+	line = strings.TrimSpace(line)
+	line = strings.TrimPrefix(line, "|")
+	line = strings.TrimSuffix(line, "|")
+	cells := strings.Split(line, "|")
+	for i := range cells {
+		cells[i] = strings.TrimSpace(cells[i])
+	}
+	return cells
+}
+
+// tableCell builds a rich_text table cell, parsing inline bold and links.
+func tableCell(text string) map[string]interface{} {
+	return map[string]interface{}{
+		"type": "rich_text",
+		"elements": []map[string]interface{}{
+			{
+				"type":     "rich_text_section",
+				"elements": parseCellRichElements(text),
+			},
+		},
+	}
+}
+
+// parseCellRichElements parses a cell's Markdown into rich_text elements,
+// handling [text](url) links and **bold** spans; the rest is plain text. Slack
+// rejects empty rich_text sections, so an empty cell yields a single space.
+func parseCellRichElements(s string) []map[string]interface{} {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return []map[string]interface{}{{"type": "text", "text": " "}}
+	}
+
+	var els []map[string]interface{}
+	last := 0
+	for _, m := range reMarkdownLink.FindAllStringSubmatchIndex(s, -1) {
+		if m[0] > last {
+			els = append(els, boldAwareText(s[last:m[0]])...)
+		}
+		els = append(els, map[string]interface{}{
+			"type": "link",
+			"url":  s[m[4]:m[5]],
+			"text": s[m[2]:m[3]],
+		})
+		last = m[1]
+	}
+	if last < len(s) {
+		els = append(els, boldAwareText(s[last:])...)
+	}
+	if len(els) == 0 {
+		els = append(els, map[string]interface{}{"type": "text", "text": s})
+	}
+	return els
+}
+
+// boldAwareText splits plain text on **bold** spans into rich_text "text"
+// elements, marking the bold ones. Empty fragments are skipped.
+func boldAwareText(s string) []map[string]interface{} {
+	var els []map[string]interface{}
+	last := 0
+	for _, m := range reBoldDouble.FindAllStringSubmatchIndex(s, -1) {
+		if t := s[last:m[0]]; t != "" {
+			els = append(els, textElement(t, false))
+		}
+		els = append(els, textElement(s[m[2]:m[3]], true))
+		last = m[1]
+	}
+	if t := s[last:]; t != "" {
+		els = append(els, textElement(t, false))
+	}
+	return els
+}
+
+// textElement builds a rich_text "text" element, optionally bold.
+func textElement(text string, bold bool) map[string]interface{} {
+	el := map[string]interface{}{"type": "text", "text": text}
+	if bold {
+		el["style"] = map[string]interface{}{"bold": true}
+	}
+	return el
+}
+
 var (
 	reMarkdownLink = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 	reBoldDouble   = regexp.MustCompile(`\*\*(.+?)\*\*`)
 	reHeading      = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
 	reTableRow     = regexp.MustCompile(`(?m)^\|(.+)\|$`)
 	reTableSep     = regexp.MustCompile(`(?m)^\|[-| :]+\|$`)
+	// reTableBlock matches a full Markdown table (header, separator, ≥1 row) so
+	// it can be lifted out and rendered as a native Slack table block.
+	reTableBlock = regexp.MustCompile(`(?m)^\|[^\n]+\|\n\|[-:| ]+\|\n(?:\|[^\n]+\|\n?)+`)
+	// reCodeFenceLang matches an opening code fence carrying a language hint
+	// (e.g. ```python). Slack mrkdwn has no syntax highlighting, so the hint
+	// would render as a literal first line of the code block; strip it.
+	reCodeFenceLang = regexp.MustCompile("(?m)^(\\s*```)[A-Za-z0-9_.+-]+[ \\t]*$")
 )
 
 // buildFooterText returns the context-block footer text for a Slack message,
@@ -336,11 +530,18 @@ func buildFooterText(devMode bool, agentID string) string {
 // markdownToMrkdwn converts standard Markdown to Slack mrkdwn.
 // Handles links, bold, headings, and tables (rendered as code blocks).
 func markdownToMrkdwn(md string) string {
+	md = stripCodeFenceLang(md)
 	md = convertTables(md)
 	md = convertLinks(md)
 	md = convertBold(md)
 	md = convertHeadings(md)
 	return md
+}
+
+// stripCodeFenceLang removes the language hint from an opening code fence
+// (```python → ```) since Slack mrkdwn would otherwise render it as text.
+func stripCodeFenceLang(md string) string {
+	return reCodeFenceLang.ReplaceAllString(md, "$1")
 }
 
 // convertLinks converts [text](url) → <url|text>

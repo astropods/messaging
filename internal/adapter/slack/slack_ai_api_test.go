@@ -728,6 +728,113 @@ func TestSplitSentences(t *testing.T) {
 	}
 }
 
+func TestStripCodeFenceLang(t *testing.T) {
+	got := stripCodeFenceLang("```python\nimport os\n```")
+	if strings.Contains(got, "```python") {
+		t.Errorf("language hint not stripped: %q", got)
+	}
+	if !strings.HasPrefix(got, "```\n") {
+		t.Errorf("expected a bare opening fence, got %q", got)
+	}
+	if !strings.Contains(got, "import os") || strings.Count(got, "```") != 2 {
+		t.Errorf("code body / closing fence not preserved: %q", got)
+	}
+}
+
+func TestBuildContentBlocks_InterleavesTablesAndProse(t *testing.T) {
+	content := "Intro paragraph here.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nOutro paragraph here."
+	blocks := buildContentBlocks(content)
+
+	if len(blocks) < 3 {
+		t.Fatalf("expected at least 3 blocks (prose, table, prose), got %d", len(blocks))
+	}
+	if blocks[0]["type"] != "section" {
+		t.Errorf("first block should be a section, got %v", blocks[0]["type"])
+	}
+	foundTable := false
+	for _, b := range blocks {
+		if b["type"] == "table" {
+			foundTable = true
+		}
+	}
+	if !foundTable {
+		t.Error("expected a native table block, got none")
+	}
+	if last := blocks[len(blocks)-1]; last["type"] != "section" {
+		t.Errorf("last block should be the outro section, got %v", last["type"])
+	}
+}
+
+func TestBuildTableBlocks(t *testing.T) {
+	md := "| Name | Link |\n|------|------|\n| **bold** | [text](http://x) |\n| plain | y |"
+	blocks := buildTableBlocks(md)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 table block, got %d", len(blocks))
+	}
+	tb := blocks[0]
+	if tb["type"] != "table" {
+		t.Fatalf("expected type table, got %v", tb["type"])
+	}
+	if cols, _ := tb["column_settings"].([]map[string]interface{}); len(cols) != 2 {
+		t.Errorf("expected 2 column settings, got %d", len(cols))
+	}
+	rows, _ := tb["rows"].([]interface{})
+	if len(rows) != 3 { // header + 2 data rows
+		t.Fatalf("expected 3 rows (header + 2 data), got %d", len(rows))
+	}
+
+	// First data cell renders **bold** as a bold text element.
+	bold := cellElements(t, rows[1], 0)
+	if len(bold) == 0 || bold[0]["type"] != "text" {
+		t.Fatalf("expected a text element, got %#v", bold)
+	}
+	if style, _ := bold[0]["style"].(map[string]interface{}); style["bold"] != true {
+		t.Errorf("expected bold style on first data cell, got %#v", bold[0])
+	}
+	// Second data cell renders the Markdown link as a link element.
+	link := cellElements(t, rows[1], 1)
+	if len(link) == 0 || link[0]["type"] != "link" || link[0]["url"] != "http://x" {
+		t.Errorf("expected a link element to http://x, got %#v", link)
+	}
+}
+
+func TestBuildTableBlocks_SplitsLargeTable(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("| A | B |\n|---|---|\n")
+	for i := range 150 {
+		fmt.Fprintf(&b, "| r%d | v%d |\n", i, i)
+	}
+	blocks := buildTableBlocks(b.String())
+	if len(blocks) < 2 {
+		t.Fatalf("expected the 150-row table to split, got %d block(s)", len(blocks))
+	}
+	for i, blk := range blocks {
+		rows, _ := blk["rows"].([]interface{})
+		if len(rows) > slackTableMaxRows {
+			t.Errorf("block %d has %d rows, exceeds %d", i, len(rows), slackTableMaxRows)
+		}
+		if header := cellElements(t, rows[0], 0); len(header) == 0 || header[0]["text"] != "A" {
+			t.Errorf("block %d should repeat the header, got %#v", i, header)
+		}
+	}
+}
+
+// cellElements returns the rich_text_section elements of cell c in a table row.
+func cellElements(t *testing.T, row interface{}, c int) []map[string]interface{} {
+	t.Helper()
+	cells, ok := row.([]interface{})
+	if !ok || c >= len(cells) {
+		t.Fatalf("bad row at cell %d: %#v", c, row)
+	}
+	cell, _ := cells[c].(map[string]interface{})
+	sections, _ := cell["elements"].([]map[string]interface{})
+	if len(sections) == 0 {
+		t.Fatalf("no rich_text_section in cell: %#v", cell)
+	}
+	els, _ := sections[0]["elements"].([]map[string]interface{})
+	return els
+}
+
 // --- Tests for postJSON error paths ---
 
 func TestSlackAIClient_postJSON_InvalidJSON(t *testing.T) {
