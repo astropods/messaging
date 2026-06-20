@@ -101,23 +101,37 @@ func postMarkdownBlock(token, channel, thread, content string) (string, error) {
 	api := slackapi.New(token)
 
 	// A Slack markdown block is capped at 12000 chars (over it → msg_too_long),
-	// so split long content into multiple markdown blocks on line boundaries.
+	// and a whole message's blocks have their own size limit (msg_blocks_too_long).
+	// So split content into ≤12k chunks and post one markdown block per message,
+	// fanning out into the thread — the same shape the production pipeline uses.
 	const maxMarkdownBlockChars = 11900
-	var blocks []slackapi.Block
-	for _, chunk := range chunkOnNewlines(content, maxMarkdownBlockChars) {
-		blocks = append(blocks, slackapi.NewMarkdownBlock("", chunk))
-	}
-	fmt.Fprintf(os.Stderr, "markdown-block: %d block(s)\n", len(blocks))
+	chunks := chunkOnNewlines(content, maxMarkdownBlockChars)
+	fmt.Fprintf(os.Stderr, "markdown-block: %d message(s)\n", len(chunks))
 
-	opts := []slackapi.MsgOption{
-		slackapi.MsgOptionText("markdown-block render test", false), // notification fallback only
-		slackapi.MsgOptionBlocks(blocks...),
+	var firstTS string
+	for i, chunk := range chunks {
+		opts := []slackapi.MsgOption{
+			slackapi.MsgOptionText("markdown-block render test", false), // notification fallback only
+			slackapi.MsgOptionBlocks(slackapi.NewMarkdownBlock("", chunk)),
+		}
+		// Reply into the given thread; otherwise thread continuations under the
+		// first message so the whole reply stays together.
+		threadTS := thread
+		if threadTS == "" {
+			threadTS = firstTS
+		}
+		if threadTS != "" {
+			opts = append(opts, slackapi.MsgOptionTS(threadTS))
+		}
+		_, ts, err := api.PostMessageContext(context.Background(), channel, opts...)
+		if err != nil {
+			return firstTS, err
+		}
+		if i == 0 {
+			firstTS = ts
+		}
 	}
-	if thread != "" {
-		opts = append(opts, slackapi.MsgOptionTS(thread))
-	}
-	_, ts, err := api.PostMessageContext(context.Background(), channel, opts...)
-	return ts, err
+	return firstTS, nil
 }
 
 // chunkOnNewlines splits s into pieces of at most max characters, breaking on
