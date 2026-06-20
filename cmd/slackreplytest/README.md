@@ -33,11 +33,11 @@ go run . -channel C0123456789
 go run . -channel C0123456789 -sample 60
 
 # Send the saved fixture
-go run . -channel C0123456789 -input testdata/reply.md
+go run . -channel C0123456789 -input testdata/sample.md
 
 # Send your own markdown, or pipe via stdin
-go run . -channel C0123456789 -input path/to/reply.md
-cat testdata/reply.md | go run . -channel C0123456789 -input -
+go run . -channel C0123456789 -input path/to/sample.md
+cat testdata/sample.md | go run . -channel C0123456789 -input -
 
 # Reply into an existing thread (e.g. the ts a previous run printed)
 go run . -channel C0123456789 -thread 1718000000.000100
@@ -46,8 +46,8 @@ go run . -channel C0123456789 -thread 1718000000.000100
 go run . -channel C0123456789 -dev -agent-id my-agent
 
 # Compare: post the raw content as one native Slack markdown block (Slack renders it)
-go run . -channel C0123456789 -input testdata/reply.md                  # custom pipeline
-go run . -channel C0123456789 -input testdata/reply.md -markdown-block   # native markdown block
+go run . -channel C0123456789 -input testdata/sample.md                  # custom pipeline
+go run . -channel C0123456789 -input testdata/sample.md -markdown-block   # native markdown block
 ```
 
 ## Comparing the custom pipeline vs Slack's native markdown block
@@ -96,7 +96,7 @@ used.
 
 ## Fixtures
 
-- `testdata/reply.md` — a realistic long agent reply (headings, tables, code
+- `testdata/sample.md` — a realistic long agent reply (headings, tables, code
   blocks, a blockquote run, links, long paragraphs) for exercising the split.
 - `testdata/plain.md` — otherwise-plain prose (no headings/bold/links) with one
   fenced code block and one table embedded, to test how each path handles

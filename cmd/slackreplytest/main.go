@@ -11,15 +11,15 @@
 //	go run ./cmd/slackreplytest -channel C0123456789
 //	go run ./cmd/slackreplytest -channel C0123456789 -thread 1718000000.000100
 //	go run ./cmd/slackreplytest -channel C0123456789 -sample 60
-//	go run ./cmd/slackreplytest -channel C0123456789 -input cmd/slackreplytest/testdata/reply.md
-//	cat reply.md | go run ./cmd/slackreplytest -channel C0123456789 -input -
+//	go run ./cmd/slackreplytest -channel C0123456789 -input cmd/slackreplytest/testdata/sample.md
+//	cat sample.md | go run ./cmd/slackreplytest -channel C0123456789 -input -
 //
 // Pass -markdown-block to post the raw content as one native Slack markdown
 // block (letting Slack render it) instead of the custom pipeline, to compare
 // the two renderings side by side:
 //
-//	go run ./cmd/slackreplytest -channel C0123456789 -input cmd/slackreplytest/testdata/reply.md
-//	go run ./cmd/slackreplytest -channel C0123456789 -input cmd/slackreplytest/testdata/reply.md -markdown-block
+//	go run ./cmd/slackreplytest -channel C0123456789 -input cmd/slackreplytest/testdata/sample.md
+//	go run ./cmd/slackreplytest -channel C0123456789 -input cmd/slackreplytest/testdata/sample.md -markdown-block
 //
 // The bot token must belong to an app configured as a Slack AI assistant —
 // PostMessageWithFeedback attaches the native feedback widgets, which a plain
