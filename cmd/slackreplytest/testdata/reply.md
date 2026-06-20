@@ -67,3 +67,58 @@ asyncio.run(hammer(pool))
 With `max_pool_size=32` and `acquire_timeout_ms=2000`, the p99 acquire wait climbs past 1.8 seconds almost immediately. Restoring `max_pool_size=64` and `acquire_timeout_ms=250` brings it back under 40 milliseconds. The takeaway is that these two numbers must be tuned together, never independently, and any change to either should be validated under a realistic concurrency profile before it reaches production.
 
 If you have questions about this review or want to volunteer to own one of the remediation items, reply in this thread and we will route it to the right person. Thanks to everyone who jumped on the response and to the on-call engineer who kept the incident channel clear and calm under pressure.
+
+## Customer communication
+
+Because impact was limited to retryable timeouts, we did not post a public status-page incident, but we did proactively reach out to the three enterprise accounts whose dashboards showed elevated checkout latency during the window. Each received a short note explaining that a configuration change had briefly degraded performance, that no orders were lost, and that a fix was already in place. Two of the three replied to thank us for the heads-up; the third asked for a written root-cause summary, which is part of why this document is being shared more widely than usual. The lesson here is that proactive, specific communication — naming the window, the impact, and the resolution — consistently lands better than either silence or a vague "we experienced an issue" boilerplate.
+
+Internally, the incident channel stayed focused because the responder posted a running summary every few minutes rather than narrating every individual action. Anyone joining late could read the pinned summary and immediately understand the current state without scrolling through dozens of messages. We want to make that pinned-running-summary practice a standard expectation for any incident that runs longer than fifteen minutes.
+
+## Detection and monitoring deep-dive
+
+The latency alert worked exactly as designed, firing within seven minutes of the first affected request. What it could not do was tell the responder *why* latency had changed. Our dashboards carry a rollout-marker annotation, but it lives on a different panel than the latency graph, so connecting the two required the responder to mentally overlay two charts. That cognitive step is small when you are calm and enormous when you are eleven minutes into a page with executives watching the channel.
+
+> The single highest-leverage monitoring change we can make is not another threshold alert. It is an alert that says, in plain language, "p99 latency for checkout-api rose 12x within 90 seconds of config rollout `cfg-4821`." That sentence collapses eleven minutes of investigation into a single glance.
+
+We are scoping that correlation alert now. The rough design is to join the latency anomaly stream against the rollout event stream on service and time window, and to fire only when an anomaly begins within a few minutes of a rollout. False positives are a real risk — plenty of latency changes have nothing to do with rollouts — so the first version will be advisory rather than paging, and we will tune the correlation window based on a backtest against the last six months of incidents.
+
+## Capacity and load modeling
+
+A recurring theme across our last several incidents is that we reason about capacity in terms of steady-state averages and then get surprised by behavior under concurrency. Connection pools are the canonical example: average utilization can look perfectly healthy at fifty percent while the pool is intermittently exhausting during short bursts, and it is those bursts that produce the tail latency customers actually feel. Averages hide bursts, and bursts are where incidents live.
+
+| Metric | Steady-state view | Burst reality |
+|--------|-------------------|---------------|
+| Pool utilization | ~50% | 100% during afternoon peaks |
+| Acquire wait p50 | 4ms | 12ms |
+| Acquire wait p99 | 40ms | 1800ms with the bad config |
+| Request slots free | plenty | near zero under load |
+
+The remediation here is partly tooling and partly culture. On tooling, we will add burst-aware panels that show pool utilization at the 99th percentile over short windows rather than as a rolling average. On culture, we want config reviews for any resource-pool parameter to explicitly ask "what does this do under peak concurrency?" rather than "is this value reasonable in isolation?" — because, as this incident showed, two individually reasonable values combined into an unreasonable system.
+
+## Broader organizational lessons
+
+Zooming out, the deepest lesson is about how related settings get reviewed independently. Our configuration system, our review tooling, and our mental models all treat each parameter as a standalone knob. Real systems do not work that way: parameters interact, and the interactions are where the surprises hide. We do not need a heavyweight process to fix this; we need our tooling to surface relationships so reviewers see them without having to already know them.
+
+```yaml
+# Proposed: group coupled parameters so reviewers see them together.
+connection_pool:
+  max_size: 64          # lowering this raises exhaustion probability
+  acquire_timeout_ms: 250
+  # WARNING: max_size and acquire_timeout_ms interact under load.
+  # A small pool with a long timeout creates a reinforcing wait queue.
+  # Validate any change to either under a realistic concurrency profile.
+```
+
+A simple grouping like the snippet above, plus an inline warning, would have made the combined risk visible at review time. It is a small change with outsized leverage, and it generalizes well beyond connection pools to any set of parameters whose safe values depend on one another.
+
+## Open questions
+
+A few things remain genuinely uncertain and we want to be honest about them rather than paper over them. First, we do not yet know whether the same coupled-parameter risk exists in other services that share this pool library; an audit is queued but not complete. Second, we are not certain the seven-minute alert latency is fast enough — for a 12x degradation, even seven minutes is a lot of customer pain, and we may want a faster, tighter anomaly detector for the checkout path specifically. Third, the rollback ergonomics problem almost certainly affects more than just config changes, and we want to understand the full surface area before committing to a fix shape. We will track each of these as follow-up investigations and report back in two weeks.
+
+## Follow-up checkpoint
+
+We will hold a fifteen-minute checkpoint two weeks from today to confirm each remediation item has either shipped or has a concrete, dated plan. The intent is not a status-theater meeting but a forcing function: items that have not moved get either re-prioritized or explicitly dropped with a reason, so nothing lingers in a permanent "planned" limbo. Historically our action items from reviews have had roughly a sixty percent completion rate, and the ones that fall through are almost always the ones without a named owner and a date — both of which every item in the table above now has. If you own one of these and the date is going to slip, the most useful thing you can do is say so early in this thread so we can adjust rather than discover the slip at the checkpoint.
+
+A final note on tone: nobody made a careless mistake here. Two careful people made two reasonable changes that happened to interact badly, and our systems did not give them or the reviewer any way to see the interaction. That is a systems problem, not a people problem, and the remediation is deliberately aimed at the systems — load testing for config, coupled-parameter grouping, correlation alerting, and faster rollback — rather than at asking humans to be more careful. Asking people to be more careful is what you do when you have run out of real ideas, and we are not out of real ideas.
+
+Thanks again for reading this far. Incident reviews are most valuable when they change behavior, so the real measure of this document is whether the five remediation items actually ship and whether the next config change of this kind gets caught before it reaches production.
