@@ -99,15 +99,46 @@ func main() {
 // more"). Returns the posted message timestamp.
 func postMarkdownBlock(token, channel, thread, content string) (string, error) {
 	api := slackapi.New(token)
+
+	// A Slack markdown block is capped at 12000 chars (over it → msg_too_long),
+	// so split long content into multiple markdown blocks on line boundaries.
+	const maxMarkdownBlockChars = 11900
+	var blocks []slackapi.Block
+	for _, chunk := range chunkOnNewlines(content, maxMarkdownBlockChars) {
+		blocks = append(blocks, slackapi.NewMarkdownBlock("", chunk))
+	}
+	fmt.Fprintf(os.Stderr, "markdown-block: %d block(s)\n", len(blocks))
+
 	opts := []slackapi.MsgOption{
 		slackapi.MsgOptionText("markdown-block render test", false), // notification fallback only
-		slackapi.MsgOptionBlocks(slackapi.NewMarkdownBlock("", content)),
+		slackapi.MsgOptionBlocks(blocks...),
 	}
 	if thread != "" {
 		opts = append(opts, slackapi.MsgOptionTS(thread))
 	}
 	_, ts, err := api.PostMessageContext(context.Background(), channel, opts...)
 	return ts, err
+}
+
+// chunkOnNewlines splits s into pieces of at most max characters, breaking on
+// the last newline within the limit so Markdown structures aren't cut mid-line.
+func chunkOnNewlines(s string, max int) []string {
+	if len(s) <= max {
+		return []string{s}
+	}
+	var out []string
+	for len(s) > max {
+		cut := strings.LastIndex(s[:max], "\n")
+		if cut < 1 {
+			cut = max
+		}
+		out = append(out, s[:cut])
+		s = strings.TrimPrefix(s[cut:], "\n")
+	}
+	if s != "" {
+		out = append(out, s)
+	}
+	return out
 }
 
 // resolveContent returns the message body: a generated sample when -sample > 0,

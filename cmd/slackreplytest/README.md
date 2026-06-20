@@ -60,8 +60,13 @@ it against the adapter's hand-rolled conversion. Look at whether the native bloc
 
 - renders Markdown **tables** (early versions did not),
 - avoids the per-block **"See more"** fold on long content and code, and
-- stays within limits (per-block character cap, and how its server-side split
-  interacts with the 50-block message limit).
+- stays within limits.
+
+A markdown block is capped at **12,000 characters** (over it Slack returns
+`msg_too_long`), so the tool splits long content into multiple markdown blocks
+on line boundaries. The native block therefore doesn't remove chunking — but it
+could still replace the mrkdwn conversion, table building, and See-more
+splitting with simple ≤12k chunking, *if* the rendering checks above pass.
 
 If it renders cleanly, most of the custom pipeline in `slack_ai_api.go` could be
 replaced by a single markdown block plus a thin length guard.
