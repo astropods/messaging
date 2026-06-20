@@ -102,11 +102,15 @@ func postMarkdownBlock(token, channel, thread, content string) (string, error) {
 
 	// A Slack markdown block is capped at 12000 chars (over it → msg_too_long),
 	// and a whole message's blocks have their own size limit (msg_blocks_too_long).
-	// So split content into ≤12k chunks and post one markdown block per message,
+	// So split content into ≤10k chunks and post one markdown block per message,
 	// fanning out into the thread — the same shape the production pipeline uses.
-	const maxMarkdownBlockChars = 11900
+	const maxMarkdownBlockChars = 10000
 	chunks := chunkForMarkdownBlocks(content, maxMarkdownBlockChars)
-	fmt.Fprintf(os.Stderr, "markdown-block: %d message(s)\n", len(chunks))
+	lengths := make([]int, len(chunks))
+	for i, c := range chunks {
+		lengths[i] = len(c)
+	}
+	fmt.Fprintf(os.Stderr, "markdown-block: %d message(s), lengths=%v\n", len(chunks), lengths)
 
 	var firstTS string
 	for i, chunk := range chunks {
@@ -134,40 +138,95 @@ func postMarkdownBlock(token, channel, thread, content string) (string, error) {
 	return firstTS, nil
 }
 
-// chunkForMarkdownBlocks splits s into pieces of at most max characters,
-// breaking only on line boundaries that fall outside a fenced code block — so a
-// ```code``` block is never cut in two (which would drop its closing fence and
-// reinterpret the rest of the message as Markdown).
+// chunkForMarkdownBlocks splits s into pieces of at most max characters. It
+// treats each fenced code block as one indivisible atom and packs atoms
+// greedily, flushing before an atom that won't fit — so a ```code``` block is
+// never cut in two (which would drop its closing fence and reinterpret the rest
+// as Markdown). A single fenced block larger than max is hard-split on lines as
+// a last resort. Mirrors the production chunkMarkdown in the slack adapter.
 func chunkForMarkdownBlocks(s string, max int) []string {
 	if len(s) <= max {
 		return []string{s}
 	}
 	var (
 		out     []string
-		cur     strings.Builder
+		current string
+	)
+	for _, atom := range markdownAtoms(s) {
+		if len(atom) > max {
+			if current != "" {
+				out = append(out, current)
+				current = ""
+			}
+			out = append(out, hardSplit(atom, max)...)
+			continue
+		}
+		if current != "" && len(current)+1+len(atom) > max {
+			out = append(out, current)
+			current = ""
+		}
+		if current != "" {
+			current += "\n" + atom
+		} else {
+			current = atom
+		}
+	}
+	if current != "" {
+		out = append(out, current)
+	}
+	return out
+}
+
+// markdownAtoms splits text into indivisible chunking units: each fenced code
+// block is one atom (fences included), every other line its own atom.
+func markdownAtoms(s string) []string {
+	var (
+		atoms   []string
+		fence   []string
 		inFence bool
 	)
-	flush := func() {
-		if cur.Len() > 0 {
-			out = append(out, strings.TrimRight(cur.String(), "\n"))
-			cur.Reset()
-		}
-	}
 	for _, line := range strings.Split(s, "\n") {
-		// Only break when we're not inside a fence; checked before toggling so a
-		// split can land just before an opening fence but never inside one.
-		if !inFence && cur.Len() > 0 && cur.Len()+len(line)+1 > max {
-			flush()
+		isFence := strings.HasPrefix(strings.TrimSpace(line), "```")
+		if inFence {
+			fence = append(fence, line)
+			if isFence {
+				atoms = append(atoms, strings.Join(fence, "\n"))
+				fence = nil
+				inFence = false
+			}
+			continue
 		}
-		if cur.Len() > 0 {
-			cur.WriteByte('\n')
+		if isFence {
+			inFence = true
+			fence = []string{line}
+			continue
 		}
-		cur.WriteString(line)
-		if strings.HasPrefix(strings.TrimSpace(line), "```") {
-			inFence = !inFence
-		}
+		atoms = append(atoms, line)
 	}
-	flush()
+	if len(fence) > 0 {
+		atoms = append(atoms, strings.Join(fence, "\n"))
+	}
+	return atoms
+}
+
+// hardSplit breaks an oversized atom on line boundaries (then hard at max if a
+// single line is still too long).
+func hardSplit(s string, max int) []string {
+	if len(s) <= max {
+		return []string{s}
+	}
+	var out []string
+	for len(s) > max {
+		cut := strings.LastIndex(s[:max], "\n")
+		if cut < 1 {
+			cut = max
+		}
+		out = append(out, s[:cut])
+		s = strings.TrimPrefix(s[cut:], "\n")
+	}
+	if s != "" {
+		out = append(out, s)
+	}
 	return out
 }
 
