@@ -945,8 +945,8 @@ func TestSlackAdapter_HandleAgentResponse_ContentEnd_MessageTextAndBlocks(t *tes
 			if !strings.Contains(bodyStr, "Test response") {
 				t.Errorf("expected body to contain message content, got: %s", bodyStr)
 			}
-			if !strings.Contains(bodyStr, "section") {
-				t.Errorf("expected body to contain section block, got: %s", bodyStr)
+			if !strings.Contains(bodyStr, "markdown") {
+				t.Errorf("expected body to contain a markdown block, got: %s", bodyStr)
 			}
 			return
 		}

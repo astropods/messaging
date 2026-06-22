@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -124,26 +123,98 @@ func (c *SlackAIClient) SetTitle(ctx context.Context, channelID, threadTS, title
 	return nil
 }
 
-// PostMessageWithFeedback posts a message with feedback buttons
+// maxMarkdownBlockChars caps the text in a single Slack markdown block. Slack
+// rejects a markdown block over 12000 chars (msg_too_long), and a whole
+// message's blocks have their own size limit (msg_blocks_too_long), so we stay
+// well under both and fan out across messages, leaving headroom on the last
+// message for the footer + feedback widgets.
+const maxMarkdownBlockChars = 10000
+
+// PostMessageWithFeedback posts an agent reply as native Slack markdown
+// block(s), with feedback widgets attached to the final message.
 // https://api.slack.com/methods/chat.postMessage
+//
+// The reply text is handed to Slack as Markdown and Slack does the rendering
+// (headings, bold, links, lists, code blocks, tables). Long replies are split
+// into ≤maxMarkdownBlockChars chunks on line boundaries — never inside a fenced
+// code block — and each chunk is posted as its own message in the thread, so we
+// stay under Slack's per-block and per-message size limits. The footer and
+// feedback widgets ride on the last message. Returns the first message's ts.
 func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, content, threadID string) (string, error) {
-	// Convert standard Markdown to Slack mrkdwn before building blocks.
-	content = markdownToMrkdwn(content)
+	chunks := chunkMarkdown(content, maxMarkdownBlockChars)
+	trailing := c.feedbackTrailingBlocks()
 
-	// Slack section blocks have a 3000 char text limit. Split long content
-	// into multiple sections so messages with tables or lists aren't rejected.
-	chunks := splitIntoChunks(content, 3000)
+	var firstTS string
+	for i, chunk := range chunks {
+		blocks := []map[string]interface{}{markdownBlock(chunk)}
+		if i == len(chunks)-1 {
+			blocks = append(blocks, trailing...)
+		}
 
-	blocks := make([]map[string]interface{}, 0, len(chunks)+1)
-	for _, chunk := range chunks {
-		blocks = append(blocks, map[string]interface{}{
-			"type": "section",
-			"text": map[string]interface{}{
-				"type": "mrkdwn",
-				"text": chunk,
-			},
-		})
+		// The first message carries the full reply text as the notification
+		// fallback; continuations are marked so previews read sensibly.
+		text := content
+		if i > 0 {
+			text = "(continued)"
+		}
+
+		payload := map[string]interface{}{
+			"channel": channelID,
+			"text":    text,
+			"blocks":  blocks,
+		}
+		if threadID != "" {
+			payload["thread_ts"] = threadID
+		}
+
+		slog.Debug("[SlackAI] Posting message", "channel", channelID, "part", i+1, "parts", len(chunks))
+
+		var result struct {
+			OK        bool   `json:"ok"`
+			Error     string `json:"error,omitempty"`
+			Timestamp string `json:"ts,omitempty"`
+		}
+
+		if err := c.postJSON(ctx, "chat.postMessage", payload, &result); err != nil {
+			slog.Error("[SlackAI] Error posting message", "err", err, "part", i+1)
+			return firstTS, err
+		}
+		if !result.OK {
+			slog.Error("[SlackAI] Slack API returned error", "error", result.Error, "part", i+1)
+			return firstTS, fmt.Errorf("slack API error: %s", result.Error)
+		}
+
+		if i == 0 {
+			firstTS = result.Timestamp
+		}
 	}
+
+	slog.Debug("[SlackAI] Message posted successfully", "timestamp", firstTS, "parts", len(chunks))
+	return firstTS, nil
+}
+
+// markdownBlock builds a Slack markdown block. Slack renders the Markdown
+// natively, so no client-side conversion to mrkdwn is needed.
+func markdownBlock(text string) map[string]interface{} {
+	return map[string]interface{}{
+		"type": "markdown",
+		"text": text,
+	}
+}
+
+// feedbackTrailingBlocks builds the optional footer plus the two feedback
+// affordances that close out a reply:
+//  1. Native Slack AI thumbs widget (context_actions/feedback_buttons) —
+//     one-click 👍/👎 that the platform renders with built-in styling.
+//  2. A 💬 button in an actions block — opens a modal where the user can
+//     leave free-form text. Kept separate because feedback_buttons only
+//     accepts positive_button + negative_button and rejects a third option.
+//
+// Both flow through handleBlockActions and end up calling forwardFeedback, so
+// the agent developer sees a single on_feedback callback regardless of path.
+// These blocks ride on the last message of a fanned-out reply.
+func (c *SlackAIClient) feedbackTrailingBlocks() []map[string]interface{} {
+	blocks := make([]map[string]interface{}, 0, 3)
 
 	if footer := buildFooterText(c.devMode, c.agentID); footer != "" {
 		blocks = append(blocks, map[string]interface{}{
@@ -157,16 +228,6 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 		})
 	}
 
-	// Two feedback affordances on every agent reply:
-	//   1. Native Slack AI thumbs widget (context_actions/feedback_buttons) —
-	//      one-click 👍/👎 that the platform renders with built-in styling.
-	//   2. A 💬 button in an actions block — opens a modal where the user
-	//      can leave free-form text. We keep this separate because the
-	//      feedback_buttons element only accepts positive_button +
-	//      negative_button and rejects a third option.
-	// Both flow through handleBlockActions and end up calling forwardFeedback,
-	// so the agent's developer sees a single on_feedback callback regardless
-	// of which path the user took.
 	blocks = append(blocks, map[string]interface{}{
 		"type": "context_actions",
 		"elements": []map[string]interface{}{
@@ -208,51 +269,8 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 		},
 	})
 
-	// Slack caps at 50 blocks per message; keep the last two blocks
-	// (the feedback widgets) so feedback stays available even on huge replies.
-	if len(blocks) > 50 {
-		blocks = append(blocks[:48], blocks[len(blocks)-2:]...)
-	}
-
-	payload := map[string]interface{}{
-		"channel": channelID,
-		"text":    content,
-		"blocks":  blocks,
-	}
-
-	if threadID != "" {
-		payload["thread_ts"] = threadID
-	}
-
-	slog.Debug("[SlackAI] Posting message with feedback buttons", "channel", channelID)
-
-	var result struct {
-		OK        bool   `json:"ok"`
-		Error     string `json:"error,omitempty"`
-		Timestamp string `json:"ts,omitempty"`
-	}
-
-	if err := c.postJSON(ctx, "chat.postMessage", payload, &result); err != nil {
-		slog.Error("[SlackAI] Error posting message", "err", err)
-		return "", err
-	}
-
-	if !result.OK {
-		slog.Error("[SlackAI] Slack API returned error", "error", result.Error)
-		return "", fmt.Errorf("slack API error: %s", result.Error)
-	}
-
-	slog.Debug("[SlackAI] Message posted successfully", "timestamp", result.Timestamp)
-	return result.Timestamp, nil
+	return blocks
 }
-
-var (
-	reMarkdownLink = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
-	reBoldDouble   = regexp.MustCompile(`\*\*(.+?)\*\*`)
-	reHeading      = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
-	reTableRow     = regexp.MustCompile(`(?m)^\|(.+)\|$`)
-	reTableSep     = regexp.MustCompile(`(?m)^\|[-| :]+\|$`)
-)
 
 // buildFooterText returns the context-block footer text for a Slack message,
 // or "" if no footer should be rendered. In dev mode the message is flagged
@@ -272,81 +290,79 @@ func buildFooterText(devMode bool, agentID string) string {
 	return ""
 }
 
-// markdownToMrkdwn converts standard Markdown to Slack mrkdwn.
-// Handles links, bold, headings, and tables (rendered as code blocks).
-func markdownToMrkdwn(md string) string {
-	md = convertTables(md)
-	md = convertLinks(md)
-	md = convertBold(md)
-	md = convertHeadings(md)
-	return md
-}
+// chunkMarkdown splits a Markdown reply into pieces of at most maxChars,
+// breaking only on line boundaries that fall outside a fenced code block so a
+// ```code``` block is never cut in two (which would drop its closing fence and
+// reinterpret the rest as Markdown). A single fenced block longer than maxChars
+// is hard-split as a last resort (rare; breaks the fence but avoids a
+// msg_too_long rejection).
+func chunkMarkdown(s string, maxChars int) []string {
+	if len(s) <= maxChars {
+		return []string{s}
+	}
 
-// convertLinks converts [text](url) → <url|text>
-func convertLinks(text string) string {
-	return reMarkdownLink.ReplaceAllString(text, "<$2|$1>")
-}
-
-// convertBold converts **bold** → *bold*
-func convertBold(text string) string {
-	return reBoldDouble.ReplaceAllString(text, "*$1*")
-}
-
-// convertHeadings converts ## Heading → *Heading*
-func convertHeadings(text string) string {
-	return reHeading.ReplaceAllStringFunc(text, func(m string) string {
-		sub := reHeading.FindStringSubmatch(m)
-		if len(sub) < 2 {
-			return m
-		}
-		return "*" + strings.TrimSpace(sub[1]) + "*"
-	})
-}
-
-// convertTables finds Markdown table blocks and wraps them in code fences
-// so Slack renders them as pre-formatted text with alignment preserved.
-func convertTables(text string) string {
-	lines := strings.Split(text, "\n")
-	var result []string
-	inTable := false
-
-	for i := 0; i < len(lines); i++ {
-		line := lines[i]
-		isTableLine := reTableRow.MatchString(line) || reTableSep.MatchString(line)
-
-		if isTableLine && !inTable {
-			inTable = true
-			result = append(result, "```")
-		}
-
-		if !isTableLine && inTable {
-			inTable = false
-			result = append(result, "```")
-		}
-
-		if inTable {
-			// Strip leading/trailing pipe and convert inner pipes to
-			// padded separators for cleaner display
-			trimmed := strings.TrimSpace(line)
-			trimmed = strings.TrimPrefix(trimmed, "|")
-			trimmed = strings.TrimSuffix(trimmed, "|")
-			if !reTableSep.MatchString(line) {
-				cells := strings.Split(trimmed, "|")
-				for j := range cells {
-					cells[j] = strings.TrimSpace(cells[j])
-				}
-				result = append(result, strings.Join(cells, "  |  "))
+	var (
+		out     []string
+		current string
+	)
+	for _, atom := range markdownAtoms(s) {
+		// An atom (a whole code block) larger than the budget can't be packed —
+		// flush, then hard-split it on its own.
+		if len(atom) > maxChars {
+			if current != "" {
+				out = append(out, current)
+				current = ""
 			}
+			out = append(out, splitIntoChunks(atom, maxChars)...)
+			continue
+		}
+		if current != "" && len(current)+1+len(atom) > maxChars {
+			out = append(out, current)
+			current = ""
+		}
+		if current != "" {
+			current += "\n" + atom
 		} else {
-			result = append(result, line)
+			current = atom
 		}
 	}
-
-	if inTable {
-		result = append(result, "```")
+	if current != "" {
+		out = append(out, current)
 	}
+	return out
+}
 
-	return strings.Join(result, "\n")
+// markdownAtoms splits text into indivisible chunking units: each fenced code
+// block is one atom (kept whole, fences included), and every other line is its
+// own atom. Joining the atoms back with "\n" reproduces the input.
+func markdownAtoms(s string) []string {
+	var (
+		atoms   []string
+		fence   []string
+		inFence bool
+	)
+	for _, line := range strings.Split(s, "\n") {
+		isFence := strings.HasPrefix(strings.TrimSpace(line), "```")
+		if inFence {
+			fence = append(fence, line)
+			if isFence {
+				atoms = append(atoms, strings.Join(fence, "\n"))
+				fence = nil
+				inFence = false
+			}
+			continue
+		}
+		if isFence {
+			inFence = true
+			fence = []string{line}
+			continue
+		}
+		atoms = append(atoms, line)
+	}
+	if len(fence) > 0 { // unterminated fence — emit what we accumulated
+		atoms = append(atoms, strings.Join(fence, "\n"))
+	}
+	return atoms
 }
 
 // splitIntoChunks breaks text into pieces of at most maxLen characters,
