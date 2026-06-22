@@ -3,9 +3,11 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -471,6 +473,78 @@ func TestSlackAIClient_PostMessageWithFeedback_APIError(t *testing.T) {
 	}
 }
 
+// A reply longer than the per-block limit fans out across multiple threaded
+// messages, each carrying one markdown block; the feedback widgets ride only on
+// the final message and no content is dropped.
+func TestSlackAIClient_PostMessageWithFeedback_FansOutLongReply(t *testing.T) {
+	var (
+		bodies []map[string]any
+		mu     sync.Mutex
+	)
+	client, cleanup := newTestAIClient(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		bodies = append(bodies, body)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "9999.000001"})
+	})
+	defer cleanup()
+
+	// ~40 lines of ~600 chars → well over the 10k per-block limit, forcing a
+	// fan-out. Each line is tagged so we can confirm none is dropped.
+	const numLines = 40
+	lines := make([]string, numLines)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("L%02d-", i) + strings.Repeat("x", 600)
+	}
+	content := strings.Join(lines, "\n")
+
+	if _, err := client.PostMessageWithFeedback(context.Background(), "C123", content, "1234.000001"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) < 2 {
+		t.Fatalf("expected the long reply to fan out across multiple messages, got %d", len(bodies))
+	}
+
+	var allText strings.Builder
+	for i, body := range bodies {
+		if body["thread_ts"] != "1234.000001" {
+			t.Errorf("message %d: expected thread_ts to be set", i)
+		}
+		blocks, _ := body["blocks"].([]any)
+		if len(blocks) == 0 {
+			t.Fatalf("message %d: no blocks", i)
+		}
+		// The first block is always the markdown content block.
+		md, _ := blocks[0].(map[string]any)
+		if md["type"] != "markdown" {
+			t.Errorf("message %d: expected first block to be markdown, got %v", i, md["type"])
+		}
+		if s, ok := md["text"].(string); ok {
+			allText.WriteString(s)
+			if len(s) > maxMarkdownBlockChars {
+				t.Errorf("message %d: markdown block is %d chars, exceeds cap %d", i, len(s), maxMarkdownBlockChars)
+			}
+		}
+		// Feedback widgets ride only on the last message.
+		hasFeedback := len(blocks) > 1
+		if isLast := i == len(bodies)-1; hasFeedback != isLast {
+			t.Errorf("message %d: feedback present=%v, want %v", i, hasFeedback, isLast)
+		}
+	}
+	for i := range lines {
+		tag := fmt.Sprintf("L%02d-", i)
+		if !strings.Contains(allText.String(), tag) {
+			t.Errorf("content line %s was dropped from the fanned-out reply", tag)
+		}
+	}
+}
+
 // --- Tests for postJSON error paths ---
 
 func TestSlackAIClient_postJSON_InvalidJSON(t *testing.T) {
@@ -549,159 +623,6 @@ func TestSlackAIClient_postJSON_SetsHeaders(t *testing.T) {
 	}
 	if auth := capturedHeaders.Get("Authorization"); auth != "Bearer xoxb-test-token" {
 		t.Errorf("expected Authorization 'Bearer xoxb-test-token', got %q", auth)
-	}
-}
-
-// --- Tests for convertLinks ---
-
-func TestConvertLinks(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"simple link", "[click here](https://example.com)", "<https://example.com|click here>"},
-		{"jira link", "[FLOWS-123](https://jira.atlassian.net/browse/FLOWS-123)", "<https://jira.atlassian.net/browse/FLOWS-123|FLOWS-123>"},
-		{"multiple links", "[a](https://a.com) and [b](https://b.com)", "<https://a.com|a> and <https://b.com|b>"},
-		{"no links", "plain text", "plain text"},
-		{"link in sentence", "see [docs](https://docs.io) for info", "see <https://docs.io|docs> for info"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := convertLinks(tt.in)
-			if got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-// --- Tests for convertBold ---
-
-func TestConvertBold(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"double asterisk", "**bold text**", "*bold text*"},
-		{"multiple bold", "**a** and **b**", "*a* and *b*"},
-		{"bold in sentence", "this is **important** stuff", "this is *important* stuff"},
-		{"single asterisk unchanged", "*italic*", "*italic*"},
-		{"empty bold", "****", "****"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := convertBold(tt.in)
-			if got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-// --- Tests for convertHeadings ---
-
-func TestConvertHeadings(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"h1", "# Title", "*Title*"},
-		{"h2", "## Section", "*Section*"},
-		{"h3", "### Subsection", "*Subsection*"},
-		{"h6", "###### Deep", "*Deep*"},
-		{"heading with surrounding text", "before\n## Middle\nafter", "before\n*Middle*\nafter"},
-		{"not a heading", "this # is not a heading", "this # is not a heading"},
-		{"multiple headings", "# One\n## Two", "*One*\n*Two*"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := convertHeadings(tt.in)
-			if got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-// --- Tests for markdownToMrkdwn (combined) ---
-
-func TestMarkdownToMrkdwn_Combined(t *testing.T) {
-	input := "## Release Notes\n\n**New Features**\n\n- [FLOWS-123](https://jira.com/browse/FLOWS-123): Added feature"
-	got := markdownToMrkdwn(input)
-
-	if !strings.Contains(got, "*Release Notes*") {
-		t.Errorf("heading not converted: %s", got)
-	}
-	if !strings.Contains(got, "*New Features*") {
-		t.Errorf("bold not converted: %s", got)
-	}
-	if !strings.Contains(got, "<https://jira.com/browse/FLOWS-123|FLOWS-123>") {
-		t.Errorf("link not converted: %s", got)
-	}
-}
-
-func TestMarkdownToMrkdwn_PlainText(t *testing.T) {
-	input := "just some plain text"
-	got := markdownToMrkdwn(input)
-	if got != input {
-		t.Errorf("plain text should be unchanged, got %q", got)
-	}
-}
-
-// --- Tests for convertTables ---
-
-func TestConvertTables_SimpleTable(t *testing.T) {
-	input := "| Key | Summary |\n|-----|----------|\n| A-1 | Fix bug |"
-	got := convertTables(input)
-
-	if !strings.HasPrefix(got, "```\n") {
-		t.Errorf("expected code fence opening, got: %q", got)
-	}
-	if !strings.HasSuffix(got, "\n```") {
-		t.Errorf("expected code fence closing, got: %q", got)
-	}
-	if strings.Contains(got, "|---|") {
-		t.Error("separator row should be stripped")
-	}
-	if !strings.Contains(got, "Key") && !strings.Contains(got, "Summary") {
-		t.Error("header cells should be preserved")
-	}
-}
-
-func TestConvertTables_TableWithSurroundingText(t *testing.T) {
-	input := "Before the table\n| A | B |\n|---|---|\n| 1 | 2 |\nAfter the table"
-	got := convertTables(input)
-
-	if !strings.HasPrefix(got, "Before the table\n```\n") {
-		t.Errorf("text before table should be preserved, got: %q", got)
-	}
-	if !strings.HasSuffix(got, "```\nAfter the table") {
-		t.Errorf("text after table should be preserved, got: %q", got)
-	}
-}
-
-func TestConvertTables_NoTable(t *testing.T) {
-	input := "Just some regular text\nwith multiple lines"
-	got := convertTables(input)
-	if got != input {
-		t.Errorf("text without tables should be unchanged, got: %q", got)
-	}
-}
-
-func TestConvertTables_SeparatorRowStripped(t *testing.T) {
-	input := "| H1 | H2 |\n|:---|---:|\n| a | b |"
-	got := convertTables(input)
-
-	lines := strings.Split(got, "\n")
-	for _, line := range lines {
-		if strings.TrimSpace(line) != "" && strings.TrimSpace(line) != "```" {
-			if strings.Contains(line, "---") {
-				t.Errorf("separator row should be removed, found: %q", line)
-			}
-		}
 	}
 }
 
