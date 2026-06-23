@@ -1112,6 +1112,9 @@ func (a *SlackAdapter) sendErrorMessage(ctx context.Context, channelID, threadTS
 	if a.config.DevMode {
 		content += "\n\n:test_tube: _Sent from dev environment_"
 	}
+	if !a.canPostToThread(ctx, channelID, threadTS) {
+		return
+	}
 	_, _, postErr := a.client.PostMessageContext(ctx, channelID,
 		slack.MsgOptionText(content, false),
 		slack.MsgOptionTS(threadTS),
@@ -1126,6 +1129,9 @@ func (a *SlackAdapter) sendNotEnabledMessage(ctx context.Context, channelID, thr
 	content := "This app has not been enabled for this channel or user. Please contact your workspace admin to enable it."
 	if a.config.DevMode {
 		content += "\n\n:test_tube: _Sent from dev environment_"
+	}
+	if !a.canPostToThread(ctx, channelID, threadTS) {
+		return
 	}
 	_, _, postErr := a.client.PostMessageContext(ctx, channelID,
 		slack.MsgOptionText(content, false),

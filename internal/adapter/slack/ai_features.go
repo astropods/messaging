@@ -136,6 +136,10 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 			return fmt.Errorf("failed to parse conversation ID: %w", err)
 		}
 
+		if !a.canPostToThread(ctx, channelID, threadTS) {
+			return nil
+		}
+
 		if err := a.rateLimiter.Wait(ctx); err != nil {
 			return fmt.Errorf("rate limit wait failed: %w", err)
 		}
@@ -167,6 +171,10 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 
 		if err := a.rateLimiter.Wait(ctx); err != nil {
 			return fmt.Errorf("rate limit wait failed: %w", err)
+		}
+
+		if !a.canPostToThread(ctx, channelID, threadTS) {
+			return nil
 		}
 
 		text := content.Content
@@ -212,6 +220,10 @@ func (a *SlackAdapter) handleError(ctx context.Context, conversationID string, e
 	channelID, threadTS, err := a.parseConversationID(conversationID)
 	if err != nil {
 		return fmt.Errorf("failed to parse conversation ID: %w", err)
+	}
+
+	if !a.canPostToThread(ctx, channelID, threadTS) {
+		return nil
 	}
 
 	// Apply rate limiting
@@ -282,6 +294,55 @@ func (a *SlackAdapter) parseConversationID(conversationID string) (channelID str
 	}
 	// No thread timestamp — bare channel ID
 	return conversationID, "", nil
+}
+
+// canPostToThread reports whether a reply destined for threadTS can safely be
+// posted into that thread. Slack does not reject a chat.postMessage whose
+// thread_ts points to a deleted parent — it silently promotes the reply to a
+// top-level channel message (ok: true, fresh ts). That is the behavior we want
+// to avoid: an agent reply leaking into the channel after the user deleted the
+// message it was answering.
+//
+// A bare channel target (threadTS == "") is always allowed — there is no thread
+// to orphan (DMs and observed/top-level posts). For a threaded target we probe
+// the parent with conversations.replies (the same call fetchReactionMessage
+// uses): a live message — parent or not — comes back as a one-element result,
+// while a deleted parent returns thread_not_found.
+//
+// Policy on a missing parent lives here, in one place: we return false and the
+// caller skips the post. Change this branch (e.g. to notify the user out-of-band
+// or post top-level deliberately) to alter that behavior everywhere at once.
+func (a *SlackAdapter) canPostToThread(ctx context.Context, channelID, threadTS string) bool {
+	if threadTS == "" {
+		return true
+	}
+
+	msgs, _, _, err := a.client.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
+		ChannelID: channelID,
+		Timestamp: threadTS,
+		Limit:     1,
+		Inclusive: true,
+	})
+	if err != nil {
+		// thread_not_found / message_not_found are definitive: the parent is
+		// gone, so skip rather than let Slack post in-channel. Any other error
+		// is treated as transient — don't drop a legitimate reply over a blip.
+		if msg := err.Error(); strings.Contains(msg, "thread_not_found") || strings.Contains(msg, "message_not_found") {
+			slog.Warn(fmt.Sprintf("[Slack] Thread parent %s/%s is gone (%s); skipping reply to avoid posting in channel", channelID, threadTS, msg))
+			return false
+		}
+		slog.Warn(fmt.Sprintf("[Slack] Could not verify thread parent %s/%s, posting anyway: %v", channelID, threadTS, err))
+		return true
+	}
+
+	for _, m := range msgs {
+		if m.Timestamp == threadTS {
+			return true
+		}
+	}
+
+	slog.Warn(fmt.Sprintf("[Slack] Thread parent %s/%s no longer exists; skipping reply to avoid posting in channel", channelID, threadTS))
+	return false
 }
 
 // mapStatusToMessage converts proto status to human-readable message
