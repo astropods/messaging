@@ -10,6 +10,7 @@ import (
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/sqlite"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -24,6 +25,9 @@ type Handlers struct {
 	audioForwarder   adapter.AudioForwarder
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
+	// chatStore persists the platform chat UI thread (sidebar + bodies) in
+	// the sidecar-local SQLite database on a shared persistent volume.
+	chatStore *sqlite.Store
 }
 
 // NewHandlers creates a new Handlers instance
@@ -135,6 +139,13 @@ func (h *Handlers) HandleCreateConversation(w http.ResponseWriter, r *http.Reque
 	// Generate conversation ID
 	conversationID := uuid.NewString()
 
+	// Persist the conversation row (title is derived later, on first send).
+	if h.chatStore != nil {
+		if err := h.chatStore.Upsert(conversationID, session.UserID, ""); err != nil {
+			slog.Error("[Web] chat persist create conversation failed", "err", err)
+		}
+	}
+
 	resp := CreateConversationResponse{
 		ConversationID: conversationID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
@@ -225,6 +236,19 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 			Content:   req.Content,
 			Timestamp: timestamppb.New(now),
 		})
+	}
+
+	// Persist the user message to the deployment-local chat store. The
+	// conversation row is created with a derived title on first send and only
+	// has its recency bumped thereafter.
+	if h.chatStore != nil {
+		title := truncateRunes(req.Content, chatTitleMaxRunes)
+		if err := h.chatStore.EnsureForSend(conversationID, session.UserID, title); err != nil {
+			slog.Error("[Web] chat persist ensure conversation failed", "err", err)
+		}
+		if _, err := h.chatStore.AppendMessage(conversationID, session.UserID, "user", req.Content); err != nil {
+			slog.Error("[Web] chat persist user message failed", "err", err)
+		}
 	}
 
 	resp := SendMessageResponse{
