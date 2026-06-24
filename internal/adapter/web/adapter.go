@@ -10,7 +10,9 @@ import (
 
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/authz"
+	"github.com/astropods/messaging/internal/langfuse"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/sqlite"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
@@ -22,6 +24,8 @@ type WebAdapter struct {
 	sessionManager   SessionManager
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
+	chatStore        *sqlite.Store
+	langfuse         *langfuse.Client
 	server           *http.Server
 	handlers         *Handlers
 
@@ -121,6 +125,12 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/conversations/{id}/stream", a.handlers.HandleStream)
 	mux.HandleFunc("GET /api/conversations/{id}/history", a.handlers.HandleHistory)
 	mux.HandleFunc("GET /api/agent/config", a.handlers.HandleAgentConfig)
+
+	// Platform chat-page contract (served via astro-server /chat/* proxy).
+	mux.HandleFunc("GET /api/chat/conversations", a.handlers.HandleListChatConversations)
+	mux.HandleFunc("GET /api/chat/conversations/{id}", a.handlers.HandleGetChatConversation)
+	mux.HandleFunc("PUT /api/chat/conversations/{id}", a.handlers.HandleUpsertChatConversation)
+	mux.HandleFunc("DELETE /api/chat/conversations/{id}", a.handlers.HandleDeleteChatConversation)
 	mux.HandleFunc("GET /api/conversations/{id}/audio", a.handlers.HandleAudioStream)
 	mux.HandleFunc("POST /api/conversations/{id}/audio", a.handlers.HandleAudioUpload)
 	mux.HandleFunc("GET /health", a.handlers.HandleHealth)
@@ -258,6 +268,14 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 			})
 		}
 
+		// Persist the assistant reply to the deployment-local chat store on the
+		// terminal chunk so the chat page can rehydrate the full turn.
+		if a.chatStore != nil && payload.Content.Type == pb.ContentChunk_END {
+			if _, err := a.chatStore.UpsertAssistantProgress(conversationID, payload.Content.Content); err != nil {
+				slog.Error("[Web] chat persist assistant message failed", "conversation", conversationID, "err", err)
+			}
+		}
+
 	case *pb.AgentResponse_Status:
 		// Status update
 		event := NewStatusEvent(payload.Status)
@@ -324,6 +342,24 @@ func (a *WebAdapter) SetAgentConfigStore(s *store.AgentConfigStore) {
 	a.agentConfigStore = s
 	if a.handlers != nil {
 		a.handlers.agentConfigStore = s
+	}
+}
+
+// SetChatStore wires the deployment-local SQLite chat store. nil disables chat
+// persistence (e.g. local dev without CHAT_DB_PATH).
+func (a *WebAdapter) SetChatStore(s *sqlite.Store) {
+	a.chatStore = s
+	if a.handlers != nil {
+		a.handlers.chatStore = s
+	}
+}
+
+// SetLangfuse wires the read-only Langfuse client used to rebuild chat history
+// when the local store is empty. nil disables restore.
+func (a *WebAdapter) SetLangfuse(c *langfuse.Client) {
+	a.langfuse = c
+	if a.handlers != nil {
+		a.handlers.langfuse = c
 	}
 }
 
