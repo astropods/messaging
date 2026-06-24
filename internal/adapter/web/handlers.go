@@ -9,7 +9,6 @@ import (
 
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/authz"
-	"github.com/astropods/messaging/internal/langfuse"
 	"github.com/astropods/messaging/internal/store"
 	"github.com/astropods/messaging/internal/store/sqlite"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
@@ -27,9 +26,8 @@ type Handlers struct {
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
 	// chatStore persists the platform chat UI thread (sidebar + bodies) in
-	// deployment-local SQLite; langfuse rebuilds it when the store is empty.
+	// the sidecar-local SQLite database on a shared persistent volume.
 	chatStore *sqlite.Store
-	langfuse  *langfuse.Client
 }
 
 // NewHandlers creates a new Handlers instance

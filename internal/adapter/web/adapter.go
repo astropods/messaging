@@ -10,7 +10,6 @@ import (
 
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/authz"
-	"github.com/astropods/messaging/internal/langfuse"
 	"github.com/astropods/messaging/internal/store"
 	"github.com/astropods/messaging/internal/store/sqlite"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
@@ -25,7 +24,6 @@ type WebAdapter struct {
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
 	chatStore        *sqlite.Store
-	langfuse         *langfuse.Client
 	server           *http.Server
 	handlers         *Handlers
 
@@ -345,21 +343,12 @@ func (a *WebAdapter) SetAgentConfigStore(s *store.AgentConfigStore) {
 	}
 }
 
-// SetChatStore wires the deployment-local SQLite chat store. nil disables chat
+// SetChatStore wires the sidecar-local SQLite chat store. nil disables chat
 // persistence (e.g. local dev without CHAT_DB_PATH).
 func (a *WebAdapter) SetChatStore(s *sqlite.Store) {
 	a.chatStore = s
 	if a.handlers != nil {
 		a.handlers.chatStore = s
-	}
-}
-
-// SetLangfuse wires the read-only Langfuse client used to rebuild chat history
-// when the local store is empty. nil disables restore.
-func (a *WebAdapter) SetLangfuse(c *langfuse.Client) {
-	a.langfuse = c
-	if a.handlers != nil {
-		a.handlers.langfuse = c
 	}
 }
 
