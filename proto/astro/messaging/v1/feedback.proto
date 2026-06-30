@@ -4,6 +4,7 @@ package astro.messaging.v1;
 
 import "google/protobuf/timestamp.proto";
 import "astro/messaging/v1/message.proto";
+import "astro/messaging/v1/renderable.proto";
 
 option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
 
@@ -22,6 +23,7 @@ message PlatformFeedback {
     MessageEdit message_edit = 8;         // User edited a message
     MessageDelete message_delete = 9;     // User deleted a message
     TextFeedback text = 10;               // Free-form text submitted via modal/dialog
+    RenderableResponse renderable_response = 11;  // User's response to a Renderable
   }
 
   // Platform user who submitted the feedback. Same shape as Message.user

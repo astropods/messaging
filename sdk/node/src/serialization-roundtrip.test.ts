@@ -181,6 +181,35 @@ describe('Proto-loader binary roundtrip: ConversationRequest oneof', () => {
     expect(result.message.user.avatarUrl).toBe('https://example.com/avatar.png');
     expect(result.message.user.userData).toEqual({ role: 'dev' });
   });
+
+  it('should roundtrip feedback with renderableResponse (nested oneof, platform→agent)', () => {
+    const request = {
+      feedback: {
+        conversationId: 'conv-006',
+        responseId: 'resp-006',
+        renderableResponse: {
+          id: 'render-001',
+          action: 'RENDERABLE_ACTION_SUBMIT',
+          contentJson: '{"table":"invoices","rows":4}',
+        },
+      },
+    };
+
+    const buf = serializeRequest(request);
+    const result = deserializeRequest(buf);
+
+    // Outer oneof "request" resolves to feedback
+    expect(result.request).toBe('feedback');
+    expect(result.feedback).toBeDefined();
+    expect(result.feedback.conversationId).toBe('conv-006');
+
+    // Inner oneof "feedback" resolves to renderableResponse (flattened, not nested under feedback)
+    expect(result.feedback.feedback).toBe('renderableResponse');
+    expect(result.feedback.renderableResponse).toBeDefined();
+    expect(result.feedback.renderableResponse.id).toBe('render-001');
+    expect(result.feedback.renderableResponse.action).toBe('RENDERABLE_ACTION_SUBMIT');
+    expect(result.feedback.renderableResponse.contentJson).toBe('{"table":"invoices","rows":4}');
+  });
 });
 
 describe('Proto-loader binary roundtrip: AgentResponse oneof', () => {
@@ -276,5 +305,41 @@ describe('Proto-loader binary roundtrip: AgentResponse oneof', () => {
     expect(result.error.code).toBe('AGENT_ERROR');
     expect(result.error.message).toBe('Internal failure');
     expect(result.error.retryable).toBe(false);
+  });
+
+  it('should roundtrip AgentResponse with renderable (tool_permission, agent→platform)', () => {
+    const response = {
+      conversationId: 'conv-014',
+      responseId: 'resp-014',
+      renderable: {
+        id: 'render-001',
+        kind: 'RENDER_KIND_FORM',
+        message: 'Approve this database write?',
+        dataSchemaJson: '{"type":"object","properties":{"table":{"type":"string"},"rows":{"type":"integer"}}}',
+        valueJson: '{"table":"invoices","rows":4}',
+        allowedActions: [
+          'RENDERABLE_ACTION_SUBMIT',
+          'RENDERABLE_ACTION_DECLINE',
+          'RENDERABLE_ACTION_CANCEL',
+        ],
+        intent: 'tool_permission',
+      },
+    };
+
+    const buf = serializeResponse(response);
+    const result = deserializeResponse(buf);
+
+    expect(result.payload).toBe('renderable');
+    expect(result.renderable).toBeDefined();
+    expect(result.renderable.id).toBe('render-001');
+    expect(result.renderable.kind).toBe('RENDER_KIND_FORM');
+    expect(result.renderable.message).toBe('Approve this database write?');
+    expect(result.renderable.valueJson).toBe('{"table":"invoices","rows":4}');
+    expect(result.renderable.allowedActions).toEqual([
+      'RENDERABLE_ACTION_SUBMIT',
+      'RENDERABLE_ACTION_DECLINE',
+      'RENDERABLE_ACTION_CANCEL',
+    ]);
+    expect(result.renderable.intent).toBe('tool_permission');
   });
 });
