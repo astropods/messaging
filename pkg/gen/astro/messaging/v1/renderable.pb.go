@@ -21,12 +21,11 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// How a Renderable is drawn.
 type RenderKind int32
 
 const (
 	RenderKind_RENDER_KIND_UNSPECIFIED RenderKind = 0
-	RenderKind_RENDER_KIND_FORM        RenderKind = 1 // declarative: data schema → host-native widgets (v1)
+	RenderKind_RENDER_KIND_FORM        RenderKind = 1 // RENDER_KIND_COMPONENT = 2;  // future
 )
 
 // Enum value maps for RenderKind.
@@ -68,19 +67,16 @@ func (RenderKind) EnumDescriptor() ([]byte, []int) {
 	return file_astro_messaging_v1_renderable_proto_rawDescGZIP(), []int{0}
 }
 
-// The user's response action. Superset spanning MCP (accept/decline/cancel) and
-// LangGraph (accept/edit/respond/ignore). Edit-in-place reuses SUBMIT over a
-// prefilled value rather than adding an action. Values are prefixed because this
-// is a shared top-level enum whose verbs would otherwise collide at package scope.
+// Prefixed values: shared top-level enum, avoids package-scope collisions.
 type RenderableAction int32
 
 const (
 	RenderableAction_RENDERABLE_ACTION_UNSPECIFIED RenderableAction = 0
-	RenderableAction_RENDERABLE_ACTION_SUBMIT      RenderableAction = 1 // accept; content matches the data schema (edit = SUBMIT over a prefilled value)
-	RenderableAction_RENDERABLE_ACTION_DECLINE     RenderableAction = 2 // user refuses (maps to deny for a permission ask)
-	RenderableAction_RENDERABLE_ACTION_CANCEL      RenderableAction = 3 // user dismisses or defers; always offered so a thread cannot wedge
-	RenderableAction_RENDERABLE_ACTION_RESPOND     RenderableAction = 4 // free-text reply; only when allowed (free-text-tolerant)
-	RenderableAction_RENDERABLE_ACTION_UNSUPPORTED RenderableAction = 5 // system-emitted: a strict ask reached a surface that cannot render it
+	RenderableAction_RENDERABLE_ACTION_SUBMIT      RenderableAction = 1
+	RenderableAction_RENDERABLE_ACTION_DECLINE     RenderableAction = 2
+	RenderableAction_RENDERABLE_ACTION_CANCEL      RenderableAction = 3
+	RenderableAction_RENDERABLE_ACTION_RESPOND     RenderableAction = 4 // free-text reply (only when allowed)
+	RenderableAction_RENDERABLE_ACTION_UNSUPPORTED RenderableAction = 5 // system-emitted: surface cannot render a strict ask
 )
 
 // Enum value maps for RenderableAction.
@@ -130,18 +126,15 @@ func (RenderableAction) EnumDescriptor() ([]byte, []int) {
 	return file_astro_messaging_v1_renderable_proto_rawDescGZIP(), []int{1}
 }
 
-// Agent-emitted structured content. The data schema and values travel as JSON
-// strings so the wire stays out of JSON Schema's business and forward compatible
-// with MCP schema evolution.
 type Renderable struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
-	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // Correlation id (agent-generated)
+	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Kind           RenderKind             `protobuf:"varint,2,opt,name=kind,proto3,enum=astro.messaging.v1.RenderKind" json:"kind,omitempty"`
-	Message        string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`                                                                                      // Prompt / title text (markdown where supported)
-	DataSchemaJson string                 `protobuf:"bytes,4,opt,name=data_schema_json,json=dataSchemaJson,proto3" json:"data_schema_json,omitempty"`                                                // Full JSON Schema; render hints inline via "x-ui"
-	ValueJson      string                 `protobuf:"bytes,5,opt,name=value_json,json=valueJson,proto3" json:"value_json,omitempty"`                                                                 // Proposed / prefilled data (optional)
-	AllowedActions []RenderableAction     `protobuf:"varint,6,rep,packed,name=allowed_actions,json=allowedActions,proto3,enum=astro.messaging.v1.RenderableAction" json:"allowed_actions,omitempty"` // Must include CANCEL or DECLINE (v1: always blocking)
-	Intent         string                 `protobuf:"bytes,7,opt,name=intent,proto3" json:"intent,omitempty"`                                                                                        // Open vocab; "tool_permission" recognized (optional)
+	Message        string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	DataSchemaJson string                 `protobuf:"bytes,4,opt,name=data_schema_json,json=dataSchemaJson,proto3" json:"data_schema_json,omitempty"`                                                // JSON Schema; render hints inline via "x-ui"
+	ValueJson      string                 `protobuf:"bytes,5,opt,name=value_json,json=valueJson,proto3" json:"value_json,omitempty"`                                                                 // proposed / prefilled data (optional)
+	AllowedActions []RenderableAction     `protobuf:"varint,6,rep,packed,name=allowed_actions,json=allowedActions,proto3,enum=astro.messaging.v1.RenderableAction" json:"allowed_actions,omitempty"` // must include CANCEL or DECLINE
+	Intent         string                 `protobuf:"bytes,7,opt,name=intent,proto3" json:"intent,omitempty"`                                                                                        // open vocab; "tool_permission" recognized (optional)
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -225,12 +218,11 @@ func (x *Renderable) GetIntent() string {
 	return ""
 }
 
-// The user's reply to a Renderable (platform → agent), riding PlatformFeedback.
 type RenderableResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // Correlates to Renderable.id
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // correlates to Renderable.id
 	Action        RenderableAction       `protobuf:"varint,2,opt,name=action,proto3,enum=astro.messaging.v1.RenderableAction" json:"action,omitempty"`
-	ContentJson   string                 `protobuf:"bytes,3,opt,name=content_json,json=contentJson,proto3" json:"content_json,omitempty"` // iff action == SUBMIT; matches the data schema
+	ContentJson   string                 `protobuf:"bytes,3,opt,name=content_json,json=contentJson,proto3" json:"content_json,omitempty"` // iff action == SUBMIT
 	Text          string                 `protobuf:"bytes,4,opt,name=text,proto3" json:"text,omitempty"`                                  // iff action == RESPOND
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

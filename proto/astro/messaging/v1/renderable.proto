@@ -4,48 +4,38 @@ package astro.messaging.v1;
 
 option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
 
-// Structured content an agent asks the user to render and, in v1, respond to
-// (agent → platform). A blocking interaction: the conversation gates until the
-// user submits, declines, or cancels. The most common use is a tool-call
-// approval. Spec: docs/01-spec/interactive-rendering-elicitation-spec.md.
+// Structured content an agent asks the user to render and respond to.
+// Spec: docs/01-spec/interactive-rendering-elicitation-spec.md.
 
-// How a Renderable is drawn.
 enum RenderKind {
   RENDER_KIND_UNSPECIFIED = 0;
-  RENDER_KIND_FORM = 1;                    // declarative: data schema → host-native widgets (v1)
-  // RENDER_KIND_COMPONENT = 2;            // sandboxed agent-authored UI (future)
+  RENDER_KIND_FORM = 1;
+  // RENDER_KIND_COMPONENT = 2;  // future
 }
 
-// The user's response action. Superset spanning MCP (accept/decline/cancel) and
-// LangGraph (accept/edit/respond/ignore). Edit-in-place reuses SUBMIT over a
-// prefilled value rather than adding an action. Values are prefixed because this
-// is a shared top-level enum whose verbs would otherwise collide at package scope.
+// Prefixed values: shared top-level enum, avoids package-scope collisions.
 enum RenderableAction {
   RENDERABLE_ACTION_UNSPECIFIED = 0;
-  RENDERABLE_ACTION_SUBMIT = 1;            // accept; content matches the data schema (edit = SUBMIT over a prefilled value)
-  RENDERABLE_ACTION_DECLINE = 2;           // user refuses (maps to deny for a permission ask)
-  RENDERABLE_ACTION_CANCEL = 3;            // user dismisses or defers; always offered so a thread cannot wedge
-  RENDERABLE_ACTION_RESPOND = 4;           // free-text reply; only when allowed (free-text-tolerant)
-  RENDERABLE_ACTION_UNSUPPORTED = 5;       // system-emitted: a strict ask reached a surface that cannot render it
+  RENDERABLE_ACTION_SUBMIT = 1;
+  RENDERABLE_ACTION_DECLINE = 2;
+  RENDERABLE_ACTION_CANCEL = 3;
+  RENDERABLE_ACTION_RESPOND = 4;       // free-text reply (only when allowed)
+  RENDERABLE_ACTION_UNSUPPORTED = 5;   // system-emitted: surface cannot render a strict ask
 }
 
-// Agent-emitted structured content. The data schema and values travel as JSON
-// strings so the wire stays out of JSON Schema's business and forward compatible
-// with MCP schema evolution.
 message Renderable {
-  string id = 1;                           // Correlation id (agent-generated)
+  string id = 1;
   RenderKind kind = 2;
-  string message = 3;                      // Prompt / title text (markdown where supported)
-  string data_schema_json = 4;             // Full JSON Schema; render hints inline via "x-ui"
-  string value_json = 5;                   // Proposed / prefilled data (optional)
-  repeated RenderableAction allowed_actions = 6;  // Must include CANCEL or DECLINE (v1: always blocking)
-  string intent = 7;                       // Open vocab; "tool_permission" recognized (optional)
+  string message = 3;
+  string data_schema_json = 4;                    // JSON Schema; render hints inline via "x-ui"
+  string value_json = 5;                          // proposed / prefilled data (optional)
+  repeated RenderableAction allowed_actions = 6;  // must include CANCEL or DECLINE
+  string intent = 7;                              // open vocab; "tool_permission" recognized (optional)
 }
 
-// The user's reply to a Renderable (platform → agent), riding PlatformFeedback.
 message RenderableResponse {
-  string id = 1;                           // Correlates to Renderable.id
+  string id = 1;                  // correlates to Renderable.id
   RenderableAction action = 2;
-  string content_json = 3;                 // iff action == SUBMIT; matches the data schema
-  string text = 4;                         // iff action == RESPOND
+  string content_json = 3;        // iff action == SUBMIT
+  string text = 4;                // iff action == RESPOND
 }
