@@ -104,16 +104,17 @@ export interface AgentResponse {
   audioConfig?: AudioStreamConfig;
   audioChunk?: AudioChunk;
   feedback?: PlatformFeedback;
+  renderable?: Renderable;
 }
 
 // Inbound platform feedback. Mirrors astro.messaging.v1.PlatformFeedback —
 // proto-loader flattens the oneof, so only one of the feedback fields below
 // is populated on any given event.
 //
-// The non-`reaction` / non-`text` variants are typed as opaque records on
-// purpose: SDK consumers should switch on the FeedbackEvent.kind string
-// rather than read these proto shapes directly, so over-exposing them just
-// adds API surface that callers shouldn't be touching.
+// The non-`reaction` / non-`text` / non-`renderableResponse` variants are typed
+// as opaque records on purpose: SDK consumers should switch on the
+// FeedbackEvent.kind string rather than read these proto shapes directly, so
+// over-exposing them just adds API surface that callers shouldn't be touching.
 export interface PlatformFeedback {
   conversationId: string;
   responseId?: string;
@@ -122,6 +123,7 @@ export interface PlatformFeedback {
   // oneof feedback — only one of these is set:
   reaction?: MessageReaction;
   text?: TextFeedback;
+  renderableResponse?: RenderableResponse;
   // Other oneof variants on the wire (stream_control, prompt_selection,
   // button_click, message_edit, message_delete). Present so the dispatch
   // code can detect kind, but intentionally untyped — consume via
@@ -143,6 +145,35 @@ export interface MessageReaction {
 export interface TextFeedback {
   text: string;
   prompt?: string;
+}
+
+// Agent-emitted structured content the user renders and responds to.
+// Mirrors astro.messaging.v1.Renderable / RenderableResponse.
+export type RenderKind = 'RENDER_KIND_UNSPECIFIED' | 'RENDER_KIND_FORM';
+
+export type RenderableAction =
+  | 'RENDERABLE_ACTION_UNSPECIFIED'
+  | 'RENDERABLE_ACTION_SUBMIT'
+  | 'RENDERABLE_ACTION_DECLINE'
+  | 'RENDERABLE_ACTION_CANCEL'
+  | 'RENDERABLE_ACTION_RESPOND'
+  | 'RENDERABLE_ACTION_UNSUPPORTED';
+
+export interface Renderable {
+  id: string;
+  kind: RenderKind;
+  message: string;
+  dataSchemaJson: string;
+  valueJson?: string;
+  allowedActions: RenderableAction[];
+  intent?: string;
+}
+
+export interface RenderableResponse {
+  id: string;
+  action: RenderableAction;
+  contentJson?: string;
+  text?: string;
 }
 
 export interface StatusUpdate {

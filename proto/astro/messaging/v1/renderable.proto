@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package astro.messaging.v1;
+
+option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
+
+// Structured content an agent asks the user to render and respond to.
+// Spec: docs/01-spec/interactive-rendering-elicitation-spec.md.
+
+enum RenderKind {
+  RENDER_KIND_UNSPECIFIED = 0;
+  RENDER_KIND_FORM = 1;
+  // RENDER_KIND_COMPONENT = 2;  // future
+}
+
+// Prefixed values: shared top-level enum, avoids package-scope collisions.
+enum RenderableAction {
+  RENDERABLE_ACTION_UNSPECIFIED = 0;
+  RENDERABLE_ACTION_SUBMIT = 1;
+  RENDERABLE_ACTION_DECLINE = 2;
+  RENDERABLE_ACTION_CANCEL = 3;
+  RENDERABLE_ACTION_RESPOND = 4;       // free-text reply (only when allowed)
+  RENDERABLE_ACTION_UNSUPPORTED = 5;   // system-emitted: surface cannot render a strict ask
+}
+
+message Renderable {
+  string id = 1;
+  RenderKind kind = 2;
+  string message = 3;
+  string data_schema_json = 4;                    // JSON Schema; render hints inline via "x-ui"
+  string value_json = 5;                          // proposed / prefilled data (optional)
+  repeated RenderableAction allowed_actions = 6;  // must include CANCEL or DECLINE
+  string intent = 7;                              // open vocab; "tool_permission" recognized (optional)
+}
+
+message RenderableResponse {
+  string id = 1;                  // correlates to Renderable.id
+  RenderableAction action = 2;
+  string content_json = 3;        // iff action == SUBMIT
+  string text = 4;                // iff action == RESPOND
+}

@@ -11,6 +11,8 @@ import {
   type Message,
   type PlatformContext,
   type AgentResponse,
+  type PlatformFeedback,
+  type Renderable,
   type ConversationRequest,
   type AudioStreamConfig,
   type AudioChunk,
@@ -141,6 +143,35 @@ describe('proto-loader field mapping', () => {
     expect(fieldNames).toContain('incomingMessage');
     expect(fieldNames).toContain('status');
     expect(fieldNames).toContain('content');
+    expect(fieldNames).toContain('renderable');
+  });
+
+  it('should expose renderable and renderableResponse on the wire and typed surface', () => {
+    // Wire: proto-loader flattens the new oneof members onto their parents.
+    expect(getFieldNames(packageDefinition['astro.messaging.v1.PlatformFeedback'])).toContain(
+      'renderableResponse',
+    );
+    const renderableFields = getFieldNames(packageDefinition['astro.messaging.v1.Renderable']);
+    expect(renderableFields).toContain('dataSchemaJson');
+    expect(renderableFields).toContain('allowedActions');
+
+    // Typed surface: these compile only because the SDK interfaces were extended.
+    const renderable: Renderable = {
+      id: 'render-1',
+      kind: 'RENDER_KIND_FORM',
+      message: 'Approve this write?',
+      dataSchemaJson: '{"type":"object"}',
+      allowedActions: ['RENDERABLE_ACTION_SUBMIT', 'RENDERABLE_ACTION_DECLINE'],
+      intent: 'tool_permission',
+    };
+    const response: AgentResponse = { conversationId: 'conv-1', renderable };
+    const feedback: PlatformFeedback = {
+      conversationId: 'conv-1',
+      renderableResponse: { id: 'render-1', action: 'RENDERABLE_ACTION_SUBMIT', contentJson: '{}' },
+    };
+
+    expect(response.renderable?.kind).toBe('RENDER_KIND_FORM');
+    expect(feedback.renderableResponse?.action).toBe('RENDERABLE_ACTION_SUBMIT');
   });
 
   it('should have ConversationRequest with message, feedback, and agentResponse fields', () => {
