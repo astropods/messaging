@@ -24,6 +24,7 @@ type WebAdapter struct {
 	agentConfigStore *store.AgentConfigStore
 	server           *http.Server
 	handlers         *Handlers
+	turns            *turnTracker
 
 	// Configuration
 	listenAddr        string
@@ -92,8 +93,14 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 	// Initialize connection manager
 	a.connManager = NewConnectionManager(a.heartbeatInterval)
 
+	// Per-turn stop state, shared with the HTTP handlers so a client stop
+	// (HandleCancel) and the agent response loop (HandleAgentResponse) agree on
+	// which turns are stopped.
+	a.turns = newTurnTracker()
+
 	// Initialize handlers
 	a.handlers = NewHandlers(a.connManager, a.sessionManager, a.threadStore, a.agentConfigStore)
+	a.handlers.turns = a.turns
 
 	slog.Info("[Web] Adapter initialized", "listen", a.listenAddr)
 	return nil
@@ -118,6 +125,7 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	// API routes
 	mux.HandleFunc("POST /api/conversations", a.handlers.HandleCreateConversation)
 	mux.HandleFunc("POST /api/conversations/{id}/messages", a.handlers.HandleSendMessage)
+	mux.HandleFunc("POST /api/conversations/{id}/cancel", a.handlers.HandleCancel)
 	mux.HandleFunc("GET /api/conversations/{id}/stream", a.handlers.HandleStream)
 	mux.HandleFunc("GET /api/conversations/{id}/history", a.handlers.HandleHistory)
 	mux.HandleFunc("GET /api/agent/config", a.handlers.HandleAgentConfig)
@@ -203,12 +211,13 @@ func (a *WebAdapter) SetMessageHandler(handler adapter.MessageHandler) {
 	}
 }
 
-// SetFeedbackHandler is a no-op for the web adapter today — the playground
-// surface doesn't render thumbs/comment widgets. Kept to satisfy the
-// adapter.Adapter interface so future web-side feedback (e.g. a UI thumbs
-// affordance in the chat client) has a place to plug in.
+// SetFeedbackHandler wires the handler that forwards platform feedback (the chat
+// "stop generating" StreamControl) to the agent over the gRPC stream. The only
+// feedback the web adapter emits today is the stop signal from HandleCancel.
 func (a *WebAdapter) SetFeedbackHandler(handler adapter.FeedbackHandler) {
-	// intentionally empty
+	if a.handlers != nil {
+		a.handlers.SetFeedbackHandler(handler)
+	}
 }
 
 // SetAuthorizer wires the authorizer used to gate every API request. nil
@@ -236,6 +245,22 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 	// Convert response to SSE events based on payload type
 	switch payload := response.Payload.(type) {
 	case *pb.AgentResponse_Content:
+		// The user stopped this turn: drop the agent's remaining output so a
+		// non-cooperating agent's late/complete reply can't reach the client or
+		// the astro-server chat store. The gate stays closed until the agent
+		// starts a NEW turn (a START chunk); it is deliberately NOT lifted by the
+		// next user send, so the stopped turn's trailing output can't bleed into
+		// the following message on the same conversation.
+		if a.turns != nil && a.turns.gateContent(conversationID, payload.Content.Type == pb.ContentChunk_START) {
+			// Dropped because the turn is stopped. If this is the stopped
+			// generation's terminal chunk, clear the gate so the entry doesn't
+			// linger for a stopped-then-abandoned conversation.
+			if payload.Content.Type == pb.ContentChunk_END {
+				a.turns.clear(conversationID)
+			}
+			return nil
+		}
+
 		// Content chunk
 		event := NewChunkEvent(payload.Content, response.ResponseId)
 		a.connManager.Broadcast(conversationID, event)
@@ -269,6 +294,11 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		a.connManager.Broadcast(conversationID, event)
 
 	case *pb.AgentResponse_Error:
+		// An error terminates the turn; clear any stop-gate so the entry doesn't
+		// linger (no-op when the conversation isn't stopped).
+		if a.turns != nil {
+			a.turns.clear(conversationID)
+		}
 		// Error response
 		event := NewErrorEvent(payload.Error)
 		a.connManager.Broadcast(conversationID, event)

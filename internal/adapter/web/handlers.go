@@ -21,9 +21,13 @@ type Handlers struct {
 	sessionManager   SessionManager
 	authz            authz.Authorizer // nil = skip authz (dev convenience)
 	msgHandler       adapter.MessageHandler
+	feedbackHandler  adapter.FeedbackHandler
 	audioForwarder   adapter.AudioForwarder
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
+	// turns tracks per-conversation stop state so a client stop can drop the
+	// agent's late output. Shared with WebAdapter.
+	turns *turnTracker
 }
 
 // NewHandlers creates a new Handlers instance
@@ -87,6 +91,12 @@ func (h *Handlers) authenticate(w http.ResponseWriter, r *http.Request) *Session
 // SetMessageHandler sets the message handler
 func (h *Handlers) SetMessageHandler(handler adapter.MessageHandler) {
 	h.msgHandler = handler
+}
+
+// SetFeedbackHandler sets the handler that forwards platform feedback (the chat
+// "stop generating" StreamControl) to the agent over the gRPC stream.
+func (h *Handlers) SetFeedbackHandler(handler adapter.FeedbackHandler) {
+	h.feedbackHandler = handler
 }
 
 // SetAudioForwarder sets the audio streaming forwarder
@@ -207,6 +217,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 		return
 	}
+
 	if err := h.msgHandler(ctx, msg); err != nil {
 		slog.Error(fmt.Sprintf("[Web] Error forwarding message: %v", err))
 		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process message")
@@ -237,6 +248,71 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		slog.Error(fmt.Sprintf("[Web] Encode error on send message: %v", err))
 	}
 	slog.Debug(fmt.Sprintf("[Web] Message sent: id=%q, conversation=%q, user=%q", messageID, conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
+}
+
+// HandleCancel handles POST /api/conversations/{id}/cancel — the chat
+// "stop generating" action.
+//
+// The agent's model call runs in the agent process, so the sidecar cannot halt
+// generation directly. Instead it (1) marks the turn stopped so the agent's
+// remaining chunks are dropped until the next turn's START (see
+// HandleAgentResponse), (2) sends a terminal finish event and then closes the
+// conversation's SSE connections so the client turn ends and the astro-server
+// chat-store tee unwinds (no lingering writer to resurrect the turn), and (3)
+// forwards a StreamControl STOP to the agent as a best-effort signal for
+// agents/SDKs that honor it. Agents that don't honor it keep running, but their
+// output is discarded.
+func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
+	// Authenticate the request (session) and authorize against this
+	// deployment's grants. authenticate writes the response on failure.
+	session := h.authenticate(w, r)
+	if session == nil {
+		return
+	}
+
+	// Extract conversation ID from path
+	conversationID := r.PathValue("id")
+	if conversationID == "" {
+		http.Error(w, "Missing conversation ID", http.StatusBadRequest)
+		return
+	}
+
+	// Mark the turn stopped so subsequent agent chunks are dropped.
+	if h.turns != nil {
+		h.turns.stop(conversationID)
+	}
+
+	// End any live SSE turn for this conversation: emit finish, then close the
+	// connections so every reader (client + astro-server detached persister)
+	// unwinds instead of lingering and re-marking the turn active.
+	h.connManager.Broadcast(conversationID, NewFinishEvent(""))
+	h.connManager.CloseConversation(conversationID)
+
+	// Best-effort: signal the agent to stop generating. Honored by SDKs/agents
+	// that consume StreamControl; ignored otherwise (their output is dropped).
+	if h.feedbackHandler != nil {
+		fb := &pb.PlatformFeedback{
+			ConversationId: conversationID,
+			Timestamp:      timestamppb.Now(),
+			Feedback: &pb.PlatformFeedback_StreamControl{
+				StreamControl: &pb.StreamControl{
+					Action: pb.StreamControl_STOP,
+					Reason: "user stopped generation",
+				},
+			},
+			User: &pb.User{
+				Id:       session.UserID,
+				Username: session.Username,
+			},
+		}
+		if err := h.feedbackHandler(r.Context(), fb); err != nil {
+			slog.Debug("[Web] stop signal not delivered to agent", "conversation", conversationID, "err", err)
+		}
+	}
+
+	slog.Debug(fmt.Sprintf("[Web] Conversation stopped: id=%q, user=%q", conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // HandleStream handles GET /api/conversations/{id}/stream (SSE)
@@ -299,8 +375,21 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 			slog.Debug(fmt.Sprintf("[Web] SSE stream context cancelled: connection=%s", connID))
 			return
 		case <-conn.Done:
-			slog.Debug(fmt.Sprintf("[Web] SSE stream closed: connection=%s", connID))
-			return
+			// The connection was closed (e.g. HandleCancel broadcasts a terminal
+			// finish and then closes in the same call). Because select picks a
+			// ready case at random, Done can win over an already-enqueued finish;
+			// drain and flush any buffered events before returning so that finish
+			// isn't dropped.
+			for {
+				select {
+				case event := <-conn.EventChan:
+					_, _ = fmt.Fprint(w, event.Format())
+					flusher.Flush()
+				default:
+					slog.Debug(fmt.Sprintf("[Web] SSE stream closed: connection=%s", connID))
+					return
+				}
+			}
 		case event := <-conn.EventChan:
 			_, _ = fmt.Fprint(w, event.Format())
 			flusher.Flush()

@@ -1747,6 +1747,7 @@ func TestFeedbackKind(t *testing.T) {
 	}{
 		{"reaction", &pb.PlatformFeedback{Feedback: &pb.PlatformFeedback_Reaction{Reaction: &pb.MessageReaction{}}}, "reaction"},
 		{"text", &pb.PlatformFeedback{Feedback: &pb.PlatformFeedback_Text{Text: &pb.TextFeedback{}}}, "text"},
+		{"stream_control", &pb.PlatformFeedback{Feedback: &pb.PlatformFeedback_StreamControl{StreamControl: &pb.StreamControl{Action: pb.StreamControl_STOP}}}, "stream_control"},
 		{"unwired_variant", &pb.PlatformFeedback{Feedback: &pb.PlatformFeedback_ButtonClick{ButtonClick: &pb.ButtonClick{}}}, "unknown"},
 		{"unset", &pb.PlatformFeedback{}, "unknown"},
 	}

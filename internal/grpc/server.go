@@ -416,6 +416,8 @@ func feedbackKind(fb *pb.PlatformFeedback) string {
 		return "reaction"
 	case *pb.PlatformFeedback_Text:
 		return "text"
+	case *pb.PlatformFeedback_StreamControl:
+		return "stream_control"
 	default:
 		return "unknown"
 	}
