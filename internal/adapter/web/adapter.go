@@ -246,10 +246,12 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 	switch payload := response.Payload.(type) {
 	case *pb.AgentResponse_Content:
 		// The user stopped this turn: drop the agent's remaining output so a
-		// non-cooperating agent's late/full reply can't reach the client or the
-		// astro-server chat store after the stop. State clears when the next user
-		// message begins a new turn.
-		if a.turns != nil && a.turns.isStopped(conversationID) {
+		// non-cooperating agent's late/complete reply can't reach the client or
+		// the astro-server chat store. The gate stays closed until the agent
+		// starts a NEW turn (a START chunk); it is deliberately NOT lifted by the
+		// next user send, so the stopped turn's trailing output can't bleed into
+		// the following message on the same conversation.
+		if a.turns != nil && a.turns.gateContent(conversationID, payload.Content.Type == pb.ContentChunk_START) {
 			return nil
 		}
 
@@ -273,11 +275,6 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 				},
 				Content: payload.Content.Content,
 			})
-		}
-
-		// Turn completed normally — drop per-turn tracker state.
-		if payload.Content.Type == pb.ContentChunk_END && a.turns != nil {
-			a.turns.clear(conversationID)
 		}
 
 	case *pb.AgentResponse_Status:

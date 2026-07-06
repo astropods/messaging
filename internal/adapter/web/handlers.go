@@ -218,12 +218,6 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A new turn is starting: clear any prior stop state before the agent can
-	// stream response chunks for this conversation.
-	if h.turns != nil {
-		h.turns.begin(conversationID)
-	}
-
 	if err := h.msgHandler(ctx, msg); err != nil {
 		slog.Error(fmt.Sprintf("[Web] Error forwarding message: %v", err))
 		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process message")
@@ -261,9 +255,10 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 //
 // The agent's model call runs in the agent process, so the sidecar cannot halt
 // generation directly. Instead it (1) marks the turn stopped so the agent's
-// remaining chunks are dropped (see HandleAgentResponse), (2) sends a terminal
-// finish event to any live SSE stream so the client turn ends (and astro-server,
-// which tees the stream into its chat store, finalizes the turn), and (3)
+// remaining chunks are dropped until the next turn's START (see
+// HandleAgentResponse), (2) sends a terminal finish event and then closes the
+// conversation's SSE connections so the client turn ends and the astro-server
+// chat-store tee unwinds (no lingering writer to resurrect the turn), and (3)
 // forwards a StreamControl STOP to the agent as a best-effort signal for
 // agents/SDKs that honor it. Agents that don't honor it keep running, but their
 // output is discarded.
@@ -287,8 +282,11 @@ func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
 		h.turns.stop(conversationID)
 	}
 
-	// End any live SSE turn for this conversation.
+	// End any live SSE turn for this conversation: emit finish, then close the
+	// connections so every reader (client + astro-server detached persister)
+	// unwinds instead of lingering and re-marking the turn active.
 	h.connManager.Broadcast(conversationID, NewFinishEvent(""))
+	h.connManager.CloseConversation(conversationID)
 
 	// Best-effort: signal the agent to stop generating. Honored by SDKs/agents
 	// that consume StreamControl; ignored otherwise (their output is dropped).

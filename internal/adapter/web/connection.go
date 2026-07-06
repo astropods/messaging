@@ -162,6 +162,29 @@ func (cm *ConnectionManager) sendHeartbeats() {
 	}
 }
 
+// CloseConversation closes all SSE connections for a single conversation. It is
+// used on a client "stop generating" so the stream ends immediately for every
+// reader — including the astro-server chat-store persister, whose detached tee
+// keeps reading (and re-marking the turn active) until the upstream SSE closes.
+// Closing here makes that tee unwind so a stopped turn leaves no lingering
+// writer that could resurrect it on the next turn.
+func (cm *ConnectionManager) CloseConversation(conversationID string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	conns, ok := cm.connections[conversationID]
+	if !ok {
+		return
+	}
+	for connID, conn := range conns {
+		close(conn.Done)
+		delete(conns, connID)
+		metrics.WebActiveConnections.Dec()
+	}
+	delete(cm.connections, conversationID)
+	slog.Debug(fmt.Sprintf("[Web] SSE connections closed for conversation=%q", conversationID)) //nolint:gosec // G706 false positive: %q escapes control characters
+}
+
 // CloseAll closes all connections (for shutdown)
 func (cm *ConnectionManager) CloseAll() {
 	cm.mu.Lock()
