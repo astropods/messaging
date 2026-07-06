@@ -336,6 +336,37 @@ func (s *Store) UpsertAssistantProgress(conversationID, content string) (string,
 	return msg.ID, nil
 }
 
+// FinalizeStopped makes an interrupted turn terminal. When the latest message
+// is still the user's (the assistant turn was stopped before any assistant row
+// was persisted), it appends an assistant row carrying whatever partial text the
+// user saw, so AssistantStreaming (derived as "latest message is the user's")
+// resolves to false. When an assistant row already exists (the turn had
+// completed, or was progressively persisted), it is left untouched — a stop must
+// never shrink a finished reply. Returns true when a row was appended.
+func (s *Store) FinalizeStopped(conversationID, partial string) (bool, error) {
+	var lastRole string
+	err := s.db.QueryRow(`
+		SELECT role FROM messages
+		WHERE conversation_id = ?
+		ORDER BY seq DESC LIMIT 1`,
+		conversationID,
+	).Scan(&lastRole)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("chatstore finalize stopped read: %w", err)
+	}
+	if lastRole != "user" {
+		return false, nil
+	}
+	if _, err := s.AppendMessage(conversationID, "", "assistant", partial); err != nil {
+		return false, err
+	}
+	s.touchConversation(conversationID)
+	return true, nil
+}
+
 func (s *Store) touchConversation(conversationID string) {
 	_, _ = s.db.Exec(`UPDATE conversations SET updated_at = ? WHERE conversation_id = ?`,
 		time.Now().UnixMilli(), conversationID)
