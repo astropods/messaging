@@ -252,6 +252,12 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		// next user send, so the stopped turn's trailing output can't bleed into
 		// the following message on the same conversation.
 		if a.turns != nil && a.turns.gateContent(conversationID, payload.Content.Type == pb.ContentChunk_START) {
+			// Dropped because the turn is stopped. If this is the stopped
+			// generation's terminal chunk, clear the gate so the entry doesn't
+			// linger for a stopped-then-abandoned conversation.
+			if payload.Content.Type == pb.ContentChunk_END {
+				a.turns.clear(conversationID)
+			}
 			return nil
 		}
 
@@ -288,6 +294,11 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		a.connManager.Broadcast(conversationID, event)
 
 	case *pb.AgentResponse_Error:
+		// An error terminates the turn; clear any stop-gate so the entry doesn't
+		// linger (no-op when the conversation isn't stopped).
+		if a.turns != nil {
+			a.turns.clear(conversationID)
+		}
 		// Error response
 		event := NewErrorEvent(payload.Error)
 		a.connManager.Broadcast(conversationID, event)

@@ -375,8 +375,21 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 			slog.Debug(fmt.Sprintf("[Web] SSE stream context cancelled: connection=%s", connID))
 			return
 		case <-conn.Done:
-			slog.Debug(fmt.Sprintf("[Web] SSE stream closed: connection=%s", connID))
-			return
+			// The connection was closed (e.g. HandleCancel broadcasts a terminal
+			// finish and then closes in the same call). Because select picks a
+			// ready case at random, Done can win over an already-enqueued finish;
+			// drain and flush any buffered events before returning so that finish
+			// isn't dropped.
+			for {
+				select {
+				case event := <-conn.EventChan:
+					_, _ = fmt.Fprint(w, event.Format())
+					flusher.Flush()
+				default:
+					slog.Debug(fmt.Sprintf("[Web] SSE stream closed: connection=%s", connID))
+					return
+				}
+			}
 		case event := <-conn.EventChan:
 			_, _ = fmt.Fprint(w, event.Format())
 			flusher.Flush()

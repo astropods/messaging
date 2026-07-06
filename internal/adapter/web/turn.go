@@ -2,6 +2,14 @@ package web
 
 import "sync"
 
+// maxTrackedStops bounds the turnTracker's stopped map. Entries are normally
+// short-lived — cleared when the stopped generation ends (a terminal chunk) or
+// when a new turn starts (a START chunk). This cap is a safety valve for the
+// degenerate case where a stopped turn neither terminates nor is resumed and
+// the conversation is abandoned, so the map can't grow without bound over a
+// long-lived process.
+const maxTrackedStops = 4096
+
 // turnTracker gates a conversation's streamed agent output around a client
 // "stop generating".
 //
@@ -32,7 +40,26 @@ func newTurnTracker() *turnTracker {
 func (t *turnTracker) stop(conversationID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// Safety valve: if the map has grown past the cap (a leak of stopped-then-
+	// abandoned conversations that never terminated or resumed), evict an
+	// arbitrary entry before adding. Normal usage stays far below the cap
+	// because entries are cleared on the turn's terminal chunk or next START.
+	if _, exists := t.stopped[conversationID]; !exists && len(t.stopped) >= maxTrackedStops {
+		for k := range t.stopped {
+			delete(t.stopped, k)
+			break
+		}
+	}
 	t.stopped[conversationID] = true
+}
+
+// clear removes any gate state for conversationID. Called when the stopped
+// generation reaches a terminal chunk, so the entry doesn't linger for a
+// stopped-then-abandoned conversation.
+func (t *turnTracker) clear(conversationID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.stopped, conversationID)
 }
 
 // gateContent reports whether a streamed content chunk should be dropped. A
