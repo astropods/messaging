@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"testing"
+	"time"
 
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
@@ -124,9 +125,9 @@ func TestTurnTrackerStopReturnsPartial(t *testing.T) {
 	}
 }
 
-// The partial map is bounded like stopped so a stream that never reaches
-// END/error and is never stopped (e.g. an agent that crashes mid-turn) can't
-// leak buffers without bound.
+// The per-conversation turn-state map is bounded like stopped so a stream that
+// never reaches END/error and is never stopped (e.g. an agent that crashes
+// mid-turn) can't leak state without bound.
 func TestTurnTrackerPartialMapBounded(t *testing.T) {
 	tr := newTurnTracker()
 	for i := 0; i < maxTrackedStops+50; i++ {
@@ -134,9 +135,50 @@ func TestTurnTrackerPartialMapBounded(t *testing.T) {
 	}
 
 	tr.mu.Lock()
-	n := len(tr.partial)
+	n := len(tr.turns)
 	tr.mu.Unlock()
 	if n > maxTrackedStops {
-		t.Fatalf("partial map size %d exceeds cap %d", n, maxTrackedStops)
+		t.Fatalf("turn-state map size %d exceeds cap %d", n, maxTrackedStops)
+	}
+}
+
+// isStreaming reflects an in-flight turn: true once a chunk is recorded, false
+// before any chunk and after the turn is cleared (END/error/stopped-END).
+func TestTurnTrackerIsStreaming(t *testing.T) {
+	tr := newTurnTracker()
+	if tr.isStreaming("c") {
+		t.Fatal("no turn recorded yet: isStreaming must be false")
+	}
+	tr.record("c", contentChunk(pb.ContentChunk_START, "hi"))
+	if !tr.isStreaming("c") {
+		t.Fatal("after a chunk: isStreaming must be true")
+	}
+	tr.clear("c")
+	if tr.isStreaming("c") {
+		t.Fatal("after clear: isStreaming must be false")
+	}
+}
+
+// dueForPersist throttles progressive persistence: the first check for a turn
+// fires (nothing persisted yet), an immediate re-check is throttled, and after
+// the interval elapses it fires again. clear() resets the turn.
+func TestTurnTrackerDueForPersist(t *testing.T) {
+	tr := newTurnTracker()
+	tr.record("c", contentChunk(pb.ContentChunk_START, "hi"))
+
+	if !tr.dueForPersist("c", 50*time.Millisecond) {
+		t.Fatal("first persist check should fire (never persisted this turn)")
+	}
+	if tr.dueForPersist("c", 50*time.Millisecond) {
+		t.Fatal("immediate re-check should be throttled")
+	}
+	time.Sleep(60 * time.Millisecond)
+	if !tr.dueForPersist("c", 50*time.Millisecond) {
+		t.Fatal("after the interval the check should fire again")
+	}
+
+	// Untracked conversation never fires.
+	if tr.dueForPersist("never-seen", time.Millisecond) {
+		t.Fatal("dueForPersist must be false for an untracked conversation")
 	}
 }

@@ -15,6 +15,12 @@ import (
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
+// chatPersistThrottle bounds how often a streaming assistant turn is
+// progressively written to the chat store — roughly one write per interval
+// rather than one per token. The terminal END chunk always flushes the final
+// text regardless of this throttle.
+const chatPersistThrottle = 250 * time.Millisecond
+
 // WebAdapter implements adapter.Adapter for web browser clients via HTTP + SSE
 type WebAdapter struct {
 	config           adapter.Config
@@ -297,20 +303,27 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 			})
 		}
 
-		// Persist the assistant reply to the deployment-local chat store on the
-		// terminal chunk so the chat page can rehydrate the full turn. Persist the
-		// full text buffered across the turn (what the user saw), not this END
-		// chunk's own content — agents stream the reply as deltas and usually end
-		// with an empty END, so END.Content alone would persist a blank reply.
-		if a.chatStore != nil && payload.Content.Type == pb.ContentChunk_END {
-			content := payload.Content.Content
-			if a.turns != nil {
-				if buffered := a.turns.content(conversationID); buffered != "" {
-					content = buffered
+		// Persist the assistant reply to the deployment-local chat store. Write
+		// progressively (throttled) during the stream and always flush on END, so
+		// the store holds a stable in-flight assistant row throughout the turn.
+		// This is what lets a client that switches conversations mid-stream,
+		// reloads, or reconnects reconcile to the store instead of rebuilding the
+		// reply from SSE deltas (which the server never replays). Persist the full
+		// buffered text (what the user saw), not this chunk's own content — agents
+		// stream deltas and usually send an empty END, so a single chunk alone
+		// would persist a partial or blank reply.
+		if a.chatStore != nil {
+			isEnd := payload.Content.Type == pb.ContentChunk_END
+			if isEnd || (a.turns != nil && a.turns.dueForPersist(conversationID, chatPersistThrottle)) {
+				content := payload.Content.Content
+				if a.turns != nil {
+					if buffered := a.turns.content(conversationID); buffered != "" {
+						content = buffered
+					}
 				}
-			}
-			if _, err := a.chatStore.UpsertAssistantProgress(conversationID, content); err != nil {
-				slog.Error("[Web] chat persist assistant message failed", "conversation", conversationID, "err", err)
+				if _, err := a.chatStore.UpsertAssistantProgress(conversationID, content); err != nil {
+					slog.Error("[Web] chat persist assistant message failed", "conversation", conversationID, "err", err)
+				}
 			}
 		}
 

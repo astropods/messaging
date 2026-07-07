@@ -75,11 +75,15 @@ func (h *Handlers) HandleListChatConversations(w http.ResponseWriter, r *http.Re
 
 	out := make([]chatConversationSummary, 0, len(convs))
 	for _, c := range convs {
+		// A turn actively streaming in this sidecar overrides the persisted-state
+		// heuristic: the assistant row is written progressively, so the store
+		// alone can't tell an in-flight turn from a finished one.
+		streaming := c.AssistantStreaming || (h.turns != nil && h.turns.isStreaming(c.ConversationID))
 		out = append(out, chatConversationSummary{
 			ConversationID:     c.ConversationID,
 			Title:              c.Title,
 			UpdatedAt:          c.UpdatedAt,
-			AssistantStreaming: c.AssistantStreaming,
+			AssistantStreaming: streaming,
 		})
 	}
 	writeJSON(w, http.StatusOK, listChatConversationsResponse{Conversations: out})
@@ -125,7 +129,13 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	assistantStreaming := len(all) > 0 && all[len(all)-1].Role == "user"
+	// A turn is in flight when the latest persisted message is still the user's
+	// (awaiting the first assistant chunk) OR this sidecar is actively streaming
+	// the assistant reply. The second clause is required because the assistant
+	// row is persisted progressively, so "latest message is the user's" alone no
+	// longer distinguishes an in-flight turn from a finished one.
+	assistantStreaming := (len(all) > 0 && all[len(all)-1].Role == "user") ||
+		(h.turns != nil && h.turns.isStreaming(conversationID))
 	messages, hasMore, oldestSeq := paginateChatMessages(all, limit, beforeSeq)
 
 	writeJSON(w, http.StatusOK, getChatConversationResponse{
