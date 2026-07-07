@@ -229,12 +229,6 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A new turn is starting: reset stop/partial state before the agent can
-	// stream any response chunks for this conversation.
-	if h.turns != nil {
-		h.turns.begin(conversationID)
-	}
-
 	if err := h.msgHandler(ctx, msg); err != nil {
 		slog.Error(fmt.Sprintf("[Web] Error forwarding message: %v", err))
 		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process message")
@@ -285,12 +279,13 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 //
 // The agent's model call runs in the agent process, so the sidecar cannot halt
 // generation directly. Instead it (1) marks the turn stopped so the agent's
-// remaining chunks are dropped (see HandleAgentResponse), (2) persists the
-// partial the client saw and flips the conversation out of the streaming state,
-// (3) sends a terminal finish event to any live SSE stream, and (4) forwards a
-// StreamControl STOP to the agent as a best-effort signal for agents/SDKs that
-// honor it. Agents that don't honor it keep running, but their output is
-// discarded.
+// remaining chunks are dropped until the next turn's START (see
+// HandleAgentResponse), (2) persists the partial the client saw and flips the
+// conversation out of the streaming state in the deployment-local chat store,
+// (3) sends a terminal finish event and closes the conversation's SSE
+// connections so the client turn ends promptly, and (4) forwards a StreamControl
+// STOP to the agent as a best-effort signal for agents/SDKs that honor it.
+// Agents that don't honor it keep running, but their output is discarded.
 func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
 	// Authenticate the request (session) and authorize against this
 	// deployment's grants. authenticate writes the response on failure.
@@ -312,16 +307,19 @@ func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
 		partial = h.turns.stop(conversationID)
 	}
 
-	// Make the turn terminal in the store so the chat page stops showing it as
-	// streaming. Never shrinks an already-finished reply.
+	// Make the turn terminal in the deployment-local chat store so the chat page
+	// stops showing it as streaming. Never shrinks an already-finished reply;
+	// when the partial was progressively persisted this is a no-op.
 	if h.chatStore != nil {
 		if _, err := h.chatStore.FinalizeStopped(conversationID, partial); err != nil {
 			slog.Error("[Web] chat finalize stopped failed", "conversation", conversationID, "err", err)
 		}
 	}
 
-	// End any live SSE turn for this conversation.
+	// End any live SSE turn: emit finish, then close the conversation's SSE
+	// connections so the client turn ends promptly instead of lingering.
 	h.connManager.Broadcast(conversationID, NewFinishEvent(""))
+	h.connManager.CloseConversation(conversationID)
 
 	// Best-effort: signal the agent to stop generating. Honored by SDKs/agents
 	// that consume StreamControl; ignored otherwise (their output is dropped).
@@ -410,8 +408,21 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 			slog.Debug(fmt.Sprintf("[Web] SSE stream context cancelled: connection=%s", connID))
 			return
 		case <-conn.Done:
-			slog.Debug(fmt.Sprintf("[Web] SSE stream closed: connection=%s", connID))
-			return
+			// The connection was closed (e.g. HandleCancel broadcasts a terminal
+			// finish and then closes in the same call). Because select picks a
+			// ready case at random, Done can win over an already-enqueued finish;
+			// drain and flush any buffered events before returning so that finish
+			// isn't dropped.
+			for {
+				select {
+				case event := <-conn.EventChan:
+					_, _ = fmt.Fprint(w, event.Format())
+					flusher.Flush()
+				default:
+					slog.Debug(fmt.Sprintf("[Web] SSE stream closed: connection=%s", connID))
+					return
+				}
+			}
 		case event := <-conn.EventChan:
 			_, _ = fmt.Fprint(w, event.Format())
 			flusher.Flush()

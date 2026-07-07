@@ -23,7 +23,11 @@
         "threadId": "",
         "channelName": "",
         "workspaceId": "",
-        "platformData": {}
+        "platformData": {},
+        "botUserId": "",
+        "eventKind": "EVENT_KIND_UNSPECIFIED",
+        "threadRootId": "",
+        "userId": ""
       },
       "user": {
         "id": "U999",
@@ -75,7 +79,11 @@
         "bot_id": "B123",
         "custom_key": "custom_value",
         "team_id": "T999"
-      }
+      },
+      "botUserId": "",
+      "eventKind": "EVENT_KIND_UNSPECIFIED",
+      "threadRootId": "",
+      "userId": ""
     },
     "user": {
       "id": "U123456",
@@ -101,7 +109,11 @@
       "bot_id": "B123",
       "custom_key": "custom_value",
       "team_id": "T999"
-    }
+    },
+    "botUserId": "",
+    "eventKind": "EVENT_KIND_UNSPECIFIED",
+    "threadRootId": "",
+    "userId": ""
   },
   "threadMessage": {
     "messageId": "msg-001",

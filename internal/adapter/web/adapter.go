@@ -219,9 +219,8 @@ func (a *WebAdapter) SetMessageHandler(handler adapter.MessageHandler) {
 	}
 }
 
-// SetFeedbackHandler wires the handler that forwards platform feedback
-// (currently the chat "stop generating" StreamControl) to the agent over the
-// gRPC stream. The chat client has no thumbs/comment widgets yet; the only
+// SetFeedbackHandler wires the handler that forwards platform feedback (the chat
+// "stop generating" StreamControl) to the agent over the gRPC stream. The only
 // feedback the web adapter emits today is the stop signal from HandleCancel.
 func (a *WebAdapter) SetFeedbackHandler(handler adapter.FeedbackHandler) {
 	if a.handlers != nil {
@@ -254,16 +253,24 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 	// Convert response to SSE events based on payload type
 	switch payload := response.Payload.(type) {
 	case *pb.AgentResponse_Content:
-		// The user stopped this turn: the stop already ended the client turn and
-		// persisted the partial. Drop the agent's remaining output so a
-		// non-cooperating agent's late/full reply can't overwrite it or resurrect
-		// the stream. State clears when the next user message begins a new turn.
-		if a.turns != nil && a.turns.isStopped(conversationID) {
+		// The user stopped this turn: drop the agent's remaining output so a
+		// non-cooperating agent's late/complete reply can't reach the client or
+		// be persisted to the deployment-local chat store. The gate stays closed
+		// until the agent starts a NEW turn (a START chunk); it is deliberately
+		// NOT lifted by the next user send, so the stopped turn's trailing output
+		// can't bleed into the following message on the same conversation.
+		if a.turns != nil && a.turns.gateContent(conversationID, payload.Content.Type == pb.ContentChunk_START) {
+			// Dropped because the turn is stopped. If this is the stopped
+			// generation's terminal chunk, clear the gate so the entry doesn't
+			// linger for a stopped-then-abandoned conversation.
+			if payload.Content.Type == pb.ContentChunk_END {
+				a.turns.clear(conversationID)
+			}
 			return nil
 		}
 
-		// Track the partial so a mid-stream stop can persist exactly what the
-		// user saw so far.
+		// Buffer the partial so a mid-stream stop can persist exactly what the
+		// user saw so far (the stop path reads it via turnTracker.stop).
 		if a.turns != nil {
 			a.turns.record(conversationID, payload.Content)
 		}
@@ -314,6 +321,11 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		a.connManager.Broadcast(conversationID, event)
 
 	case *pb.AgentResponse_Error:
+		// An error terminates the turn; clear any stop-gate so the entry doesn't
+		// linger (no-op when the conversation isn't stopped).
+		if a.turns != nil {
+			a.turns.clear(conversationID)
+		}
 		// Error response
 		event := NewErrorEvent(payload.Error)
 		a.connManager.Broadcast(conversationID, event)
