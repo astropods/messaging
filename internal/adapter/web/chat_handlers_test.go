@@ -9,6 +9,7 @@ package web
 //	go test ./internal/adapter/web -run TestHandleSetChatConversationTitle -v
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/store/sqlite"
+	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
 // newChatTitleHandlers builds Handlers wired to a fresh temp SQLite chat store
@@ -157,5 +159,54 @@ func TestHandleSetChatConversationTitle_Missing_404_DoesNotCreate(t *testing.T) 
 	conv, _ := st.Get("conv-missing")
 	if conv != nil {
 		t.Errorf("title endpoint created a conversation: %+v", conv)
+	}
+}
+
+func sendMessageRequest(user, conversationID, content string) *http.Request {
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/conversations/"+conversationID+"/messages",
+		strings.NewReader(`{"content":`+strconvQuote(content)+`}`))
+	if user != "" {
+		req.Header.Set("X-User-ID", user)
+	}
+	req.SetPathValue("id", conversationID)
+	return req
+}
+
+// The user turn must be persisted before the message is forwarded to the agent:
+// HandleAgentResponse runs on another goroutine, so a fast agent that reaches
+// END before the user write lands would otherwise invert turn order or — since
+// UpsertAssistantProgress no-ops on a not-yet-created conversation — drop the
+// assistant reply. The message handler here inspects the store at forward time.
+func TestHandleSendMessagePersistsUserBeforeForwarding(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+
+	var userRowVisibleAtForward bool
+	h.SetMessageHandler(func(_ context.Context, msg *pb.Message) error {
+		msgs, err := st.ListMessages(msg.ConversationId)
+		if err != nil {
+			return err
+		}
+		for _, m := range msgs {
+			if m.Role == "user" {
+				userRowVisibleAtForward = true
+			}
+		}
+		return nil
+	})
+
+	w := httptest.NewRecorder()
+	h.HandleSendMessage(w, sendMessageRequest("user-1", "conv-1", "hello world"))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%q", w.Code, w.Body.String())
+	}
+	if !userRowVisibleAtForward {
+		t.Fatal("user message must be persisted before forwarding to the agent")
+	}
+	// First send also creates and titles the conversation.
+	conv, _ := st.Get("conv-1")
+	if conv == nil || conv.Title != "hello world" {
+		t.Fatalf("conversation not created/titled on first send: %+v", conv)
 	}
 }
