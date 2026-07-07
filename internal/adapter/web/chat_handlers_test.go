@@ -59,7 +59,7 @@ func strconvQuote(s string) string {
 
 func TestHandleSetChatConversationTitle_RenamesOwnedConversation(t *testing.T) {
 	h, st := newChatTitleHandlers(t)
-	if err := st.Upsert("conv-1", "user-1", "original"); err != nil {
+	if err := st.Upsert(t.Context(), "conv-1", "user-1", "original"); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
 
@@ -69,7 +69,7 @@ func TestHandleSetChatConversationTitle_RenamesOwnedConversation(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d body=%q", w.Code, w.Body.String())
 	}
-	conv, err := st.Get("conv-1")
+	conv, err := st.Get(t.Context(), "conv-1")
 	if err != nil || conv == nil {
 		t.Fatalf("get conv: conv=%v err=%v", conv, err)
 	}
@@ -80,7 +80,7 @@ func TestHandleSetChatConversationTitle_RenamesOwnedConversation(t *testing.T) {
 
 func TestHandleSetChatConversationTitle_NoSession_401(t *testing.T) {
 	h, st := newChatTitleHandlers(t)
-	if err := st.Upsert("conv-1", "user-1", "original"); err != nil {
+	if err := st.Upsert(t.Context(), "conv-1", "user-1", "original"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -91,7 +91,7 @@ func TestHandleSetChatConversationTitle_NoSession_401(t *testing.T) {
 		t.Fatalf("want 401, got %d body=%q", w.Code, w.Body.String())
 	}
 	// Title must be untouched.
-	conv, _ := st.Get("conv-1")
+	conv, _ := st.Get(t.Context(), "conv-1")
 	if conv == nil || conv.Title != "original" {
 		t.Errorf("title changed by unauthenticated request: %+v", conv)
 	}
@@ -99,7 +99,7 @@ func TestHandleSetChatConversationTitle_NoSession_401(t *testing.T) {
 
 func TestHandleSetChatConversationTitle_EmptyTitle_400(t *testing.T) {
 	h, st := newChatTitleHandlers(t)
-	if err := st.Upsert("conv-1", "user-1", "original"); err != nil {
+	if err := st.Upsert(t.Context(), "conv-1", "user-1", "original"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -114,7 +114,7 @@ func TestHandleSetChatConversationTitle_EmptyTitle_400(t *testing.T) {
 
 func TestHandleSetChatConversationTitle_TooLong_400(t *testing.T) {
 	h, st := newChatTitleHandlers(t)
-	if err := st.Upsert("conv-1", "user-1", "original"); err != nil {
+	if err := st.Upsert(t.Context(), "conv-1", "user-1", "original"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -129,7 +129,7 @@ func TestHandleSetChatConversationTitle_TooLong_400(t *testing.T) {
 func TestHandleSetChatConversationTitle_NotOwner_404(t *testing.T) {
 	h, st := newChatTitleHandlers(t)
 	// Conversation belongs to user-2.
-	if err := st.Upsert("conv-1", "user-2", "original"); err != nil {
+	if err := st.Upsert(t.Context(), "conv-1", "user-2", "original"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -140,7 +140,7 @@ func TestHandleSetChatConversationTitle_NotOwner_404(t *testing.T) {
 		t.Fatalf("want 404, got %d body=%q", w.Code, w.Body.String())
 	}
 	// user-2's title must be untouched (no cross-user rename or existence leak).
-	conv, _ := st.Get("conv-1")
+	conv, _ := st.Get(t.Context(), "conv-1")
 	if conv == nil || conv.Title != "original" {
 		t.Errorf("foreign conversation was modified: %+v", conv)
 	}
@@ -156,7 +156,7 @@ func TestHandleSetChatConversationTitle_Missing_404_DoesNotCreate(t *testing.T) 
 		t.Fatalf("want 404, got %d body=%q", w.Code, w.Body.String())
 	}
 	// The endpoint must not create a conversation as a side effect.
-	conv, _ := st.Get("conv-missing")
+	conv, _ := st.Get(t.Context(), "conv-missing")
 	if conv != nil {
 		t.Errorf("title endpoint created a conversation: %+v", conv)
 	}
@@ -182,8 +182,8 @@ func TestHandleSendMessagePersistsUserBeforeForwarding(t *testing.T) {
 	h, st := newChatTitleHandlers(t)
 
 	var userRowVisibleAtForward bool
-	h.SetMessageHandler(func(_ context.Context, msg *pb.Message) error {
-		msgs, err := st.ListMessages(msg.ConversationId)
+	h.SetMessageHandler(func(ctx context.Context, msg *pb.Message) error {
+		msgs, err := st.ListMessages(ctx, msg.ConversationId)
 		if err != nil {
 			return err
 		}
@@ -205,7 +205,7 @@ func TestHandleSendMessagePersistsUserBeforeForwarding(t *testing.T) {
 		t.Fatal("user message must be persisted before forwarding to the agent")
 	}
 	// First send also creates and titles the conversation.
-	conv, _ := st.Get("conv-1")
+	conv, _ := st.Get(t.Context(), "conv-1")
 	if conv == nil || conv.Title != "hello world" {
 		t.Fatalf("conversation not created/titled on first send: %+v", conv)
 	}

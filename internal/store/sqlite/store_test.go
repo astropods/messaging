@@ -22,59 +22,59 @@ func newTestStore(t *testing.T) *Store {
 func TestSetTitle(t *testing.T) {
 	st := newTestStore(t)
 
-	if err := st.Upsert("conv-1", "user-1", "original"); err != nil {
+	if err := st.Upsert(t.Context(), "conv-1", "user-1", "original"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
 	t.Run("renames owned conversation", func(t *testing.T) {
-		ok, err := st.SetTitle("conv-1", "user-1", "renamed")
+		ok, err := st.SetTitle(t.Context(), "conv-1", "user-1", "renamed")
 		if err != nil {
 			t.Fatalf("SetTitle: %v", err)
 		}
 		if !ok {
 			t.Fatal("expected rename to apply")
 		}
-		conv, _ := st.Get("conv-1")
+		conv, _ := st.Get(t.Context(), "conv-1")
 		if conv == nil || conv.Title != "renamed" {
 			t.Fatalf("title = %+v, want renamed", conv)
 		}
 	})
 
 	t.Run("foreign user does not match", func(t *testing.T) {
-		ok, err := st.SetTitle("conv-1", "user-2", "hijacked")
+		ok, err := st.SetTitle(t.Context(), "conv-1", "user-2", "hijacked")
 		if err != nil {
 			t.Fatalf("SetTitle: %v", err)
 		}
 		if ok {
 			t.Fatal("expected no rows affected for foreign user")
 		}
-		conv, _ := st.Get("conv-1")
+		conv, _ := st.Get(t.Context(), "conv-1")
 		if conv.Title != "renamed" {
 			t.Fatalf("foreign rename mutated title: %q", conv.Title)
 		}
 	})
 
 	t.Run("missing conversation is not created", func(t *testing.T) {
-		ok, err := st.SetTitle("conv-missing", "user-1", "new")
+		ok, err := st.SetTitle(t.Context(), "conv-missing", "user-1", "new")
 		if err != nil {
 			t.Fatalf("SetTitle: %v", err)
 		}
 		if ok {
 			t.Fatal("expected no rows affected for missing conversation")
 		}
-		if conv, _ := st.Get("conv-missing"); conv != nil {
+		if conv, _ := st.Get(t.Context(), "conv-missing"); conv != nil {
 			t.Fatalf("SetTitle created a conversation: %+v", conv)
 		}
 	})
 
 	t.Run("deleted conversation does not match", func(t *testing.T) {
-		if err := st.Upsert("conv-del", "user-1", "orig"); err != nil {
+		if err := st.Upsert(t.Context(), "conv-del", "user-1", "orig"); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		if _, err := st.SoftDelete("conv-del", "user-1"); err != nil {
+		if _, err := st.SoftDelete(t.Context(), "conv-del", "user-1"); err != nil {
 			t.Fatalf("soft delete: %v", err)
 		}
-		ok, err := st.SetTitle("conv-del", "user-1", "revived")
+		ok, err := st.SetTitle(t.Context(), "conv-del", "user-1", "revived")
 		if err != nil {
 			t.Fatalf("SetTitle: %v", err)
 		}
@@ -90,18 +90,19 @@ func TestSetTitle(t *testing.T) {
 // would then lose to UNIQUE(conversation_id, seq), silently dropping a message.
 func TestAppendMessageConcurrentSeqNoDrops(t *testing.T) {
 	st := newTestStore(t)
-	if err := st.EnsureForSend("conv-1", "user-1", "seed"); err != nil {
+	if err := st.EnsureForSend(t.Context(), "conv-1", "user-1", "seed"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
 	const n = 50
+	ctx := t.Context()
 	var wg sync.WaitGroup
 	errs := make(chan error, n)
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := st.AppendMessage("conv-1", "user-1", "user", "m"); err != nil {
+			if _, err := st.AppendMessage(ctx, "conv-1", "user-1", "user", "m"); err != nil {
 				errs <- err
 			}
 		}()
@@ -112,7 +113,7 @@ func TestAppendMessageConcurrentSeqNoDrops(t *testing.T) {
 		t.Fatalf("append failed (message dropped under concurrency): %v", err)
 	}
 
-	msgs, err := st.ListMessages("conv-1")
+	msgs, err := st.ListMessages(t.Context(), "conv-1")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -138,34 +139,34 @@ func TestEnsureForSendFillsEmptyTitleOnce(t *testing.T) {
 	st := newTestStore(t)
 
 	// Simulate HandleCreateConversation: pre-create with an empty title.
-	if err := st.Upsert("conv-1", "user-1", ""); err != nil {
+	if err := st.Upsert(t.Context(), "conv-1", "user-1", ""); err != nil {
 		t.Fatalf("pre-create: %v", err)
 	}
-	if conv, _ := st.Get("conv-1"); conv == nil || conv.Title != "" {
+	if conv, _ := st.Get(t.Context(), "conv-1"); conv == nil || conv.Title != "" {
 		t.Fatalf("precondition: want empty title, got %+v", conv)
 	}
 
 	// First send fills the derived title.
-	if err := st.EnsureForSend("conv-1", "user-1", "Derived"); err != nil {
+	if err := st.EnsureForSend(t.Context(), "conv-1", "user-1", "Derived"); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
-	if conv, _ := st.Get("conv-1"); conv == nil || conv.Title != "Derived" {
+	if conv, _ := st.Get(t.Context(), "conv-1"); conv == nil || conv.Title != "Derived" {
 		t.Fatalf("title not filled on first send: %+v", conv)
 	}
 
 	// Later sends must not overwrite an existing title.
-	if err := st.EnsureForSend("conv-1", "user-1", "Later"); err != nil {
+	if err := st.EnsureForSend(t.Context(), "conv-1", "user-1", "Later"); err != nil {
 		t.Fatalf("ensure 2: %v", err)
 	}
-	if conv, _ := st.Get("conv-1"); conv == nil || conv.Title != "Derived" {
+	if conv, _ := st.Get(t.Context(), "conv-1"); conv == nil || conv.Title != "Derived" {
 		t.Fatalf("existing title overwritten on later send: %+v", conv)
 	}
 
 	// A brand-new conversation is created already titled.
-	if err := st.EnsureForSend("conv-2", "user-1", "Fresh"); err != nil {
+	if err := st.EnsureForSend(t.Context(), "conv-2", "user-1", "Fresh"); err != nil {
 		t.Fatalf("ensure new: %v", err)
 	}
-	if conv, _ := st.Get("conv-2"); conv == nil || conv.Title != "Fresh" {
+	if conv, _ := st.Get(t.Context(), "conv-2"); conv == nil || conv.Title != "Fresh" {
 		t.Fatalf("new conversation not titled on create: %+v", conv)
 	}
 }

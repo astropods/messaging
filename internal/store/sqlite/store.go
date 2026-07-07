@@ -10,6 +10,7 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -120,9 +121,9 @@ CREATE INDEX IF NOT EXISTS idx_messages_conv
 // recency and (only when a non-empty title is supplied) renames it. An empty
 // title is a pure recency "touch" that never clobbers an existing title. The
 // update is scoped to the owning user.
-func (s *Store) Upsert(conversationID, userID, title string) error {
+func (s *Store) Upsert(ctx context.Context, conversationID, userID, title string) error {
 	now := time.Now().UnixMilli()
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO conversations (conversation_id, user_id, title, created_at, updated_at)
 		VALUES (?, ?, COALESCE(NULLIF(?, ''), ''), ?, ?)
 		ON CONFLICT(conversation_id) DO UPDATE SET
@@ -144,8 +145,8 @@ func (s *Store) Upsert(conversationID, userID, title string) error {
 // a missing/foreign/deleted conversation affects no rows and returns false. This
 // keeps the title-rename endpoint from being able to create or otherwise mutate
 // conversations.
-func (s *Store) SetTitle(conversationID, userID, title string) (bool, error) {
-	res, err := s.db.Exec(`
+func (s *Store) SetTitle(ctx context.Context, conversationID, userID, title string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `
 		UPDATE conversations SET title = ?, updated_at = ?
 		WHERE conversation_id = ? AND user_id = ? AND deleted_at IS NULL`,
 		title, time.Now().UnixMilli(), conversationID, userID,
@@ -166,9 +167,9 @@ func (s *Store) SetTitle(conversationID, userID, title string) (bool, error) {
 // pre-creates the row with an empty title, so titling only on insert would leave
 // those threads permanently blank in the sidebar. An already-set title is never
 // overwritten.
-func (s *Store) EnsureForSend(conversationID, userID, title string) error {
+func (s *Store) EnsureForSend(ctx context.Context, conversationID, userID, title string) error {
 	now := time.Now().UnixMilli()
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO conversations (conversation_id, user_id, title, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(conversation_id) DO UPDATE SET
@@ -186,8 +187,8 @@ func (s *Store) EnsureForSend(conversationID, userID, title string) error {
 }
 
 // Get returns one active conversation, or nil if it does not exist or is deleted.
-func (s *Store) Get(conversationID string) (*Conversation, error) {
-	row := s.db.QueryRow(`
+func (s *Store) Get(ctx context.Context, conversationID string) (*Conversation, error) {
+	row := s.db.QueryRowContext(ctx, `
 		SELECT conversation_id, user_id, title, created_at, updated_at
 		FROM conversations
 		WHERE conversation_id = ? AND deleted_at IS NULL`,
@@ -211,8 +212,8 @@ func (s *Store) Get(conversationID string) (*Conversation, error) {
 
 // ListByUser returns the user's active conversations, most-recent first, with
 // AssistantStreaming derived from whether the latest message is still the user's.
-func (s *Store) ListByUser(userID string) ([]Conversation, error) {
-	rows, err := s.db.Query(`
+func (s *Store) ListByUser(ctx context.Context, userID string) ([]Conversation, error) {
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.conversation_id, c.user_id, c.title, c.created_at, c.updated_at,
 			COALESCE((
 				SELECT m.role FROM messages m
@@ -254,8 +255,8 @@ func (s *Store) ListByUser(userID string) ([]Conversation, error) {
 // a row was affected. The message bodies are left in place locally and the
 // conversation's Langfuse traces are intentionally NOT erased — see the
 // conundrum note in HandleDeleteChatConversation.
-func (s *Store) SoftDelete(conversationID, userID string) (bool, error) {
-	res, err := s.db.Exec(`
+func (s *Store) SoftDelete(ctx context.Context, conversationID, userID string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `
 		UPDATE conversations SET deleted_at = ?
 		WHERE conversation_id = ? AND user_id = ? AND deleted_at IS NULL`,
 		time.Now().UnixMilli(), conversationID, userID,
@@ -271,8 +272,8 @@ func (s *Store) SoftDelete(conversationID, userID string) (bool, error) {
 }
 
 // ListMessages returns the full ordered thread for one conversation.
-func (s *Store) ListMessages(conversationID string) ([]Message, error) {
-	rows, err := s.db.Query(`
+func (s *Store) ListMessages(ctx context.Context, conversationID string) ([]Message, error) {
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, role, content, seq
 		FROM messages
 		WHERE conversation_id = ?
@@ -300,7 +301,7 @@ func (s *Store) ListMessages(conversationID string) ([]Message, error) {
 
 // AppendMessage appends one message to a conversation, assigning the next
 // sequence number. Content is truncated to MaxMessageContentRunes.
-func (s *Store) AppendMessage(conversationID, userID, role, content string) (Message, error) {
+func (s *Store) AppendMessage(ctx context.Context, conversationID, userID, role, content string) (Message, error) {
 	content = truncateRunes(content, MaxMessageContentRunes)
 
 	// Assign seq and insert atomically in one transaction. A bare
@@ -310,14 +311,14 @@ func (s *Store) AppendMessage(conversationID, userID, role, content string) (Mes
 	// UNIQUE(conversation_id, seq) constraint (a dropped message). The tx holds
 	// the single connection across both statements, serialising concurrent
 	// appends to the same conversation.
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Message{}, fmt.Errorf("chatstore append begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful commit
 
 	var nextSeq int
-	if err := tx.QueryRow(`
+	if err := tx.QueryRowContext(ctx, `
 		SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE conversation_id = ?`,
 		conversationID,
 	).Scan(&nextSeq); err != nil {
@@ -328,7 +329,7 @@ func (s *Store) AppendMessage(conversationID, userID, role, content string) (Mes
 	}
 
 	msg := Message{ID: uuid.NewString(), Role: role, Content: content, Seq: nextSeq}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO messages (id, conversation_id, user_id, role, content, seq, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		msg.ID, conversationID, userID, role, content, nextSeq, time.Now().UnixMilli(),
@@ -345,7 +346,7 @@ func (s *Store) AppendMessage(conversationID, userID, role, content string) (Mes
 // for the current turn: it updates the trailing assistant message in place, or
 // appends a new assistant message when the latest row is the user's. Returns the
 // assistant message id.
-func (s *Store) UpsertAssistantProgress(conversationID, content string) (string, error) {
+func (s *Store) UpsertAssistantProgress(ctx context.Context, conversationID, content string) (string, error) {
 	content = truncateRunes(content, MaxMessageContentRunes)
 
 	// Never create message rows for a conversation that doesn't exist in the
@@ -354,7 +355,7 @@ func (s *Store) UpsertAssistantProgress(conversationID, content string) (string,
 	// stream traffic (e.g. the SDK handshake "agent-registration"), which would
 	// otherwise leave orphan message rows with no owning conversation.
 	var one int
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT 1 FROM conversations WHERE conversation_id = ? AND deleted_at IS NULL`,
 		conversationID,
 	).Scan(&one)
@@ -369,7 +370,7 @@ func (s *Store) UpsertAssistantProgress(conversationID, content string) (string,
 		lastID   string
 		lastRole string
 	)
-	err = s.db.QueryRow(`
+	err = s.db.QueryRowContext(ctx, `
 		SELECT id, role FROM messages
 		WHERE conversation_id = ?
 		ORDER BY seq DESC LIMIT 1`,
@@ -380,18 +381,18 @@ func (s *Store) UpsertAssistantProgress(conversationID, content string) (string,
 	}
 
 	if lastRole == "assistant" {
-		if _, err := s.db.Exec(`UPDATE messages SET content = ? WHERE id = ?`, content, lastID); err != nil {
+		if _, err := s.db.ExecContext(ctx, `UPDATE messages SET content = ? WHERE id = ?`, content, lastID); err != nil {
 			return "", fmt.Errorf("chatstore assistant progress update: %w", err)
 		}
-		s.touchConversation(conversationID)
+		s.touchConversation(ctx, conversationID)
 		return lastID, nil
 	}
 
-	msg, err := s.AppendMessage(conversationID, "", "assistant", content)
+	msg, err := s.AppendMessage(ctx, conversationID, "", "assistant", content)
 	if err != nil {
 		return "", err
 	}
-	s.touchConversation(conversationID)
+	s.touchConversation(ctx, conversationID)
 	return msg.ID, nil
 }
 
@@ -402,9 +403,9 @@ func (s *Store) UpsertAssistantProgress(conversationID, content string) (string,
 // resolves to false. When an assistant row already exists (the turn had
 // completed, or was progressively persisted), it is left untouched — a stop must
 // never shrink a finished reply. Returns true when a row was appended.
-func (s *Store) FinalizeStopped(conversationID, partial string) (bool, error) {
+func (s *Store) FinalizeStopped(ctx context.Context, conversationID, partial string) (bool, error) {
 	var lastRole string
-	err := s.db.QueryRow(`
+	err := s.db.QueryRowContext(ctx, `
 		SELECT role FROM messages
 		WHERE conversation_id = ?
 		ORDER BY seq DESC LIMIT 1`,
@@ -419,15 +420,15 @@ func (s *Store) FinalizeStopped(conversationID, partial string) (bool, error) {
 	if lastRole != "user" {
 		return false, nil
 	}
-	if _, err := s.AppendMessage(conversationID, "", "assistant", partial); err != nil {
+	if _, err := s.AppendMessage(ctx, conversationID, "", "assistant", partial); err != nil {
 		return false, err
 	}
-	s.touchConversation(conversationID)
+	s.touchConversation(ctx, conversationID)
 	return true, nil
 }
 
-func (s *Store) touchConversation(conversationID string) {
-	_, _ = s.db.Exec(`UPDATE conversations SET updated_at = ? WHERE conversation_id = ?`,
+func (s *Store) touchConversation(ctx context.Context, conversationID string) {
+	_, _ = s.db.ExecContext(ctx, `UPDATE conversations SET updated_at = ? WHERE conversation_id = ?`,
 		time.Now().UnixMilli(), conversationID)
 }
 

@@ -66,7 +66,7 @@ func (h *Handlers) HandleListChatConversations(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	convs, err := h.chatStore.ListByUser(session.UserID)
+	convs, err := h.chatStore.ListByUser(r.Context(), session.UserID)
 	if err != nil {
 		slog.Error("[Web] chat list conversations failed", "err", err)
 		http.Error(w, "failed to list conversations", http.StatusInternalServerError)
@@ -111,7 +111,7 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	conv, err := h.chatStore.Get(conversationID)
+	conv, err := h.chatStore.Get(r.Context(), conversationID)
 	if err != nil {
 		slog.Error("[Web] chat get conversation failed", "err", err)
 		http.Error(w, "failed to load conversation", http.StatusInternalServerError)
@@ -122,7 +122,7 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	all, err := h.chatStore.ListMessages(conversationID)
+	all, err := h.chatStore.ListMessages(r.Context(), conversationID)
 	if err != nil {
 		slog.Error("[Web] chat list messages failed", "err", err)
 		http.Error(w, "failed to load conversation", http.StatusInternalServerError)
@@ -186,7 +186,7 @@ func (h *Handlers) HandleSetChatConversationTitle(w http.ResponseWriter, r *http
 		return
 	}
 
-	renamed, err := h.chatStore.SetTitle(conversationID, session.UserID, title)
+	renamed, err := h.chatStore.SetTitle(r.Context(), conversationID, session.UserID, title)
 	if err != nil {
 		slog.Error("[Web] chat set title failed", "conversation", conversationID, "err", err)
 		http.Error(w, "failed to save title", http.StatusInternalServerError)
@@ -225,7 +225,7 @@ func (h *Handlers) HandleDeleteChatConversation(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	deleted, err := h.chatStore.SoftDelete(conversationID, session.UserID)
+	deleted, err := h.chatStore.SoftDelete(r.Context(), conversationID, session.UserID)
 	if err != nil {
 		slog.Error("[Web] chat delete conversation failed", "conversation", conversationID, "err", err)
 		http.Error(w, "failed to delete conversation", http.StatusInternalServerError)

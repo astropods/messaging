@@ -321,7 +321,7 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 						content = buffered
 					}
 				}
-				if _, err := a.chatStore.UpsertAssistantProgress(conversationID, content); err != nil {
+				if _, err := a.chatStore.UpsertAssistantProgress(ctx, conversationID, content); err != nil {
 					slog.Error("[Web] chat persist assistant message failed", "conversation", conversationID, "err", err)
 				}
 			}

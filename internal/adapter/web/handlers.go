@@ -151,7 +151,7 @@ func (h *Handlers) HandleCreateConversation(w http.ResponseWriter, r *http.Reque
 
 	// Persist the conversation row (title is derived later, on first send).
 	if h.chatStore != nil {
-		if err := h.chatStore.Upsert(conversationID, session.UserID, ""); err != nil {
+		if err := h.chatStore.Upsert(r.Context(), conversationID, session.UserID, ""); err != nil {
 			slog.Error("[Web] chat persist create conversation failed", "err", err)
 		}
 	}
@@ -238,10 +238,10 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	// title on first send and only has its recency bumped thereafter.
 	if h.chatStore != nil {
 		title := truncateRunes(req.Content, chatTitleMaxRunes)
-		if err := h.chatStore.EnsureForSend(conversationID, session.UserID, title); err != nil {
+		if err := h.chatStore.EnsureForSend(ctx, conversationID, session.UserID, title); err != nil {
 			slog.Error("[Web] chat persist ensure conversation failed", "err", err)
 		}
-		if _, err := h.chatStore.AppendMessage(conversationID, session.UserID, "user", req.Content); err != nil {
+		if _, err := h.chatStore.AppendMessage(ctx, conversationID, session.UserID, "user", req.Content); err != nil {
 			slog.Error("[Web] chat persist user message failed", "err", err)
 		}
 	}
@@ -315,7 +315,7 @@ func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
 	// stops showing it as streaming. Never shrinks an already-finished reply;
 	// when the partial was progressively persisted this is a no-op.
 	if h.chatStore != nil {
-		if _, err := h.chatStore.FinalizeStopped(conversationID, partial); err != nil {
+		if _, err := h.chatStore.FinalizeStopped(r.Context(), conversationID, partial); err != nil {
 			slog.Error("[Web] chat finalize stopped failed", "conversation", conversationID, "err", err)
 		}
 	}
