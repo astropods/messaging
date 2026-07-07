@@ -1,0 +1,161 @@
+package web
+
+// Locks in the scoped chat title-rename endpoint (POST
+// /api/chat/conversations/{id}/title). The endpoint replaced an overloaded PUT
+// that could create/touch a conversation — these tests pin that it now ONLY
+// renames an existing, caller-owned conversation and cannot be used to create,
+// touch, or reach another user's thread.
+//
+//	go test ./internal/adapter/web -run TestHandleSetChatConversationTitle -v
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/astropods/messaging/internal/store/sqlite"
+)
+
+// newChatTitleHandlers builds Handlers wired to a fresh temp SQLite chat store
+// and a header-based session manager (X-User-ID selects the caller; absent ->
+// unauthenticated).
+func newChatTitleHandlers(t *testing.T) (*Handlers, *sqlite.Store) {
+	t.Helper()
+	cm := NewConnectionManager(30 * time.Second)
+	sm := NewHeaderSessionManager("X-User-ID", "", "")
+	h := NewHandlers(cm, sm, nil, nil)
+
+	st, err := sqlite.Open(filepath.Join(t.TempDir(), "chat.db"))
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	h.chatStore = st
+	return h, st
+}
+
+func setTitleRequest(user, conversationID, title string) *http.Request {
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/chat/conversations/"+conversationID+"/title",
+		strings.NewReader(`{"title":`+strconvQuote(title)+`}`))
+	if user != "" {
+		req.Header.Set("X-User-ID", user)
+	}
+	req.SetPathValue("id", conversationID)
+	return req
+}
+
+// strconvQuote JSON-quotes a string for the request body.
+func strconvQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func TestHandleSetChatConversationTitle_RenamesOwnedConversation(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+	if err := st.Upsert("conv-1", "user-1", "original"); err != nil {
+		t.Fatalf("seed conversation: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	h.HandleSetChatConversationTitle(w, setTitleRequest("user-1", "conv-1", "Renamed"))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%q", w.Code, w.Body.String())
+	}
+	conv, err := st.Get("conv-1")
+	if err != nil || conv == nil {
+		t.Fatalf("get conv: conv=%v err=%v", conv, err)
+	}
+	if conv.Title != "Renamed" {
+		t.Errorf("title = %q, want %q", conv.Title, "Renamed")
+	}
+}
+
+func TestHandleSetChatConversationTitle_NoSession_401(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+	if err := st.Upsert("conv-1", "user-1", "original"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	h.HandleSetChatConversationTitle(w, setTitleRequest("", "conv-1", "Renamed")) // no X-User-ID
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d body=%q", w.Code, w.Body.String())
+	}
+	// Title must be untouched.
+	conv, _ := st.Get("conv-1")
+	if conv == nil || conv.Title != "original" {
+		t.Errorf("title changed by unauthenticated request: %+v", conv)
+	}
+}
+
+func TestHandleSetChatConversationTitle_EmptyTitle_400(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+	if err := st.Upsert("conv-1", "user-1", "original"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	for _, title := range []string{"", "   "} {
+		w := httptest.NewRecorder()
+		h.HandleSetChatConversationTitle(w, setTitleRequest("user-1", "conv-1", title))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("title=%q: want 400, got %d body=%q", title, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestHandleSetChatConversationTitle_TooLong_400(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+	if err := st.Upsert("conv-1", "user-1", "original"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	long := strings.Repeat("x", chatTitleMaxRunes+1)
+	w := httptest.NewRecorder()
+	h.HandleSetChatConversationTitle(w, setTitleRequest("user-1", "conv-1", long))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d body=%q", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleSetChatConversationTitle_NotOwner_404(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+	// Conversation belongs to user-2.
+	if err := st.Upsert("conv-1", "user-2", "original"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	h.HandleSetChatConversationTitle(w, setTitleRequest("user-1", "conv-1", "Hijacked"))
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d body=%q", w.Code, w.Body.String())
+	}
+	// user-2's title must be untouched (no cross-user rename or existence leak).
+	conv, _ := st.Get("conv-1")
+	if conv == nil || conv.Title != "original" {
+		t.Errorf("foreign conversation was modified: %+v", conv)
+	}
+}
+
+func TestHandleSetChatConversationTitle_Missing_404_DoesNotCreate(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+
+	w := httptest.NewRecorder()
+	h.HandleSetChatConversationTitle(w, setTitleRequest("user-1", "conv-missing", "New"))
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d body=%q", w.Code, w.Body.String())
+	}
+	// The endpoint must not create a conversation as a side effect.
+	conv, _ := st.Get("conv-missing")
+	if conv != nil {
+		t.Errorf("title endpoint created a conversation: %+v", conv)
+	}
+}

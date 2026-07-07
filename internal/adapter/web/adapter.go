@@ -135,7 +135,7 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	// Platform chat-page contract (served via astro-server /chat/* proxy).
 	mux.HandleFunc("GET /api/chat/conversations", a.handlers.HandleListChatConversations)
 	mux.HandleFunc("GET /api/chat/conversations/{id}", a.handlers.HandleGetChatConversation)
-	mux.HandleFunc("PUT /api/chat/conversations/{id}", a.handlers.HandleUpsertChatConversation)
+	mux.HandleFunc("POST /api/chat/conversations/{id}/title", a.handlers.HandleSetChatConversationTitle)
 	mux.HandleFunc("DELETE /api/chat/conversations/{id}", a.handlers.HandleDeleteChatConversation)
 	mux.HandleFunc("GET /api/conversations/{id}/audio", a.handlers.HandleAudioStream)
 	mux.HandleFunc("POST /api/conversations/{id}/audio", a.handlers.HandleAudioUpload)

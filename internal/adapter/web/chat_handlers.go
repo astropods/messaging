@@ -51,7 +51,7 @@ type getChatConversationResponse struct {
 	OldestSeq          int                   `json:"oldest_seq,omitempty"`
 }
 
-type upsertChatConversationInput struct {
+type setChatTitleInput struct {
 	Title string `json:"title"`
 }
 
@@ -139,10 +139,13 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// HandleUpsertChatConversation handles PUT /api/chat/conversations/{id}: create
-// the row, rename it (non-empty title), or bump recency (empty title = touch).
-// The title is durable because it lives on the shared persistent volume.
-func (h *Handlers) HandleUpsertChatConversation(w http.ResponseWriter, r *http.Request) {
+// HandleSetChatConversationTitle handles POST /api/chat/conversations/{id}/title.
+//
+// It renames an existing conversation owned by the caller — and does nothing
+// else. It intentionally cannot create a conversation (that happens on create /
+// first send) or mutate any other part of the thread, so the title is the only
+// user-editable field. A missing/foreign/deleted conversation returns 404.
+func (h *Handlers) HandleSetChatConversationTitle(w http.ResponseWriter, r *http.Request) {
 	session := h.authenticate(w, r)
 	if session == nil {
 		return
@@ -152,24 +155,35 @@ func (h *Handlers) HandleUpsertChatConversation(w http.ResponseWriter, r *http.R
 		http.Error(w, "Missing conversation ID", http.StatusBadRequest)
 		return
 	}
-	if h.chatStore == nil {
-		writeJSON(w, http.StatusOK, map[string]string{"conversation_id": conversationID})
-		return
-	}
 
-	var input upsertChatConversationInput
+	var input setChatTitleInput
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&input)
 	}
 	title := strings.TrimSpace(input.Title)
-	if utf8.RuneCountInString(title) > 200 {
+	if title == "" {
+		http.Error(w, "title is required", http.StatusBadRequest)
+		return
+	}
+	// Same cap as the auto-derived title on first send (chatTitleMaxRunes).
+	if utf8.RuneCountInString(title) > chatTitleMaxRunes {
 		http.Error(w, "title too long", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.chatStore.Upsert(conversationID, session.UserID, title); err != nil {
-		slog.Error("[Web] chat upsert conversation failed", "err", err)
-		http.Error(w, "failed to save conversation", http.StatusInternalServerError)
+	if h.chatStore == nil {
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return
+	}
+
+	renamed, err := h.chatStore.SetTitle(conversationID, session.UserID, title)
+	if err != nil {
+		slog.Error("[Web] chat set title failed", "conversation", conversationID, "err", err)
+		http.Error(w, "failed to save title", http.StatusInternalServerError)
+		return
+	}
+	if !renamed {
+		http.Error(w, "conversation not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"conversation_id": conversationID, "title": title})

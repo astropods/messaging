@@ -3,10 +3,10 @@
 // soft-delete) and message bodies in an embedded SQLite database, keyed by the
 // opaque WorkOS user id from the OIDC identity header.
 //
-// This database lives on ephemeral pod storage (emptyDir). It is the hot
-// working store; Langfuse traces remain the durable source of truth and are
-// used to rebuild this database after a pod is rescheduled (see restore.go).
-// No chat content is written to astro-server or its RDS.
+// The database lives on the agent's shared persistent disk (mounted into the
+// sidecar), so it survives pod reschedules and is itself the durable source of
+// truth for chat history — there is no Langfuse restore. No chat content is
+// written to astro-server or its RDS.
 package sqlite
 
 import (
@@ -137,6 +137,27 @@ func (s *Store) Upsert(conversationID, userID, title string) error {
 		return fmt.Errorf("chatstore upsert: %w", err)
 	}
 	return nil
+}
+
+// SetTitle renames an existing conversation owned by the user. Unlike Upsert it
+// never creates a row: the UPDATE is scoped to an active, owned conversation, so
+// a missing/foreign/deleted conversation affects no rows and returns false. This
+// keeps the title-rename endpoint from being able to create or otherwise mutate
+// conversations.
+func (s *Store) SetTitle(conversationID, userID, title string) (bool, error) {
+	res, err := s.db.Exec(`
+		UPDATE conversations SET title = ?, updated_at = ?
+		WHERE conversation_id = ? AND user_id = ? AND deleted_at IS NULL`,
+		title, time.Now().UnixMilli(), conversationID, userID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("chatstore set title: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("chatstore set title rows: %w", err)
+	}
+	return n > 0, nil
 }
 
 // EnsureForSend creates the conversation on first send (using the derived title)
