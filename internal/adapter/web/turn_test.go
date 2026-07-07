@@ -143,7 +143,9 @@ func TestTurnTrackerPartialMapBounded(t *testing.T) {
 }
 
 // isStreaming reflects an in-flight turn: true once a chunk is recorded, false
-// before any chunk and after the turn is cleared (END/error/stopped-END).
+// before any chunk, after the turn is cleared (END/error/stopped-END), and — key
+// for the cancel path — as soon as the turn is stopped, even though stop() keeps
+// the turnState around for gating.
 func TestTurnTrackerIsStreaming(t *testing.T) {
 	tr := newTurnTracker()
 	if tr.isStreaming("c") {
@@ -156,6 +158,23 @@ func TestTurnTrackerIsStreaming(t *testing.T) {
 	tr.clear("c")
 	if tr.isStreaming("c") {
 		t.Fatal("after clear: isStreaming must be false")
+	}
+}
+
+// A stopped turn must report not-streaming immediately: stop() keeps the
+// turnState (so the gate can still drop the agent's trailing chunks) but the
+// turn is done from the client's perspective. If isStreaming stayed true, a
+// cancelled turn whose agent honored the abort (no END chunk to clear it) would
+// report assistant_streaming forever and reopen on reload.
+func TestTurnTrackerIsStreamingFalseAfterStop(t *testing.T) {
+	tr := newTurnTracker()
+	tr.record("c", contentChunk(pb.ContentChunk_START, "partial"))
+	if !tr.isStreaming("c") {
+		t.Fatal("precondition: streaming before stop")
+	}
+	tr.stop("c")
+	if tr.isStreaming("c") {
+		t.Fatal("after stop: isStreaming must be false even though turnState lingers")
 	}
 }
 
