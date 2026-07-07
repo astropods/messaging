@@ -43,6 +43,17 @@ that honor it. The gate stays closed until the agent begins a new turn (a
 `START` chunk), so a stopped turn's trailing output can't bleed into the next
 message.
 
+# Known limitations
+
+Chat history is per-pod, not global. The default disk is ReadWriteOnce and each
+StatefulSet replica gets its own PVC (`volumeClaimTemplates`), so every replica
+has its own `chat.db`. That is fine at the single-replica default, but a
+distributed agent (`agent.distributed`, `replicas > 1`) would fragment
+conversations across replicas with no session affinity — whether a thread
+persists or is readable depends on which pod served the request. Global
+multi-replica chat would need a shared/RWX store or pinning a conversation to a
+fixed replica, and is out of scope here.
+
 # Migration
 
 None for agents, and no volume configuration: the durable `/data` disk is
