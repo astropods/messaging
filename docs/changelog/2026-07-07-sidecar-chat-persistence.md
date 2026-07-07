@@ -23,10 +23,15 @@ contract, which astro-server proxies verbatim at
 
 Persistence is keyed by owner: user turns persist on send (the store creates
 and titles the conversation on first send), assistant turns on the terminal
-stream chunk. The store lives on the agent's shared persistent disk (WAL),
-mounted by astro-server at `CHAT_DB_PATH`, so history survives pod reschedules
-and is shared across replicas. Unset `CHAT_DB_PATH` disables persistence (local
-dev). There is no Langfuse coupling — the sidecar has no Langfuse access.
+stream chunk. The store (SQLite WAL) lives at `CHAT_DB_PATH` on the agent's
+default persistent disk — the 5Gi ReadWriteOnce volume every deployment now
+gets at `/data`, shared with the co-located sidecar via `subPath: messaging`
+(same pod, so RWO is sufficient — no ReadWriteMany). History survives pod
+reschedules; the PVC is retained across redeploys. WAL is single-writer, which
+matches agents being single-replica by default (`replicas > 1` is opt-in via
+`agent.distributed`), so concurrent multi-pod chat is out of scope. Unset
+`CHAT_DB_PATH` disables persistence (local dev). There is no Langfuse coupling —
+the sidecar has no Langfuse access.
 
 Stop generating: `POST /api/chat/conversations/{id}/cancel` marks the turn
 stopped (a per-turn tracker drops the agent's remaining chunks so a
@@ -40,6 +45,8 @@ message.
 
 # Migration
 
-None for agents. Enabled via `CHAT_DB_PATH` (set by astro-server's spec
+None for agents, and no volume configuration: the durable `/data` disk is
+already provisioned for every deployment by the platform's default shared-disk
+work, so this feature only sets `CHAT_DB_PATH` (via astro-server's spec
 applier); unset is a no-op. Requires the companion astro monorepo change that
 proxies `/chat/*` to the sidecar and drops the RDS chat tables.
