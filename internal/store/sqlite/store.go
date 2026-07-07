@@ -327,11 +327,28 @@ func (s *Store) AppendMessage(conversationID, userID, role, content string) (Mes
 func (s *Store) UpsertAssistantProgress(conversationID, content string) (string, error) {
 	content = truncateRunes(content, MaxMessageContentRunes)
 
+	// Never create message rows for a conversation that doesn't exist in the
+	// store. Real user conversations are created on send (EnsureForSend) before
+	// any assistant turn is persisted, so this only filters internal agent
+	// stream traffic (e.g. the SDK handshake "agent-registration"), which would
+	// otherwise leave orphan message rows with no owning conversation.
+	var one int
+	err := s.db.QueryRow(
+		`SELECT 1 FROM conversations WHERE conversation_id = ? AND deleted_at IS NULL`,
+		conversationID,
+	).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("chatstore assistant progress conv check: %w", err)
+	}
+
 	var (
 		lastID   string
 		lastRole string
 	)
-	err := s.db.QueryRow(`
+	err = s.db.QueryRow(`
 		SELECT id, role FROM messages
 		WHERE conversation_id = ?
 		ORDER BY seq DESC LIMIT 1`,
