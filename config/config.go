@@ -236,8 +236,9 @@ func Load() (*Config, error) {
 		IdentityToken: os.Getenv("ASTRO_AUTHZ_TOKEN"),
 	}
 
-	// Chat persistence: path is set by astro-server's spec applier to an
-	// emptyDir mount in deployed sidecars; unset locally.
+	// Chat persistence: astro-server points this at a file on the agent's
+	// shared persistent disk in deployed sidecars (durable across reschedules);
+	// unset locally, which disables persistence.
 	cfg.Chat = ChatConfig{
 		DBPath: getEnv("CHAT_DB_PATH", ""),
 	}

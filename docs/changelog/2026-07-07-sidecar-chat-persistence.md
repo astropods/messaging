@@ -1,0 +1,45 @@
+# Summary
+
+Moves deployment web-chat persistence into the messaging sidecar. Chat
+conversations and messages now live in a deployment-local SQLite store instead
+of astro-server's central RDS, keeping chat metadata and message bodies out of
+the platform database (GDPR data-minimization). The sidecar also owns the
+"stop generating" action so a cancelled turn ends server-side, not just in the
+browser.
+
+# Design
+
+A new `internal/store/sqlite` store holds conversations and messages
+(contiguous per-conversation seq). The web adapter serves the chat-page
+contract, which astro-server proxies verbatim at
+`/deployments/{id}/chat/...`:
+
+- `GET /api/chat/conversations` — list.
+- `GET /api/chat/conversations/{id}` — thread (paginated).
+- `POST /api/chat/conversations/{id}/title` — rename only. Scoped to an
+  existing, caller-owned conversation; it cannot create a conversation or touch
+  messages (replaces the earlier overloaded `PUT .../{id}`).
+- `DELETE /api/chat/conversations/{id}` — soft delete.
+
+Persistence is keyed by owner: user turns persist on send (the store creates
+and titles the conversation on first send), assistant turns on the terminal
+stream chunk. The store lives on the agent's shared persistent disk (WAL),
+mounted by astro-server at `CHAT_DB_PATH`, so history survives pod reschedules
+and is shared across replicas. Unset `CHAT_DB_PATH` disables persistence (local
+dev). There is no Langfuse coupling — the sidecar has no Langfuse access.
+
+Stop generating: `POST /api/chat/conversations/{id}/cancel` marks the turn
+stopped (a per-turn tracker drops the agent's remaining chunks so a
+non-cooperating agent's late reply can't overwrite what the user saw),
+persists the partial and flips the conversation out of the streaming state
+(never shrinking a finished reply), emits a terminal finish SSE event, and
+forwards a `StreamControl{STOP}` to the agent as a best-effort signal for SDKs
+that honor it. The gate stays closed until the agent begins a new turn (a
+`START` chunk), so a stopped turn's trailing output can't bleed into the next
+message.
+
+# Migration
+
+None for agents. Enabled via `CHAT_DB_PATH` (set by astro-server's spec
+applier); unset is a no-op. Requires the companion astro monorepo change that
+proxies `/chat/*` to the sidecar and drops the RDS chat tables.
