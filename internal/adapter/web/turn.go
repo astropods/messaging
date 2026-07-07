@@ -66,6 +66,20 @@ func (t *turnTracker) record(conversationID string, chunk *pb.ContentChunk) {
 	b.WriteString(chunk.Content)
 }
 
+// content returns the text buffered for a conversation's in-flight turn — the
+// full assistant reply streamed so far — without mutating turn state. Used to
+// persist a completed turn on its END chunk, since agents stream the reply as
+// delta chunks and typically send an empty END, so the END chunk's own content
+// is not the full reply.
+func (t *turnTracker) content(conversationID string) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if b := t.partial[conversationID]; b != nil {
+		return b.String()
+	}
+	return ""
+}
+
 // stop marks the in-flight turn on conversationID stopped and returns the partial
 // text buffered so far (what the user saw), for persistence.
 func (t *turnTracker) stop(conversationID string) string {

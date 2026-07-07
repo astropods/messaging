@@ -298,9 +298,18 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		}
 
 		// Persist the assistant reply to the deployment-local chat store on the
-		// terminal chunk so the chat page can rehydrate the full turn.
+		// terminal chunk so the chat page can rehydrate the full turn. Persist the
+		// full text buffered across the turn (what the user saw), not this END
+		// chunk's own content — agents stream the reply as deltas and usually end
+		// with an empty END, so END.Content alone would persist a blank reply.
 		if a.chatStore != nil && payload.Content.Type == pb.ContentChunk_END {
-			if _, err := a.chatStore.UpsertAssistantProgress(conversationID, payload.Content.Content); err != nil {
+			content := payload.Content.Content
+			if a.turns != nil {
+				if buffered := a.turns.content(conversationID); buffered != "" {
+					content = buffered
+				}
+			}
+			if _, err := a.chatStore.UpsertAssistantProgress(conversationID, content); err != nil {
 				slog.Error("[Web] chat persist assistant message failed", "conversation", conversationID, "err", err)
 			}
 		}
