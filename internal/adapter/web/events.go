@@ -23,6 +23,7 @@ const (
 	EventHeartbeat      = "heartbeat"
 	EventPrompts        = "prompts"
 	EventTranscript     = "transcript"
+	EventInteraction    = "interaction"
 )
 
 // SSEEvent represents a Server-Sent Event
@@ -288,6 +289,59 @@ func NewTranscriptEvent(transcript *pb.Transcript) SSEEvent {
 		Event: EventTranscript,
 		Data:  string(jsonData),
 	}
+}
+
+// InteractionEventData is the SSE payload for a blocking interaction: schema and
+// value re-embedded as JSON objects, actions/kind lowercased for the client.
+type InteractionEventData struct {
+	Type       string          `json:"type"`
+	ID         string          `json:"id"`
+	Kind       string          `json:"kind"`
+	Message    string          `json:"message"`
+	DataSchema json.RawMessage `json:"dataSchema"`
+	Value      json.RawMessage `json:"value,omitempty"`
+	Actions    []string        `json:"actions"`
+	Intent     string          `json:"intent,omitempty"`
+}
+
+// NewInteractionEvent builds an interaction SSE event, erroring on invalid
+// data_schema_json or value_json so a malformed Renderable is never emitted.
+func NewInteractionEvent(r *pb.Renderable) (SSEEvent, error) {
+	schema := json.RawMessage(r.GetDataSchemaJson())
+	if !json.Valid(schema) {
+		return SSEEvent{}, fmt.Errorf("renderable %q: invalid data_schema_json", r.GetId())
+	}
+
+	var value json.RawMessage
+	if v := r.GetValueJson(); v != "" {
+		if !json.Valid([]byte(v)) {
+			return SSEEvent{}, fmt.Errorf("renderable %q: invalid value_json", r.GetId())
+		}
+		value = json.RawMessage(v)
+	}
+
+	actions := make([]string, 0, len(r.GetAllowedActions()))
+	for _, a := range r.GetAllowedActions() {
+		if name := renderableActionWireName(a); name != "" {
+			actions = append(actions, name)
+		}
+	}
+
+	data := InteractionEventData{
+		Type:       "interaction",
+		ID:         r.GetId(),
+		Kind:       renderKindWireName(r.GetKind()),
+		Message:    r.GetMessage(),
+		DataSchema: schema,
+		Value:      value,
+		Actions:    actions,
+		Intent:     r.GetIntent(),
+	}
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return SSEEvent{}, fmt.Errorf("renderable %q: marshal interaction event: %w", r.GetId(), err)
+	}
+	return SSEEvent{Event: EventInteraction, Data: string(jsonData)}, nil
 }
 
 // NewPromptsEvent creates a suggested prompts SSE event from a protobuf SuggestedPrompts

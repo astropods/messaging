@@ -31,15 +31,18 @@ type WebAdapter struct {
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
 	chatStore        *sqlite.Store
+	interactions     store.InteractionStore
 	server           *http.Server
 	handlers         *Handlers
 	turns            *turnTracker
+	degraded         *degradeTracker
 
 	// Configuration
-	listenAddr        string
-	heartbeatInterval time.Duration
-	allowedOrigins    []string
-	servePlayground   bool
+	listenAddr               string
+	heartbeatInterval        time.Duration
+	allowedOrigins           []string
+	servePlayground          bool
+	supportsDeclarativeForms bool // overrides the capability; off until the switch
 }
 
 // WebAdapterOption configures the WebAdapter
@@ -80,6 +83,20 @@ func WithServePlayground(enabled bool) WebAdapterOption {
 	}
 }
 
+// WithDeclarativeForms sets the SupportsDeclarativeForms capability (off by default).
+func WithDeclarativeForms(enabled bool) WebAdapterOption {
+	return func(a *WebAdapter) {
+		a.supportsDeclarativeForms = enabled
+	}
+}
+
+// WithInteractionStore overrides the interaction store (defaults to in-memory).
+func WithInteractionStore(s store.InteractionStore) WebAdapterOption {
+	return func(a *WebAdapter) {
+		a.interactions = s
+	}
+}
+
 // New creates a new WebAdapter
 func New(opts ...WebAdapterOption) *WebAdapter {
 	a := &WebAdapter{
@@ -107,9 +124,17 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 	// which turns are stopped and what partial text was streamed.
 	a.turns = newTurnTracker()
 
+	a.degraded = newDegradeTracker()
+
+	if a.interactions == nil {
+		a.interactions = store.NewMemoryInteractionStore()
+	}
+
 	// Initialize handlers
 	a.handlers = NewHandlers(a.connManager, a.sessionManager, a.threadStore, a.agentConfigStore)
 	a.handlers.turns = a.turns
+	a.handlers.degraded = a.degraded
+	a.handlers.interactions = a.interactions
 
 	slog.Info("[Web] Adapter initialized", "listen", a.listenAddr)
 	return nil
@@ -144,6 +169,7 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/chat/conversations/{id}", a.handlers.HandleGetChatConversation)
 	mux.HandleFunc("PUT /api/chat/conversations/{id}/title", a.handlers.HandleSetChatConversationTitle)
 	mux.HandleFunc("DELETE /api/chat/conversations/{id}", a.handlers.HandleDeleteChatConversation)
+	mux.HandleFunc("POST /api/chat/conversations/{id}/interactions/{interactionId}", a.handlers.HandleInteractionResponse)
 	mux.HandleFunc("GET /api/conversations/{id}/audio", a.handlers.HandleAudioStream)
 	mux.HandleFunc("POST /api/conversations/{id}/audio", a.handlers.HandleAudioUpload)
 	mux.HandleFunc("GET /health", a.handlers.HandleHealth)
@@ -205,7 +231,9 @@ func (a *WebAdapter) Stop(ctx context.Context) error {
 
 // Capabilities returns the adapter's capabilities
 func (a *WebAdapter) Capabilities() adapter.AdapterCapabilities {
-	return adapter.WebCapabilities()
+	caps := adapter.WebCapabilities()
+	caps.SupportsDeclarativeForms = a.supportsDeclarativeForms
+	return caps
 }
 
 // GetPlatformName returns the platform identifier
@@ -378,6 +406,9 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		}
 		event := NewErrorEvent(payload.Error)
 		a.connManager.Broadcast(conversationID, event)
+
+	case *pb.AgentResponse_Renderable:
+		a.handleRenderable(ctx, conversationID, payload.Renderable)
 
 	case *pb.AgentResponse_Transcript:
 		// Audio transcript — update user message placeholder
