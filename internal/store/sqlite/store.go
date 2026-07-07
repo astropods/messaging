@@ -161,13 +161,18 @@ func (s *Store) SetTitle(conversationID, userID, title string) (bool, error) {
 }
 
 // EnsureForSend creates the conversation on first send (using the derived title)
-// and otherwise only bumps recency — it never overwrites an existing title.
+// and otherwise only bumps recency. It fills in the derived title when the row
+// exists but is still untitled — the create-then-send flow (HandleCreateConversation)
+// pre-creates the row with an empty title, so titling only on insert would leave
+// those threads permanently blank in the sidebar. An already-set title is never
+// overwritten.
 func (s *Store) EnsureForSend(conversationID, userID, title string) error {
 	now := time.Now().UnixMilli()
 	_, err := s.db.Exec(`
 		INSERT INTO conversations (conversation_id, user_id, title, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(conversation_id) DO UPDATE SET
+			title      = CASE WHEN conversations.title = '' THEN excluded.title ELSE conversations.title END,
 			updated_at = ?,
 			deleted_at = NULL
 		WHERE conversations.user_id = ?`,
@@ -298,8 +303,21 @@ func (s *Store) ListMessages(conversationID string) ([]Message, error) {
 func (s *Store) AppendMessage(conversationID, userID, role, content string) (Message, error) {
 	content = truncateRunes(content, MaxMessageContentRunes)
 
+	// Assign seq and insert atomically in one transaction. A bare
+	// SELECT MAX(seq)+1 followed by a separate INSERT is not atomic even with
+	// MaxOpenConns(1) — another writer can grab the connection between the two
+	// statements, read the same nextSeq, and one INSERT then loses to the
+	// UNIQUE(conversation_id, seq) constraint (a dropped message). The tx holds
+	// the single connection across both statements, serialising concurrent
+	// appends to the same conversation.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Message{}, fmt.Errorf("chatstore append begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful commit
+
 	var nextSeq int
-	if err := s.db.QueryRow(`
+	if err := tx.QueryRow(`
 		SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE conversation_id = ?`,
 		conversationID,
 	).Scan(&nextSeq); err != nil {
@@ -310,12 +328,15 @@ func (s *Store) AppendMessage(conversationID, userID, role, content string) (Mes
 	}
 
 	msg := Message{ID: uuid.NewString(), Role: role, Content: content, Seq: nextSeq}
-	if _, err := s.db.Exec(`
+	if _, err := tx.Exec(`
 		INSERT INTO messages (id, conversation_id, user_id, role, content, seq, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		msg.ID, conversationID, userID, role, content, nextSeq, time.Now().UnixMilli(),
 	); err != nil {
 		return Message{}, fmt.Errorf("chatstore append message: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Message{}, fmt.Errorf("chatstore append commit: %w", err)
 	}
 	return msg, nil
 }

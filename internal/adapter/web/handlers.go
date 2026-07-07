@@ -222,11 +222,28 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		ConversationId: conversationID,
 	}
 
-	// Forward to gRPC handler
 	if h.msgHandler == nil {
 		slog.Warn("[Web] No message handler registered")
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 		return
+	}
+
+	// Persist the user turn BEFORE forwarding to the agent. HandleAgentResponse
+	// runs on another goroutine, so a fast agent could reach its terminal END
+	// and persist the assistant reply before this write lands — inverting turn
+	// order, or (since UpsertAssistantProgress no-ops on a not-yet-created
+	// conversation) dropping the assistant reply entirely. Writing here first
+	// guarantees the conversation row and user message exist before any
+	// assistant chunk is persisted. The conversation is titled from the derived
+	// title on first send and only has its recency bumped thereafter.
+	if h.chatStore != nil {
+		title := truncateRunes(req.Content, chatTitleMaxRunes)
+		if err := h.chatStore.EnsureForSend(conversationID, session.UserID, title); err != nil {
+			slog.Error("[Web] chat persist ensure conversation failed", "err", err)
+		}
+		if _, err := h.chatStore.AppendMessage(conversationID, session.UserID, "user", req.Content); err != nil {
+			slog.Error("[Web] chat persist user message failed", "err", err)
+		}
 	}
 
 	if err := h.msgHandler(ctx, msg); err != nil {
@@ -247,19 +264,6 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 			Content:   req.Content,
 			Timestamp: timestamppb.New(now),
 		})
-	}
-
-	// Persist the user message to the deployment-local chat store. The
-	// conversation row is created with a derived title on first send and only
-	// has its recency bumped thereafter.
-	if h.chatStore != nil {
-		title := truncateRunes(req.Content, chatTitleMaxRunes)
-		if err := h.chatStore.EnsureForSend(conversationID, session.UserID, title); err != nil {
-			slog.Error("[Web] chat persist ensure conversation failed", "err", err)
-		}
-		if _, err := h.chatStore.AppendMessage(conversationID, session.UserID, "user", req.Content); err != nil {
-			slog.Error("[Web] chat persist user message failed", "err", err)
-		}
 	}
 
 	resp := SendMessageResponse{

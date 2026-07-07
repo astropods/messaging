@@ -44,7 +44,8 @@ type Config struct {
 type ChatConfig struct {
 	// DBPath is the SQLite database path for chat persistence. Empty disables
 	// chat persistence entirely (e.g. local dev). In deployed sidecars this
-	// points at an emptyDir mount (e.g. /data/chat.db).
+	// points at a file on the agent's default persistent disk (e.g.
+	// /data/chat.db), so chat history survives pod reschedules.
 	DBPath string
 }
 

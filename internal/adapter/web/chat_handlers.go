@@ -262,6 +262,13 @@ func paginateChatMessages(all []sqlite.Message, limit, beforeSeq int) (messages 
 	switch {
 	case beforeSeq > 0:
 		end := beforeSeq - 1
+		// Clamp to the number of stored messages: before_seq is caller-
+		// controlled and may exceed the thread length (crafted query or a
+		// stale client paging past the head). Without this, all[start-1:end]
+		// slices out of range and panics.
+		if end > n {
+			end = n
+		}
 		if end < 1 {
 			return nil, false, 0
 		}

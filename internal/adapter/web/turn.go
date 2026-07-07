@@ -7,12 +7,12 @@ import (
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
-// maxTrackedStops bounds the turnTracker's stopped map. Entries are normally
-// short-lived — cleared when the stopped generation ends (a terminal chunk) or
-// when a new turn starts (a START chunk). This cap is a safety valve for the
-// degenerate case where a stopped turn neither terminates nor is resumed and
-// the conversation is abandoned, so the map can't grow without bound over a
-// long-lived process.
+// maxTrackedStops bounds the turnTracker's stopped and partial maps. Entries are
+// normally short-lived — cleared when a turn ends (a terminal chunk), when a new
+// turn starts (a START chunk), or on stop. This cap is a safety valve for the
+// degenerate cases where a turn neither terminates nor is resumed and the
+// conversation is abandoned (a stopped-but-never-resumed turn, or a stream that
+// dies mid-turn), so neither map can grow without bound over a long-lived process.
 const maxTrackedStops = 4096
 
 // turnTracker records per-conversation streaming turn state so the web adapter
@@ -57,6 +57,16 @@ func (t *turnTracker) record(conversationID string, chunk *pb.ContentChunk) {
 	defer t.mu.Unlock()
 	b := t.partial[conversationID]
 	if b == nil {
+		// Safety valve, mirroring stop()'s bound on the stopped map: a turn that
+		// streams some content but never reaches END/error and is never stopped
+		// (e.g. the agent crashes mid-stream) leaves its buffer resident, so cap
+		// the map so those can't leak without bound over a long-lived process.
+		if len(t.partial) >= maxTrackedStops {
+			for k := range t.partial {
+				delete(t.partial, k)
+				break
+			}
+		}
 		b = &strings.Builder{}
 		t.partial[conversationID] = b
 	}
