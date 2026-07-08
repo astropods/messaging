@@ -242,3 +242,25 @@ func TestHandleSendMessageForeignConversationRejected(t *testing.T) {
 		t.Fatalf("foreign send injected a stored message: %+v", msgs)
 	}
 }
+
+// The ownership check is an authorization boundary: a store error must fail
+// closed (503) and never forward to the agent with an unverified conversation id.
+func TestHandleSendMessageFailsClosedOnStoreError(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+	var forwarded bool
+	h.SetMessageHandler(func(context.Context, *pb.Message) error {
+		forwarded = true
+		return nil
+	})
+	_ = st.Close() // subsequent store calls now error (db closed)
+
+	w := httptest.NewRecorder()
+	h.HandleSendMessage(w, sendMessageRequest("user-1", "conv-1", "hi"))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503 on store error, got %d body=%q", w.Code, w.Body.String())
+	}
+	if forwarded {
+		t.Fatal("must not forward to the agent when the ownership check errored")
+	}
+}

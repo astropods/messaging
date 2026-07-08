@@ -172,6 +172,10 @@ func (s *Store) SetTitle(ctx context.Context, conversationID, userID, title stri
 // (just created here), an existing owned one is, and one owned by another user
 // is NOT — the upsert's `WHERE user_id = ?` no-ops on it. Callers use this to
 // reject a send into a foreign conversation (a stored cross-user write).
+//
+// A soft-deleted conversation is never revived: the conflict update is scoped to
+// active rows, so a send to a deleted id is a no-op and reports not-owned (404),
+// keeping deletes terminal.
 func (s *Store) EnsureForSend(ctx context.Context, conversationID, userID, title string) (bool, error) {
 	now := time.Now().UnixMilli()
 	if _, err := s.db.ExecContext(ctx, `
@@ -179,9 +183,8 @@ func (s *Store) EnsureForSend(ctx context.Context, conversationID, userID, title
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(conversation_id) DO UPDATE SET
 			title      = CASE WHEN conversations.title = '' THEN excluded.title ELSE conversations.title END,
-			updated_at = ?,
-			deleted_at = NULL
-		WHERE conversations.user_id = ?`,
+			updated_at = ?
+		WHERE conversations.user_id = ? AND conversations.deleted_at IS NULL`,
 		conversationID, userID, title, now, now,
 		now, userID,
 	); err != nil {
@@ -491,6 +494,53 @@ func (s *Store) FinalizeStopped(ctx context.Context, conversationID, userID, par
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("chatstore finalize commit: %w", err)
+	}
+	return true, nil
+}
+
+// FinalizeTerminal makes a turn terminal from the agent-response path (an errored
+// or otherwise abnormally-ended turn that never wrote an assistant row). Like
+// FinalizeStopped it appends `partial` as an assistant row ONLY when the latest
+// message is still the user's, so it never shrinks or blanks a completed /
+// progressively-persisted reply — important because a spurious error can arrive
+// after a turn already reached END (its buffer cleared, so partial is empty).
+// Unlike FinalizeStopped it is not ownership-scoped: it runs on the internal
+// stream handler, not a user request. No-op for a missing/deleted conversation.
+func (s *Store) FinalizeTerminal(ctx context.Context, conversationID, partial string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("chatstore finalize terminal begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful commit
+
+	var lastRole string
+	err = tx.QueryRowContext(ctx, `
+		SELECT COALESCE((
+			SELECT role FROM messages m
+			WHERE m.conversation_id = c.conversation_id
+			ORDER BY m.seq DESC LIMIT 1
+		), '')
+		FROM conversations c
+		WHERE c.conversation_id = ? AND c.deleted_at IS NULL`,
+		conversationID,
+	).Scan(&lastRole)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("chatstore finalize terminal read: %w", err)
+	}
+	if lastRole != "user" {
+		return false, nil
+	}
+	if _, err := appendMessageTx(ctx, tx, conversationID, "", "assistant", partial); err != nil {
+		return false, err
+	}
+	if err := touchConversationTx(ctx, tx, conversationID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("chatstore finalize terminal commit: %w", err)
 	}
 	return true, nil
 }

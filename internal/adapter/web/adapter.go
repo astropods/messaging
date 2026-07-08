@@ -343,12 +343,28 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		a.connManager.Broadcast(conversationID, event)
 
 	case *pb.AgentResponse_Error:
-		// An error terminates the turn; clear any stop-gate so the entry doesn't
-		// linger (no-op when the conversation isn't stopped).
+		// Finalize the turn in the store so it doesn't report assistant_streaming
+		// forever on reload (the persisted flag is "the latest message is the
+		// user's"). An error can terminate a turn before any assistant row is
+		// written, leaving the user row last; persist whatever partial the user
+		// saw (empty if none) as the terminal assistant row. FinalizeTerminal
+		// appends only when the last row is still the user's, so a spurious error
+		// after a completed turn (buffer already cleared) can't blank the reply.
+		// Runs before clear() so the buffered partial is still available.
+		if a.chatStore != nil {
+			partial := ""
+			if a.turns != nil {
+				partial = a.turns.content(conversationID)
+			}
+			if _, err := a.chatStore.FinalizeTerminal(ctx, conversationID, partial); err != nil {
+				slog.Error("[Web] chat finalize errored turn failed", "conversation", conversationID, "err", err)
+			}
+		}
+		// The error terminates the turn; drop the per-turn tracker state (also
+		// lifts any stop-gate — a no-op when the conversation isn't stopped).
 		if a.turns != nil {
 			a.turns.clear(conversationID)
 		}
-		// Error response
 		event := NewErrorEvent(payload.Error)
 		a.connManager.Broadcast(conversationID, event)
 

@@ -118,19 +118,11 @@ func (t *turnTracker) dueForPersist(conversationID string, interval time.Duratio
 	return false
 }
 
-// isStreaming reports whether a turn is actively streaming for conversationID —
-// i.e. at least one assistant chunk has been recorded and the turn has not yet
-// ended (clear) or been stopped. The read handlers use this to report
-// assistant_streaming: because the assistant row is now persisted progressively,
-// "the latest persisted message is the user's" no longer distinguishes an
-// in-flight turn from a finished one.
-//
-// A stopped conversation is NOT streaming even though its turnState lingers:
-// stop() keeps the entry so the gate can drop the agent's trailing chunks, but
-// from the client's perspective the turn is done. Without excluding stopped
-// here, a cancelled turn whose agent honored the abort (so no END chunk ever
-// arrives to clear the entry) would report assistant_streaming forever, and a
-// reload would reopen the finished turn.
+// isStreaming reports whether a turn is actively streaming for conversationID.
+// Read handlers combine it with the persisted state to report assistant_streaming.
+// A stopped conversation is excluded even though its turnState lingers (stop()
+// keeps it to gate trailing chunks): otherwise a cancelled turn whose agent
+// honored the abort (no END to clear the entry) would report streaming forever.
 func (t *turnTracker) isStreaming(conversationID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()

@@ -245,13 +245,24 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		title := sqlite.TruncateRunes(req.Content, chatTitleMaxRunes)
 		owned, err := h.chatStore.EnsureForSend(ctx, conversationID, session.UserID, title)
 		if err != nil {
-			slog.Error("[Web] chat persist ensure conversation failed", "err", err)
-		} else if !owned {
+			// Ownership is an authorization boundary — fail closed on a store
+			// error rather than forwarding to the agent with an unverified
+			// conversation id (which could be another user's).
+			slog.Error("[Web] chat ensure conversation failed", "err", err)
+			http.Error(w, "chat temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if !owned {
 			http.Error(w, "conversation not found", http.StatusNotFound)
 			return
 		}
+		// Record the user turn before forwarding. If this write fails, don't run
+		// the agent: otherwise the assistant reply would persist as the first
+		// message of the thread (assistant-first / user-less turn).
 		if _, err := h.chatStore.AppendMessage(ctx, conversationID, session.UserID, "user", req.Content); err != nil {
 			slog.Error("[Web] chat persist user message failed", "err", err)
+			http.Error(w, "chat temporarily unavailable", http.StatusServiceUnavailable)
+			return
 		}
 	}
 
