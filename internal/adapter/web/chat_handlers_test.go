@@ -269,6 +269,17 @@ func TestHandleSendMessageAtCapReturns409(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("want 409 at message cap, got %d body=%q", w.Code, w.Body.String())
 	}
+	// The client keys the "message limit" toast on this machine-readable code,
+	// not the bare 409 — lock in the contract.
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("cap response is not JSON: %v (body=%q)", err, w.Body.String())
+	}
+	if body.Error != "message_limit_reached" {
+		t.Fatalf("cap error code = %q, want message_limit_reached", body.Error)
+	}
 	if forwarded {
 		t.Fatal("must not forward to the agent once the conversation is at its cap")
 	}

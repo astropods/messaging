@@ -267,11 +267,15 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		// message of the thread (assistant-first / user-less turn).
 		if _, err := h.chatStore.AppendMessage(ctx, conversationID, session.UserID, "user", req.Content); err != nil {
 			// The message cap is a terminal per-conversation state, not a
-			// transient failure — surface it as 409 with an actionable message so
-			// the client can prompt a new chat, rather than a misleading 503.
+			// transient failure — surface it as 409 with a machine-readable code
+			// so the client can key on the code (not the bare status, which may
+			// carry other meanings) and prompt a new chat.
 			if errors.Is(err, sqlite.ErrMessageLimitReached) {
 				slog.Warn("[Web] chat conversation at message limit", "conversation", conversationID)
-				http.Error(w, "conversation message limit reached; start a new chat", http.StatusConflict)
+				writeJSON(w, http.StatusConflict, map[string]string{
+					"error":             "message_limit_reached",
+					"error_description": "conversation message limit reached; start a new chat",
+				})
 				return
 			}
 			slog.Error("[Web] chat persist user message failed", "err", err)
