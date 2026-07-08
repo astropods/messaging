@@ -119,9 +119,12 @@ func TestPageMessagesLastRole(t *testing.T) {
 
 	// Page an OLDER window (before the assistant row); lastRole must still be the
 	// newest message's role, not the page's last row.
-	_, _, _, lastRole, err := st.PageMessages(ctx, "c", 1, 2)
+	window, _, _, lastRole, err := st.PageMessages(ctx, "c", 1, 2)
 	if err != nil {
 		t.Fatalf("PageMessages: %v", err)
+	}
+	if len(window) != 1 || window[0].Role != "user" {
+		t.Fatalf("older page should be just the user turn (seq 1), got %+v", window)
 	}
 	if lastRole != "assistant" {
 		t.Fatalf("lastRole = %q, want assistant (newest row), independent of the paged window", lastRole)
