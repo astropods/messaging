@@ -210,3 +210,35 @@ func TestHandleSendMessagePersistsUserBeforeForwarding(t *testing.T) {
 		t.Fatalf("conversation not created/titled on first send: %+v", conv)
 	}
 }
+
+// A send to a conversation owned by another user is rejected with 404 — before
+// the message reaches the agent — and injects no stored message. Closes the
+// cross-user stored-write / injected-turn vector.
+func TestHandleSendMessageForeignConversationRejected(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+	// conv-1 belongs to user-2.
+	if _, err := st.EnsureForSend(t.Context(), "conv-1", "user-2", "owner"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	var forwarded bool
+	h.SetMessageHandler(func(context.Context, *pb.Message) error {
+		forwarded = true
+		return nil
+	})
+
+	w := httptest.NewRecorder()
+	h.HandleSendMessage(w, sendMessageRequest("user-1", "conv-1", "injected"))
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for foreign conversation, got %d body=%q", w.Code, w.Body.String())
+	}
+	if forwarded {
+		t.Fatal("a foreign send must not reach the agent")
+	}
+	// No message was injected into user-2's thread.
+	msgs, _ := st.ListMessages(t.Context(), "conv-1")
+	if len(msgs) != 0 {
+		t.Fatalf("foreign send injected a stored message: %+v", msgs)
+	}
+}

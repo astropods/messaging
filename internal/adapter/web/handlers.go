@@ -236,10 +236,19 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	// guarantees the conversation row and user message exist before any
 	// assistant chunk is persisted. The conversation is titled from the derived
 	// title on first send and only has its recency bumped thereafter.
+	//
+	// EnsureForSend reports ownership: a foreign conversation (owned by another
+	// user) is rejected here, before forwarding to the agent, so a caller who
+	// knows another user's conversation UUID can neither inject a stored message
+	// into their thread nor trigger an agent turn inside it.
 	if h.chatStore != nil {
-		title := truncateRunes(req.Content, chatTitleMaxRunes)
-		if err := h.chatStore.EnsureForSend(ctx, conversationID, session.UserID, title); err != nil {
+		title := sqlite.TruncateRunes(req.Content, chatTitleMaxRunes)
+		owned, err := h.chatStore.EnsureForSend(ctx, conversationID, session.UserID, title)
+		if err != nil {
 			slog.Error("[Web] chat persist ensure conversation failed", "err", err)
+		} else if !owned {
+			http.Error(w, "conversation not found", http.StatusNotFound)
+			return
 		}
 		if _, err := h.chatStore.AppendMessage(ctx, conversationID, session.UserID, "user", req.Content); err != nil {
 			slog.Error("[Web] chat persist user message failed", "err", err)
@@ -315,7 +324,7 @@ func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
 	// stops showing it as streaming. Never shrinks an already-finished reply;
 	// when the partial was progressively persisted this is a no-op.
 	if h.chatStore != nil {
-		if _, err := h.chatStore.FinalizeStopped(r.Context(), conversationID, partial); err != nil {
+		if _, err := h.chatStore.FinalizeStopped(r.Context(), conversationID, session.UserID, partial); err != nil {
 			slog.Error("[Web] chat finalize stopped failed", "conversation", conversationID, "err", err)
 		}
 	}

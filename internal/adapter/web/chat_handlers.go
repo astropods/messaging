@@ -310,13 +310,6 @@ func paginateChatMessages(all []sqlite.Message, limit, beforeSeq int) (messages 
 	return messages, hasMore, oldestSeq
 }
 
-func truncateRunes(s string, max int) string {
-	if utf8.RuneCountInString(s) <= max {
-		return s
-	}
-	return string([]rune(s)[:max])
-}
-
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

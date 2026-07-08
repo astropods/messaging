@@ -1,7 +1,9 @@
 package sqlite
 
 import (
+	"context"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 )
@@ -90,7 +92,7 @@ func TestSetTitle(t *testing.T) {
 // would then lose to UNIQUE(conversation_id, seq), silently dropping a message.
 func TestAppendMessageConcurrentSeqNoDrops(t *testing.T) {
 	st := newTestStore(t)
-	if err := st.EnsureForSend(t.Context(), "conv-1", "user-1", "seed"); err != nil {
+	if _, err := st.EnsureForSend(t.Context(), "conv-1", "user-1", "seed"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -132,6 +134,45 @@ func TestAppendMessageConcurrentSeqNoDrops(t *testing.T) {
 	}
 }
 
+// Concurrent progressive-persist (streaming goroutine) and stop-finalize (cancel
+// goroutine) must yield exactly one assistant row, not two. Both fold their
+// role-check and write into one transaction; with MaxOpenConns(1) that
+// serializes them, so whichever runs first appends the assistant row and the
+// other sees lastRole=="assistant" (update-in-place or no-op).
+func TestConcurrentStopAndProgressSingleAssistantRow(t *testing.T) {
+	ctx := context.Background()
+	for i := 0; i < 40; i++ {
+		st := newTestStore(t)
+		conv := "conv-" + strconv.Itoa(i)
+		if _, err := st.EnsureForSend(ctx, conv, "user-1", "t"); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		if _, err := st.AppendMessage(ctx, conv, "user-1", "user", "q"); err != nil {
+			t.Fatalf("seed user: %v", err)
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); _, _ = st.UpsertAssistantProgress(ctx, conv, "streamed") }()
+		go func() { defer wg.Done(); _, _ = st.FinalizeStopped(ctx, conv, "user-1", "partial") }()
+		wg.Wait()
+
+		msgs, err := st.ListMessages(ctx, conv)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		var assistants int
+		for _, m := range msgs {
+			if m.Role == "assistant" {
+				assistants++
+			}
+		}
+		if assistants != 1 {
+			t.Fatalf("iter %d: got %d assistant rows, want exactly 1: %+v", i, assistants, msgs)
+		}
+	}
+}
+
 // EnsureForSend fills the derived title when a conversation was pre-created with
 // an empty title (the create-then-send flow) but never overwrites a title that
 // is already set, and titles a brand-new conversation on create.
@@ -146,27 +187,89 @@ func TestEnsureForSendFillsEmptyTitleOnce(t *testing.T) {
 		t.Fatalf("precondition: want empty title, got %+v", conv)
 	}
 
-	// First send fills the derived title.
-	if err := st.EnsureForSend(t.Context(), "conv-1", "user-1", "Derived"); err != nil {
-		t.Fatalf("ensure: %v", err)
+	// First send fills the derived title and reports ownership.
+	if owned, err := st.EnsureForSend(t.Context(), "conv-1", "user-1", "Derived"); err != nil || !owned {
+		t.Fatalf("ensure: owned=%v err=%v", owned, err)
 	}
 	if conv, _ := st.Get(t.Context(), "conv-1"); conv == nil || conv.Title != "Derived" {
 		t.Fatalf("title not filled on first send: %+v", conv)
 	}
 
 	// Later sends must not overwrite an existing title.
-	if err := st.EnsureForSend(t.Context(), "conv-1", "user-1", "Later"); err != nil {
-		t.Fatalf("ensure 2: %v", err)
+	if owned, err := st.EnsureForSend(t.Context(), "conv-1", "user-1", "Later"); err != nil || !owned {
+		t.Fatalf("ensure 2: owned=%v err=%v", owned, err)
 	}
 	if conv, _ := st.Get(t.Context(), "conv-1"); conv == nil || conv.Title != "Derived" {
 		t.Fatalf("existing title overwritten on later send: %+v", conv)
 	}
 
-	// A brand-new conversation is created already titled.
-	if err := st.EnsureForSend(t.Context(), "conv-2", "user-1", "Fresh"); err != nil {
-		t.Fatalf("ensure new: %v", err)
+	// A brand-new conversation is created already titled and owned.
+	if owned, err := st.EnsureForSend(t.Context(), "conv-2", "user-1", "Fresh"); err != nil || !owned {
+		t.Fatalf("ensure new: owned=%v err=%v", owned, err)
 	}
 	if conv, _ := st.Get(t.Context(), "conv-2"); conv == nil || conv.Title != "Fresh" {
 		t.Fatalf("new conversation not titled on create: %+v", conv)
+	}
+}
+
+// EnsureForSend reports NOT-owned for a conversation owned by another user, and
+// leaves it untouched — the guard that stops a caller injecting a send into a
+// foreign thread.
+func TestEnsureForSendForeignConversationNotOwned(t *testing.T) {
+	st := newTestStore(t)
+	if _, err := st.EnsureForSend(t.Context(), "conv-1", "owner", "Owner title"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	owned, err := st.EnsureForSend(t.Context(), "conv-1", "attacker", "Hijack")
+	if err != nil {
+		t.Fatalf("ensure foreign: %v", err)
+	}
+	if owned {
+		t.Fatal("a conversation owned by another user must report not-owned")
+	}
+	// The owner's conversation must be untouched (still owned, title intact).
+	conv, _ := st.Get(t.Context(), "conv-1")
+	if conv == nil || conv.UserID != "owner" || conv.Title != "Owner title" {
+		t.Fatalf("foreign EnsureForSend mutated the conversation: %+v", conv)
+	}
+}
+
+// FinalizeStopped only writes to a conversation owned by the caller, and folds
+// its role-check + append into one transaction so it can't duplicate an
+// assistant row.
+func TestFinalizeStoppedOwnership(t *testing.T) {
+	st := newTestStore(t)
+	if _, err := st.EnsureForSend(t.Context(), "conv-1", "owner", "t"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := st.AppendMessage(t.Context(), "conv-1", "owner", "user", "hi"); err != nil {
+		t.Fatalf("seed user msg: %v", err)
+	}
+
+	// Foreign caller: no-op, no assistant row appended.
+	if ok, err := st.FinalizeStopped(t.Context(), "conv-1", "attacker", "stolen partial"); err != nil || ok {
+		t.Fatalf("foreign finalize: ok=%v err=%v (must be no-op)", ok, err)
+	}
+	msgs, _ := st.ListMessages(t.Context(), "conv-1")
+	if len(msgs) != 1 || msgs[len(msgs)-1].Role != "user" {
+		t.Fatalf("foreign finalize mutated the thread: %+v", msgs)
+	}
+
+	// Owner: appends the partial as the terminal assistant row.
+	if ok, err := st.FinalizeStopped(t.Context(), "conv-1", "owner", "partial reply"); err != nil || !ok {
+		t.Fatalf("owner finalize: ok=%v err=%v", ok, err)
+	}
+	msgs, _ = st.ListMessages(t.Context(), "conv-1")
+	if len(msgs) != 2 || msgs[1].Role != "assistant" || msgs[1].Content != "partial reply" {
+		t.Fatalf("owner finalize did not append the partial: %+v", msgs)
+	}
+
+	// Idempotent: a second finalize is a no-op (last row is already assistant).
+	if ok, err := st.FinalizeStopped(t.Context(), "conv-1", "owner", "again"); err != nil || ok {
+		t.Fatalf("second finalize: ok=%v err=%v (must be no-op)", ok, err)
+	}
+	if msgs, _ := st.ListMessages(t.Context(), "conv-1"); len(msgs) != 2 {
+		t.Fatalf("second finalize appended a duplicate: %+v", msgs)
 	}
 }
