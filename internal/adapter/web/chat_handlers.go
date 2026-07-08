@@ -155,7 +155,7 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// HandleSetChatConversationTitle handles POST /api/chat/conversations/{id}/title.
+// HandleSetChatConversationTitle handles PUT /api/chat/conversations/{id}/title.
 //
 // It renames an existing conversation owned by the caller — and does nothing
 // else. It intentionally cannot create a conversation (that happens on create /

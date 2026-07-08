@@ -16,9 +16,10 @@ contract, which astro-server proxies verbatim at
 
 - `GET /api/chat/conversations` — list.
 - `GET /api/chat/conversations/{id}` — thread (paginated).
-- `POST /api/chat/conversations/{id}/title` — rename only. Scoped to an
-  existing, caller-owned conversation; it cannot create a conversation or touch
-  messages (replaces the earlier overloaded `PUT .../{id}`).
+- `PUT /api/chat/conversations/{id}/title` — rename only: an idempotent, scoped
+  PUT on the `/title` sub-resource of an existing, caller-owned conversation; it
+  cannot create a conversation or touch messages (replaces the earlier overloaded
+  `PUT .../{id}` on the whole conversation).
 - `DELETE /api/chat/conversations/{id}` — soft delete.
 
 Persistence is keyed by owner: user turns persist on send (the store creates

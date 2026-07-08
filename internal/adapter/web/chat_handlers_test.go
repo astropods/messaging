@@ -1,10 +1,11 @@
 package web
 
-// Locks in the scoped chat title-rename endpoint (POST
-// /api/chat/conversations/{id}/title). The endpoint replaced an overloaded PUT
-// that could create/touch a conversation — these tests pin that it now ONLY
-// renames an existing, caller-owned conversation and cannot be used to create,
-// touch, or reach another user's thread.
+// Locks in the scoped chat title-rename endpoint (PUT
+// /api/chat/conversations/{id}/title). It is a scoped PUT on the /title
+// sub-resource (idempotent, rename-only), replacing an earlier overloaded PUT on
+// the whole conversation — these tests pin that it now ONLY renames an existing,
+// caller-owned conversation and cannot be used to create, touch, or reach another
+// user's thread.
 //
 //	go test ./internal/adapter/web -run TestHandleSetChatConversationTitle -v
 
@@ -42,7 +43,7 @@ func newChatTitleHandlers(t *testing.T) (*Handlers, *sqlite.Store) {
 }
 
 func setTitleRequest(user, conversationID, title string) *http.Request {
-	req := httptest.NewRequest(http.MethodPost,
+	req := httptest.NewRequest(http.MethodPut,
 		"/api/chat/conversations/"+conversationID+"/title",
 		strings.NewReader(`{"title":`+strconvQuote(title)+`}`))
 	if user != "" {
