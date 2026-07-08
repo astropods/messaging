@@ -2,7 +2,11 @@ package web
 
 import (
 	"fmt"
+	"strconv"
 	"testing"
+	"time"
+
+	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
 // Locks in the START-gate invariant: a stopped conversation drops every chunk
@@ -71,5 +75,129 @@ func TestTurnTracker_StoppedMapIsBounded(t *testing.T) {
 	tr.mu.Unlock()
 	if n > maxTrackedStops {
 		t.Fatalf("stopped map exceeded cap: got %d, want <= %d", n, maxTrackedStops)
+	}
+}
+
+func contentChunk(typ pb.ContentChunk_ChunkType, s string) *pb.ContentChunk {
+	return &pb.ContentChunk{Type: typ, Content: s}
+}
+
+// record() accumulates the streamed reply across a turn (so a completed turn
+// persists the full text, not the empty END chunk), and START/REPLACE reset the
+// buffer for a fresh turn / full-snapshot chunk.
+func TestTurnTrackerContentAccumulatesAndResets(t *testing.T) {
+	tr := newTurnTracker()
+
+	tr.record("c", contentChunk(pb.ContentChunk_START, "Hi"))
+	tr.record("c", contentChunk(pb.ContentChunk_DELTA, " there"))
+	tr.record("c", contentChunk(pb.ContentChunk_END, "")) // agents typically end empty
+	if got := tr.content("c"); got != "Hi there" {
+		t.Fatalf("content = %q, want %q (END must not blank the buffer)", got, "Hi there")
+	}
+
+	// START begins a fresh turn: the buffer resets.
+	tr.record("c", contentChunk(pb.ContentChunk_START, "New"))
+	if got := tr.content("c"); got != "New" {
+		t.Fatalf("content after START = %q, want %q", got, "New")
+	}
+
+	// REPLACE also resets (full-snapshot chunk).
+	tr.record("c", contentChunk(pb.ContentChunk_REPLACE, "Full"))
+	if got := tr.content("c"); got != "Full" {
+		t.Fatalf("content after REPLACE = %q, want %q", got, "Full")
+	}
+
+	// clear drops the buffer entirely.
+	tr.clear("c")
+	if got := tr.content("c"); got != "" {
+		t.Fatalf("content after clear = %q, want empty", got)
+	}
+}
+
+// stop() returns the partial text buffered so far (what the user saw), which the
+// cancel path persists.
+func TestTurnTrackerStopReturnsPartial(t *testing.T) {
+	tr := newTurnTracker()
+	tr.record("c", contentChunk(pb.ContentChunk_START, "half "))
+	tr.record("c", contentChunk(pb.ContentChunk_DELTA, "written"))
+	if got := tr.stop("c"); got != "half written" {
+		t.Fatalf("stop() partial = %q, want %q", got, "half written")
+	}
+}
+
+// The per-conversation turn-state map is bounded like stopped so a stream that
+// never reaches END/error and is never stopped (e.g. an agent that crashes
+// mid-turn) can't leak state without bound.
+func TestTurnTrackerPartialMapBounded(t *testing.T) {
+	tr := newTurnTracker()
+	for i := 0; i < maxTrackedStops+50; i++ {
+		tr.record("conv-"+strconv.Itoa(i), contentChunk(pb.ContentChunk_DELTA, "x"))
+	}
+
+	tr.mu.Lock()
+	n := len(tr.turns)
+	tr.mu.Unlock()
+	if n > maxTrackedStops {
+		t.Fatalf("turn-state map size %d exceeds cap %d", n, maxTrackedStops)
+	}
+}
+
+// isStreaming reflects an in-flight turn: true once a chunk is recorded, false
+// before any chunk, after the turn is cleared (END/error/stopped-END), and — key
+// for the cancel path — as soon as the turn is stopped, even though stop() keeps
+// the turnState around for gating.
+func TestTurnTrackerIsStreaming(t *testing.T) {
+	tr := newTurnTracker()
+	if tr.isStreaming("c") {
+		t.Fatal("no turn recorded yet: isStreaming must be false")
+	}
+	tr.record("c", contentChunk(pb.ContentChunk_START, "hi"))
+	if !tr.isStreaming("c") {
+		t.Fatal("after a chunk: isStreaming must be true")
+	}
+	tr.clear("c")
+	if tr.isStreaming("c") {
+		t.Fatal("after clear: isStreaming must be false")
+	}
+}
+
+// A stopped turn must report not-streaming immediately: stop() keeps the
+// turnState (so the gate can still drop the agent's trailing chunks) but the
+// turn is done from the client's perspective. If isStreaming stayed true, a
+// cancelled turn whose agent honored the abort (no END chunk to clear it) would
+// report assistant_streaming forever and reopen on reload.
+func TestTurnTrackerIsStreamingFalseAfterStop(t *testing.T) {
+	tr := newTurnTracker()
+	tr.record("c", contentChunk(pb.ContentChunk_START, "partial"))
+	if !tr.isStreaming("c") {
+		t.Fatal("precondition: streaming before stop")
+	}
+	tr.stop("c")
+	if tr.isStreaming("c") {
+		t.Fatal("after stop: isStreaming must be false even though turnState lingers")
+	}
+}
+
+// dueForPersist throttles progressive persistence: the first check for a turn
+// fires (nothing persisted yet), an immediate re-check is throttled, and after
+// the interval elapses it fires again. clear() resets the turn.
+func TestTurnTrackerDueForPersist(t *testing.T) {
+	tr := newTurnTracker()
+	tr.record("c", contentChunk(pb.ContentChunk_START, "hi"))
+
+	if !tr.dueForPersist("c", 50*time.Millisecond) {
+		t.Fatal("first persist check should fire (never persisted this turn)")
+	}
+	if tr.dueForPersist("c", 50*time.Millisecond) {
+		t.Fatal("immediate re-check should be throttled")
+	}
+	time.Sleep(60 * time.Millisecond)
+	if !tr.dueForPersist("c", 50*time.Millisecond) {
+		t.Fatal("after the interval the check should fire again")
+	}
+
+	// Untracked conversation never fires.
+	if tr.dueForPersist("never-seen", time.Millisecond) {
+		t.Fatal("dueForPersist must be false for an untracked conversation")
 	}
 }

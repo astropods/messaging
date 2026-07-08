@@ -33,8 +33,20 @@ type Config struct {
 	// Authorization (per-deployment grants enforced via callback to astro-server)
 	Authz AuthzConfig
 
+	// Chat persistence (deployment-local SQLite for the platform chat UI)
+	Chat ChatConfig
+
 	// Logging
 	LogLevel string
+}
+
+// ChatConfig holds deployment-local chat persistence configuration.
+type ChatConfig struct {
+	// DBPath is the SQLite database path for chat persistence. Empty disables
+	// chat persistence entirely (e.g. local dev). In deployed sidecars this
+	// points at a file on the agent's default persistent disk (e.g.
+	// /data/chat.db), so chat history survives pod reschedules.
+	DBPath string
 }
 
 // AuthzConfig holds the configuration the messaging container uses to call
@@ -223,6 +235,13 @@ func Load() (*Config, error) {
 	// wiring (local dev) and skip the check.
 	cfg.Authz = AuthzConfig{
 		IdentityToken: os.Getenv("ASTRO_AUTHZ_TOKEN"),
+	}
+
+	// Chat persistence: astro-server points this at a file on the agent's
+	// shared persistent disk in deployed sidecars (durable across reschedules);
+	// unset locally, which disables persistence.
+	cfg.Chat = ChatConfig{
+		DBPath: getEnv("CHAT_DB_PATH", ""),
 	}
 
 	return cfg, nil

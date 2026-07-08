@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/sqlite"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -25,8 +27,11 @@ type Handlers struct {
 	audioForwarder   adapter.AudioForwarder
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
-	// turns tracks per-conversation stop state so a client stop can drop the
-	// agent's late output. Shared with WebAdapter.
+	// chatStore persists the platform chat UI thread (sidebar + bodies) in
+	// the sidecar-local SQLite database on a shared persistent volume.
+	chatStore *sqlite.Store
+	// turns tracks per-conversation streaming state so a client stop can drop
+	// the agent's late output and persist the partial. Shared with WebAdapter.
 	turns *turnTracker
 }
 
@@ -145,6 +150,13 @@ func (h *Handlers) HandleCreateConversation(w http.ResponseWriter, r *http.Reque
 	// Generate conversation ID
 	conversationID := uuid.NewString()
 
+	// Persist the conversation row (title is derived later, on first send).
+	if h.chatStore != nil {
+		if err := h.chatStore.Upsert(r.Context(), conversationID, session.UserID, ""); err != nil {
+			slog.Error("[Web] chat persist create conversation failed", "err", err)
+		}
+	}
+
 	resp := CreateConversationResponse{
 		ConversationID: conversationID,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
@@ -211,15 +223,63 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		ConversationId: conversationID,
 	}
 
-	// Forward to gRPC handler
 	if h.msgHandler == nil {
 		slog.Warn("[Web] No message handler registered")
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
+	// Persist the user turn BEFORE forwarding: HandleAgentResponse runs on another
+	// goroutine, so a fast agent could persist its reply before this write lands,
+	// inverting turn order or dropping the reply. EnsureForSend also enforces
+	// ownership, rejecting a foreign conversation before the agent runs. (See the
+	// changelog for the full ordering/ownership rationale.)
+	if h.chatStore != nil {
+		title := sqlite.TruncateRunes(req.Content, chatTitleMaxRunes)
+		owned, err := h.chatStore.EnsureForSend(ctx, conversationID, session.UserID, title)
+		if err != nil {
+			// Couldn't verify ownership (transient store error) — fail closed with
+			// a retryable 503, not an authz denial.
+			slog.Error("[Web] chat ensure conversation failed", "err", err)
+			http.Error(w, "chat temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if !owned {
+			// Missing or foreign conversation: 404 (not 403) to avoid leaking existence.
+			http.Error(w, "conversation not found", http.StatusNotFound)
+			return
+		}
+		// A failed user-turn write must not run the agent (would persist an
+		// assistant-first / user-less turn).
+		if _, err := h.chatStore.AppendMessage(ctx, conversationID, session.UserID, "user", req.Content); err != nil {
+			// The message cap is terminal, not transient — return 409 with a
+			// machine-readable code so the client keys on it (not the bare status).
+			if errors.Is(err, sqlite.ErrMessageLimitReached) {
+				slog.Warn("[Web] chat conversation at message limit", "conversation", conversationID)
+				writeJSON(w, http.StatusConflict, map[string]string{
+					"error":             "message_limit_reached",
+					"error_description": "conversation message limit reached; start a new chat",
+				})
+				return
+			}
+			slog.Error("[Web] chat persist user message failed", "err", err)
+			http.Error(w, "chat temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+	}
+
 	if err := h.msgHandler(ctx, msg); err != nil {
 		slog.Error(fmt.Sprintf("[Web] Error forwarding message: %v", err))
+		// Forwarding failed after the user turn was persisted, and the agent will
+		// never respond — so nothing else finalizes the store. Without this the
+		// latest row stays the user's and the thread derives assistant_streaming
+		// forever. Mirror the AgentResponse_Error path (empty partial: nothing
+		// streamed); FinalizeTerminal appends only when the last row is the user's.
+		if h.chatStore != nil {
+			if _, ferr := h.chatStore.FinalizeTerminal(ctx, conversationID, ""); ferr != nil {
+				slog.Error("[Web] chat finalize on forward failure failed", "conversation", conversationID, "err", ferr)
+			}
+		}
 		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process message")
 		http.Error(w, "Failed to process message", http.StatusInternalServerError)
 		return
@@ -256,12 +316,12 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 // The agent's model call runs in the agent process, so the sidecar cannot halt
 // generation directly. Instead it (1) marks the turn stopped so the agent's
 // remaining chunks are dropped until the next turn's START (see
-// HandleAgentResponse), (2) sends a terminal finish event and then closes the
-// conversation's SSE connections so the client turn ends and the astro-server
-// chat-store tee unwinds (no lingering writer to resurrect the turn), and (3)
-// forwards a StreamControl STOP to the agent as a best-effort signal for
-// agents/SDKs that honor it. Agents that don't honor it keep running, but their
-// output is discarded.
+// HandleAgentResponse), (2) persists the partial the client saw and flips the
+// conversation out of the streaming state in the deployment-local chat store,
+// (3) sends a terminal finish event and closes the conversation's SSE
+// connections so the client turn ends promptly, and (4) forwards a StreamControl
+// STOP to the agent as a best-effort signal for agents/SDKs that honor it.
+// Agents that don't honor it keep running, but their output is discarded.
 func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
 	// Authenticate the request (session) and authorize against this
 	// deployment's grants. authenticate writes the response on failure.
@@ -277,14 +337,43 @@ func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mark the turn stopped so subsequent agent chunks are dropped.
-	if h.turns != nil {
-		h.turns.stop(conversationID)
+	// Enforce conversation ownership BEFORE any side effect, matching the
+	// 404-on-foreign pattern used by send/rename/delete. FinalizeStopped is
+	// already user-scoped, but the in-memory stop-gate and the SSE teardown below
+	// act on the raw id — without this guard a deployment user who learned another
+	// user's conversation UUID could drop their in-flight output and close their
+	// stream. Without a chat store there is no ownership to check (dev
+	// convenience); deployment-level authz above still applies.
+	if h.chatStore != nil {
+		conv, err := h.chatStore.Get(r.Context(), conversationID)
+		if err != nil {
+			slog.Error("[Web] chat cancel owner lookup failed", "conversation", conversationID, "err", err)
+			http.Error(w, "chat temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if conv == nil || conv.UserID != session.UserID {
+			http.Error(w, "conversation not found", http.StatusNotFound)
+			return
+		}
 	}
 
-	// End any live SSE turn for this conversation: emit finish, then close the
-	// connections so every reader (client + astro-server detached persister)
-	// unwinds instead of lingering and re-marking the turn active.
+	// Mark the turn stopped and capture the partial the client has seen so far.
+	partial := ""
+	if h.turns != nil {
+		partial = h.turns.stop(conversationID)
+	}
+
+	// Make the turn terminal in the deployment-local chat store so the chat page
+	// stops showing it as streaming. Never shrinks an already-finished reply;
+	// when the partial was progressively persisted this is a no-op.
+	if h.chatStore != nil {
+		if _, err := h.chatStore.FinalizeStopped(r.Context(), conversationID, session.UserID, partial); err != nil {
+			slog.Error("[Web] chat finalize stopped failed", "conversation", conversationID, "err", err)
+		}
+	}
+
+	// End any live SSE turn: emit finish, then close the conversation's SSE
+	// connections so the client turn ends promptly instead of lingering.
 	h.connManager.Broadcast(conversationID, NewFinishEvent(""))
 	h.connManager.CloseConversation(conversationID)
 
@@ -331,6 +420,26 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 	if conversationID == "" {
 		http.Error(w, "Missing conversation ID", http.StatusBadRequest)
 		return
+	}
+
+	// Enforce conversation ownership before subscribing, matching the
+	// send/cancel/get boundary. The SSE stream is a live read of the
+	// conversation's agent output, so a caller who learned another user's
+	// conversation UUID must not be able to subscribe and watch their turn. Done
+	// before any SSE header/flush so a foreign request gets a clean 404 rather
+	// than a hijacked stream. Without a chat store there is no ownership to check
+	// (dev convenience); deployment-level authz above still applies.
+	if h.chatStore != nil {
+		conv, err := h.chatStore.Get(r.Context(), conversationID)
+		if err != nil {
+			slog.Error("[Web] chat stream owner lookup failed", "conversation", conversationID, "err", err)
+			http.Error(w, "chat temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if conv == nil || conv.UserID != session.UserID {
+			http.Error(w, "conversation not found", http.StatusNotFound)
+			return
+		}
 	}
 
 	// Set SSE headers

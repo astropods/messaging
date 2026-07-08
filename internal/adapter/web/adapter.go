@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -11,8 +12,15 @@ import (
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/sqlite"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
+
+// chatPersistThrottle bounds how often a streaming assistant turn is
+// progressively written to the chat store — roughly one write per interval
+// rather than one per token. The terminal END chunk always flushes the final
+// text regardless of this throttle.
+const chatPersistThrottle = 250 * time.Millisecond
 
 // WebAdapter implements adapter.Adapter for web browser clients via HTTP + SSE
 type WebAdapter struct {
@@ -22,6 +30,7 @@ type WebAdapter struct {
 	sessionManager   SessionManager
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
+	chatStore        *sqlite.Store
 	server           *http.Server
 	handlers         *Handlers
 	turns            *turnTracker
@@ -93,9 +102,9 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 	// Initialize connection manager
 	a.connManager = NewConnectionManager(a.heartbeatInterval)
 
-	// Per-turn stop state, shared with the HTTP handlers so a client stop
+	// Per-turn streaming state, shared with the HTTP handlers so a client stop
 	// (HandleCancel) and the agent response loop (HandleAgentResponse) agree on
-	// which turns are stopped.
+	// which turns are stopped and what partial text was streamed.
 	a.turns = newTurnTracker()
 
 	// Initialize handlers
@@ -129,6 +138,12 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/conversations/{id}/stream", a.handlers.HandleStream)
 	mux.HandleFunc("GET /api/conversations/{id}/history", a.handlers.HandleHistory)
 	mux.HandleFunc("GET /api/agent/config", a.handlers.HandleAgentConfig)
+
+	// Platform chat-page contract (served via astro-server /chat/* proxy).
+	mux.HandleFunc("GET /api/chat/conversations", a.handlers.HandleListChatConversations)
+	mux.HandleFunc("GET /api/chat/conversations/{id}", a.handlers.HandleGetChatConversation)
+	mux.HandleFunc("PUT /api/chat/conversations/{id}/title", a.handlers.HandleSetChatConversationTitle)
+	mux.HandleFunc("DELETE /api/chat/conversations/{id}", a.handlers.HandleDeleteChatConversation)
 	mux.HandleFunc("GET /api/conversations/{id}/audio", a.handlers.HandleAudioStream)
 	mux.HandleFunc("POST /api/conversations/{id}/audio", a.handlers.HandleAudioUpload)
 	mux.HandleFunc("GET /health", a.handlers.HandleHealth)
@@ -247,10 +262,10 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 	case *pb.AgentResponse_Content:
 		// The user stopped this turn: drop the agent's remaining output so a
 		// non-cooperating agent's late/complete reply can't reach the client or
-		// the astro-server chat store. The gate stays closed until the agent
-		// starts a NEW turn (a START chunk); it is deliberately NOT lifted by the
-		// next user send, so the stopped turn's trailing output can't bleed into
-		// the following message on the same conversation.
+		// be persisted to the deployment-local chat store. The gate stays closed
+		// until the agent starts a NEW turn (a START chunk); it is deliberately
+		// NOT lifted by the next user send, so the stopped turn's trailing output
+		// can't bleed into the following message on the same conversation.
 		if a.turns != nil && a.turns.gateContent(conversationID, payload.Content.Type == pb.ContentChunk_START) {
 			// Dropped because the turn is stopped. If this is the stopped
 			// generation's terminal chunk, clear the gate so the entry doesn't
@@ -259,6 +274,12 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 				a.turns.clear(conversationID)
 			}
 			return nil
+		}
+
+		// Buffer the partial so a mid-stream stop can persist exactly what the
+		// user saw so far (the stop path reads it via turnTracker.stop).
+		if a.turns != nil {
+			a.turns.record(conversationID, payload.Content)
 		}
 
 		// Content chunk
@@ -283,6 +304,41 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 			})
 		}
 
+		// Persist the assistant reply to the deployment-local chat store. Write
+		// progressively (throttled) during the stream and always flush on END, so
+		// the store holds a stable in-flight assistant row throughout the turn.
+		// This is what lets a client that switches conversations mid-stream,
+		// reloads, or reconnects reconcile to the store instead of rebuilding the
+		// reply from SSE deltas (which the server never replays). Persist the full
+		// buffered text (what the user saw), not this chunk's own content — agents
+		// stream deltas and usually send an empty END, so a single chunk alone
+		// would persist a partial or blank reply.
+		if a.chatStore != nil {
+			isEnd := payload.Content.Type == pb.ContentChunk_END
+			if isEnd || (a.turns != nil && a.turns.dueForPersist(conversationID, chatPersistThrottle)) {
+				content := payload.Content.Content
+				if a.turns != nil {
+					if buffered := a.turns.content(conversationID); buffered != "" {
+						content = buffered
+					}
+				}
+				if _, err := a.chatStore.UpsertAssistantProgress(ctx, conversationID, content); err != nil {
+					if errors.Is(err, sqlite.ErrMessageLimitReached) {
+						// Terminal per-conversation state, not a real failure — don't
+						// spam ERROR on every throttled write near the cap.
+						slog.Debug("[Web] chat at message limit; assistant reply not persisted", "conversation", conversationID)
+					} else {
+						slog.Error("[Web] chat persist assistant message failed", "conversation", conversationID, "err", err)
+					}
+				}
+			}
+		}
+
+		// Turn completed normally — drop per-turn tracker state.
+		if payload.Content.Type == pb.ContentChunk_END && a.turns != nil {
+			a.turns.clear(conversationID)
+		}
+
 	case *pb.AgentResponse_Status:
 		// Status update
 		event := NewStatusEvent(payload.Status)
@@ -294,12 +350,32 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		a.connManager.Broadcast(conversationID, event)
 
 	case *pb.AgentResponse_Error:
-		// An error terminates the turn; clear any stop-gate so the entry doesn't
-		// linger (no-op when the conversation isn't stopped).
+		// Finalize the turn in the store so it doesn't report assistant_streaming
+		// forever on reload (the persisted flag is "the latest message is the
+		// user's"). An error can terminate a turn before any assistant row is
+		// written, leaving the user row last; persist whatever partial the user
+		// saw (empty if none) as the terminal assistant row. FinalizeTerminal
+		// appends only when the last row is still the user's, so a spurious error
+		// after a completed turn (buffer already cleared) can't blank the reply.
+		// Runs before clear() so the buffered partial is still available.
+		if a.chatStore != nil {
+			partial := ""
+			if a.turns != nil {
+				partial = a.turns.content(conversationID)
+			}
+			if _, err := a.chatStore.FinalizeTerminal(ctx, conversationID, partial); err != nil {
+				if errors.Is(err, sqlite.ErrMessageLimitReached) {
+					slog.Debug("[Web] chat at message limit; errored turn not finalized", "conversation", conversationID)
+				} else {
+					slog.Error("[Web] chat finalize errored turn failed", "conversation", conversationID, "err", err)
+				}
+			}
+		}
+		// The error terminates the turn; drop the per-turn tracker state (also
+		// lifts any stop-gate — a no-op when the conversation isn't stopped).
 		if a.turns != nil {
 			a.turns.clear(conversationID)
 		}
-		// Error response
 		event := NewErrorEvent(payload.Error)
 		a.connManager.Broadcast(conversationID, event)
 
@@ -354,6 +430,15 @@ func (a *WebAdapter) SetAgentConfigStore(s *store.AgentConfigStore) {
 	a.agentConfigStore = s
 	if a.handlers != nil {
 		a.handlers.agentConfigStore = s
+	}
+}
+
+// SetChatStore wires the sidecar-local SQLite chat store. nil disables chat
+// persistence (e.g. local dev without CHAT_DB_PATH).
+func (a *WebAdapter) SetChatStore(s *sqlite.Store) {
+	a.chatStore = s
+	if a.handlers != nil {
+		a.handlers.chatStore = s
 	}
 }
 

@@ -10,6 +10,7 @@ Go messaging service that connects AI agents to messaging platforms via gRPC bid
 - **Playground UI** — bundled browser-based chat interface, served from `/` when enabled
 - **Thread history** — tracks edits and deletions in memory
 - **Storage** — Redis or in-memory conversation store
+- **Chat persistence** — deployment web-chat history in a deployment-local SQLite store, durable on the agent's shared disk (see `CHAT_DB_PATH`)
 - **Multi-arch Docker image** — `linux/amd64` and `linux/arm64`
 
 ## Project Structure
@@ -129,6 +130,13 @@ REDIS_URL=redis://localhost:6379
 THREAD_HISTORY_MAX_SIZE=1000
 THREAD_HISTORY_MAX_MESSAGES=50
 THREAD_HISTORY_TTL_HOURS=24
+
+# Chat persistence (deployment web chat)
+# SQLite file backing the chat-page API (conversations + messages). In deployed
+# sidecars astro-server sets this to a path on the agent's shared persistent
+# disk, so history survives pod reschedules. Unset (default) disables
+# persistence — used for local dev.
+CHAT_DB_PATH=
 
 # Logging: debug (default), info, warn, error
 LOG_LEVEL=debug

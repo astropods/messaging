@@ -17,6 +17,7 @@ import (
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/grpc"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/sqlite"
 	"github.com/astropods/messaging/internal/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -114,6 +115,38 @@ func main() {
 	// Initialize agent config store
 	agentConfigStore := store.NewAgentConfigStore()
 
+	// Initialize the sidecar-local chat store (platform chat UI persistence).
+	// Disabled when CHAT_DB_PATH is unset (local dev). In deployed sidecars the
+	// path points at a shared persistent volume, so chat survives pod reschedules.
+	var chatStore *sqlite.Store
+	if cfg.Chat.DBPath != "" {
+		cs, err := sqlite.Open(cfg.Chat.DBPath)
+		if err != nil {
+			slog.Error("Failed to initialize chat store", "err", err, "path", cfg.Chat.DBPath)
+			os.Exit(1)
+		}
+		chatStore = cs
+		defer func() {
+			if err := chatStore.Close(); err != nil {
+				slog.Error("Error closing chat store", "err", err)
+			}
+		}()
+		slog.Info("Chat store initialized", "path", cfg.Chat.DBPath)
+		// On startup no turn can be in flight and the in-memory turn tracker is
+		// empty, so any conversation whose latest message is still the user's is a
+		// turn that was interrupted before its assistant row was persisted (agent
+		// crash, or reschedule between the user append and the first progressive
+		// write). Finalize them so they don't derive assistant_streaming=true
+		// forever after the restart.
+		if n, err := chatStore.ReapDanglingUserTurns(ctx); err != nil {
+			slog.Error("Failed to reap dangling chat turns", "err", err)
+		} else if n > 0 {
+			slog.Info("Finalized interrupted chat turns on startup", "count", n)
+		}
+	} else {
+		slog.Info("Chat persistence disabled (CHAT_DB_PATH unset)")
+	}
+
 	// Initialize gRPC server (if enabled)
 	var grpcServer *grpc.Server
 	if cfg.GRPC.Enabled {
@@ -128,7 +161,7 @@ func main() {
 	authorizer := buildAuthorizer(cfg.Authz)
 
 	// Initialize adapters
-	adapters := initializeAdapters(ctx, cfg, threadStore, agentConfigStore, authorizer)
+	adapters := initializeAdapters(ctx, cfg, threadStore, agentConfigStore, authorizer, chatStore)
 	if len(adapters) == 0 && !cfg.GRPC.Enabled {
 		slog.Error("No adapters enabled or configured and gRPC is disabled")
 		os.Exit(1)
@@ -229,7 +262,7 @@ func main() {
 }
 
 // initializeAdapters creates and initializes adapters based on configuration
-func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer) map[string]adapter.Adapter {
+func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer, chatStore *sqlite.Store) map[string]adapter.Adapter {
 	adapters := make(map[string]adapter.Adapter)
 
 	// Initialize Slack adapter if enabled
@@ -277,6 +310,7 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			webAdapter.SetThreadStore(threadStore)
 			webAdapter.SetAgentConfigStore(agentConfigStore)
 			webAdapter.SetAuthorizer(authorizer)
+			webAdapter.SetChatStore(chatStore)
 			adapters["web"] = webAdapter
 			slog.Info("Web adapter initialized")
 		}
