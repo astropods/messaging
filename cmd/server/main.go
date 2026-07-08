@@ -132,6 +132,17 @@ func main() {
 			}
 		}()
 		slog.Info("Chat store initialized", "path", cfg.Chat.DBPath)
+		// On startup no turn can be in flight and the in-memory turn tracker is
+		// empty, so any conversation whose latest message is still the user's is a
+		// turn that was interrupted before its assistant row was persisted (agent
+		// crash, or reschedule between the user append and the first progressive
+		// write). Finalize them so they don't derive assistant_streaming=true
+		// forever after the restart.
+		if n, err := chatStore.ReapDanglingUserTurns(ctx); err != nil {
+			slog.Error("Failed to reap dangling chat turns", "err", err)
+		} else if n > 0 {
+			slog.Info("Finalized interrupted chat turns on startup", "count", n)
+		}
 	} else {
 		slog.Info("Chat persistence disabled (CHAT_DB_PATH unset)")
 	}

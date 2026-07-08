@@ -639,6 +639,57 @@ func (s *Store) FinalizeTerminal(ctx context.Context, conversationID, partial st
 	return true, nil
 }
 
+// ReapDanglingUserTurns finalizes active conversations whose latest message is
+// still the user's. It is meant to run once on startup, when no turn can be in
+// flight and the in-memory turn tracker is empty — so a user-last conversation is
+// definitionally a turn that was interrupted before any assistant row was
+// persisted (agent crash, or a reschedule between the user append and the first
+// progressive write). Appending a terminal (empty) assistant row flips it out of
+// the derived assistant_streaming state. Returns the number finalized.
+func (s *Store) ReapDanglingUserTurns(ctx context.Context) (int, error) {
+	// Collect candidate ids first, then finalize. The rows cursor must be drained
+	// and closed before FinalizeTerminal's BeginTx: with MaxOpenConns(1) an open
+	// cursor holds the only connection and the transaction would otherwise block.
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.conversation_id
+		FROM conversations c
+		WHERE c.deleted_at IS NULL
+			AND (
+				SELECT role FROM messages m
+				WHERE m.conversation_id = c.conversation_id
+				ORDER BY m.seq DESC LIMIT 1
+			) = 'user'`)
+	if err != nil {
+		return 0, fmt.Errorf("chatstore reap query: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("chatstore reap scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, fmt.Errorf("chatstore reap rows: %w", err)
+	}
+	_ = rows.Close()
+
+	finalized := 0
+	for _, id := range ids {
+		ok, err := s.FinalizeTerminal(ctx, id, "")
+		if err != nil {
+			return finalized, fmt.Errorf("chatstore reap finalize %q: %w", id, err)
+		}
+		if ok {
+			finalized++
+		}
+	}
+	return finalized, nil
+}
+
 func touchConversationTx(ctx context.Context, tx *sql.Tx, conversationID string) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET updated_at = ? WHERE conversation_id = ?`,
 		time.Now().UnixMilli(), conversationID); err != nil {

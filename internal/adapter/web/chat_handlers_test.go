@@ -11,6 +11,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -240,6 +241,32 @@ func TestHandleSendMessageForeignConversationRejected(t *testing.T) {
 	msgs, _ := st.ListMessages(t.Context(), "conv-1")
 	if len(msgs) != 0 {
 		t.Fatalf("foreign send injected a stored message: %+v", msgs)
+	}
+}
+
+// When forwarding to the agent fails after the user turn is persisted, the turn
+// must be finalized so the thread doesn't derive assistant_streaming forever
+// (latest row would otherwise stay the user's). Mirrors the agent-error path.
+func TestHandleSendMessageForwardFailureFinalizes(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+	h.SetMessageHandler(func(context.Context, *pb.Message) error {
+		return errors.New("agent unreachable")
+	})
+
+	w := httptest.NewRecorder()
+	h.HandleSendMessage(w, sendMessageRequest("user-1", "conv-1", "hello"))
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500 on forward failure, got %d body=%q", w.Code, w.Body.String())
+	}
+	// The last row must be a terminal assistant row, not the user's — otherwise
+	// assistant_streaming derives true forever.
+	msgs, err := st.ListMessages(t.Context(), "conv-1")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(msgs) != 2 || msgs[len(msgs)-1].Role != "assistant" {
+		t.Fatalf("forward failure did not finalize the turn (last row must be assistant): %+v", msgs)
 	}
 }
 

@@ -229,47 +229,31 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Persist the user turn BEFORE forwarding to the agent. HandleAgentResponse
-	// runs on another goroutine, so a fast agent could reach its terminal END
-	// and persist the assistant reply before this write lands — inverting turn
-	// order, or (since UpsertAssistantProgress no-ops on a not-yet-created
-	// conversation) dropping the assistant reply entirely. Writing here first
-	// guarantees the conversation row and user message exist before any
-	// assistant chunk is persisted. The conversation is titled from the derived
-	// title on first send and only has its recency bumped thereafter.
-	//
-	// EnsureForSend reports ownership: a foreign conversation (owned by another
-	// user) is rejected here, before forwarding to the agent, so a caller who
-	// knows another user's conversation UUID can neither inject a stored message
-	// into their thread nor trigger an agent turn inside it.
+	// Persist the user turn BEFORE forwarding: HandleAgentResponse runs on another
+	// goroutine, so a fast agent could persist its reply before this write lands,
+	// inverting turn order or dropping the reply. EnsureForSend also enforces
+	// ownership, rejecting a foreign conversation before the agent runs. (See the
+	// changelog for the full ordering/ownership rationale.)
 	if h.chatStore != nil {
 		title := sqlite.TruncateRunes(req.Content, chatTitleMaxRunes)
 		owned, err := h.chatStore.EnsureForSend(ctx, conversationID, session.UserID, title)
 		if err != nil {
-			// Store error: we could not VERIFY ownership. This is not an
-			// authorization denial (that's the 404 below) — it's "couldn't
-			// check", a transient store/infra failure. Fail closed (don't forward
-			// an unverified id) and return a retryable 503, not 403/404, so the
-			// client knows to retry rather than treating it as terminal.
+			// Couldn't verify ownership (transient store error) — fail closed with
+			// a retryable 503, not an authz denial.
 			slog.Error("[Web] chat ensure conversation failed", "err", err)
 			http.Error(w, "chat temporarily unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		if !owned {
-			// Authorization denial: the conversation is missing or owned by
-			// another user. Return 404 (not 403) so we don't leak the existence
-			// of another user's thread — matching SetTitle/SoftDelete.
+			// Missing or foreign conversation: 404 (not 403) to avoid leaking existence.
 			http.Error(w, "conversation not found", http.StatusNotFound)
 			return
 		}
-		// Record the user turn before forwarding. If this write fails, don't run
-		// the agent: otherwise the assistant reply would persist as the first
-		// message of the thread (assistant-first / user-less turn).
+		// A failed user-turn write must not run the agent (would persist an
+		// assistant-first / user-less turn).
 		if _, err := h.chatStore.AppendMessage(ctx, conversationID, session.UserID, "user", req.Content); err != nil {
-			// The message cap is a terminal per-conversation state, not a
-			// transient failure — surface it as 409 with a machine-readable code
-			// so the client can key on the code (not the bare status, which may
-			// carry other meanings) and prompt a new chat.
+			// The message cap is terminal, not transient — return 409 with a
+			// machine-readable code so the client keys on it (not the bare status).
 			if errors.Is(err, sqlite.ErrMessageLimitReached) {
 				slog.Warn("[Web] chat conversation at message limit", "conversation", conversationID)
 				writeJSON(w, http.StatusConflict, map[string]string{
@@ -286,6 +270,16 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.msgHandler(ctx, msg); err != nil {
 		slog.Error(fmt.Sprintf("[Web] Error forwarding message: %v", err))
+		// Forwarding failed after the user turn was persisted, and the agent will
+		// never respond — so nothing else finalizes the store. Without this the
+		// latest row stays the user's and the thread derives assistant_streaming
+		// forever. Mirror the AgentResponse_Error path (empty partial: nothing
+		// streamed); FinalizeTerminal appends only when the last row is the user's.
+		if h.chatStore != nil {
+			if _, ferr := h.chatStore.FinalizeTerminal(ctx, conversationID, ""); ferr != nil {
+				slog.Error("[Web] chat finalize on forward failure failed", "conversation", conversationID, "err", ferr)
+			}
+		}
 		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process message")
 		http.Error(w, "Failed to process message", http.StatusInternalServerError)
 		return
