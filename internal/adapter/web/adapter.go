@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -322,7 +323,13 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 					}
 				}
 				if _, err := a.chatStore.UpsertAssistantProgress(ctx, conversationID, content); err != nil {
-					slog.Error("[Web] chat persist assistant message failed", "conversation", conversationID, "err", err)
+					if errors.Is(err, sqlite.ErrMessageLimitReached) {
+						// Terminal per-conversation state, not a real failure — don't
+						// spam ERROR on every throttled write near the cap.
+						slog.Debug("[Web] chat at message limit; assistant reply not persisted", "conversation", conversationID)
+					} else {
+						slog.Error("[Web] chat persist assistant message failed", "conversation", conversationID, "err", err)
+					}
 				}
 			}
 		}
@@ -357,7 +364,11 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 				partial = a.turns.content(conversationID)
 			}
 			if _, err := a.chatStore.FinalizeTerminal(ctx, conversationID, partial); err != nil {
-				slog.Error("[Web] chat finalize errored turn failed", "conversation", conversationID, "err", err)
+				if errors.Is(err, sqlite.ErrMessageLimitReached) {
+					slog.Debug("[Web] chat at message limit; errored turn not finalized", "conversation", conversationID)
+				} else {
+					slog.Error("[Web] chat finalize errored turn failed", "conversation", conversationID, "err", err)
+				}
 			}
 		}
 		// The error terminates the turn; drop the per-turn tracker state (also

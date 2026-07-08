@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -260,6 +261,14 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		// the agent: otherwise the assistant reply would persist as the first
 		// message of the thread (assistant-first / user-less turn).
 		if _, err := h.chatStore.AppendMessage(ctx, conversationID, session.UserID, "user", req.Content); err != nil {
+			// The message cap is a terminal per-conversation state, not a
+			// transient failure — surface it as 409 with an actionable message so
+			// the client can prompt a new chat, rather than a misleading 503.
+			if errors.Is(err, sqlite.ErrMessageLimitReached) {
+				slog.Warn("[Web] chat conversation at message limit", "conversation", conversationID)
+				http.Error(w, "conversation message limit reached; start a new chat", http.StatusConflict)
+				return
+			}
 			slog.Error("[Web] chat persist user message failed", "err", err)
 			http.Error(w, "chat temporarily unavailable", http.StatusServiceUnavailable)
 			return

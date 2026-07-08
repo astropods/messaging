@@ -27,6 +27,10 @@ const MaxMessageContentRunes = 128_000
 // MaxMessagesPerConversation caps messages per thread.
 const MaxMessagesPerConversation = 1000
 
+// maxListedConversations bounds the conversation sidebar query so a user with a
+// large history doesn't return an unbounded list on every load.
+const maxListedConversations = 200
+
 // ErrMessageLimitReached is returned when an append would exceed the per-thread cap.
 var ErrMessageLimitReached = errors.New("conversation message limit reached")
 
@@ -231,6 +235,9 @@ func (s *Store) Get(ctx context.Context, conversationID string) (*Conversation, 
 
 // ListByUser returns the user's active conversations, most-recent first, with
 // AssistantStreaming derived from whether the latest message is still the user's.
+// Conversations with no messages (e.g. a pre-created "new chat" that was never
+// sent to) are excluded, and the result is capped at maxListedConversations —
+// both served by the (user_id, updated_at DESC) index.
 func (s *Store) ListByUser(ctx context.Context, userID string) ([]Conversation, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.conversation_id, c.user_id, c.title, c.created_at, c.updated_at,
@@ -241,8 +248,10 @@ func (s *Store) ListByUser(ctx context.Context, userID string) ([]Conversation, 
 			), '') AS last_role
 		FROM conversations c
 		WHERE c.user_id = ? AND c.deleted_at IS NULL
-		ORDER BY c.updated_at DESC`,
-		userID,
+			AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.conversation_id)
+		ORDER BY c.updated_at DESC
+		LIMIT ?`,
+		userID, maxListedConversations,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("chatstore list: %w", err)
@@ -446,49 +455,64 @@ func (s *Store) UpsertAssistantProgress(ctx context.Context, conversationID, con
 }
 
 // FinalizeStopped makes an interrupted turn terminal for a conversation owned by
-// userID. When the latest message is still the user's (the assistant turn was
-// stopped before any assistant row was persisted), it appends an assistant row
-// carrying whatever partial text the user saw, so AssistantStreaming (derived as
-// "latest message is the user's") resolves to false. When an assistant row
-// already exists (the turn completed, or was progressively persisted), it is
-// left untouched — a stop must never shrink a finished reply. A missing, deleted,
-// or foreign conversation is a no-op. Returns true when a row was appended.
+// userID, using `partial` — the full text the client saw at stop time. If no
+// assistant row exists yet (latest message is the user's), it appends one so
+// AssistantStreaming (derived as "latest message is the user's") resolves to
+// false. If an assistant row already exists (progressively persisted), it grows
+// that row to `partial` when `partial` is longer — the progressive snapshot lags
+// the buffer by up to one throttle interval, so this recovers the tail the user
+// saw. It never shrinks a reply. A missing, deleted, or foreign conversation is a
+// no-op. Returns true when a row was written.
 //
-// Ownership + role-check + append run in one transaction, both to scope the
-// write to the caller and to serialize against UpsertAssistantProgress (see its
-// note) so a concurrent stop can't produce a second assistant row.
+// Ownership + role-check + write run in one transaction, both to scope the write
+// to the caller and to serialize against UpsertAssistantProgress so a concurrent
+// stop can't produce a second assistant row.
 func (s *Store) FinalizeStopped(ctx context.Context, conversationID, userID, partial string) (bool, error) {
+	partial = TruncateRunes(partial, MaxMessageContentRunes)
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, fmt.Errorf("chatstore finalize begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful commit
 
-	// One row only when the conversation exists, is owned by userID, and is not
-	// deleted; lastRole is its latest message role ('' when it has none).
-	var lastRole string
+	// The latest message (id/role/content) of the conversation, but only when it
+	// exists, is owned by userID, and is not deleted. NULLs (no messages) coalesce
+	// to empty strings.
+	var lastID, lastRole, lastContent string
 	err = tx.QueryRowContext(ctx, `
-		SELECT COALESCE((
-			SELECT role FROM messages m
-			WHERE m.conversation_id = c.conversation_id
-			ORDER BY m.seq DESC LIMIT 1
-		), '')
+		SELECT COALESCE(m.id, ''), COALESCE(m.role, ''), COALESCE(m.content, '')
 		FROM conversations c
+		LEFT JOIN messages m ON m.id = (
+			SELECT id FROM messages
+			WHERE conversation_id = c.conversation_id
+			ORDER BY seq DESC LIMIT 1
+		)
 		WHERE c.conversation_id = ? AND c.user_id = ? AND c.deleted_at IS NULL`,
 		conversationID, userID,
-	).Scan(&lastRole)
+	).Scan(&lastID, &lastRole, &lastContent)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("chatstore finalize stopped read: %w", err)
 	}
-	if lastRole != "user" {
+
+	switch {
+	case lastRole == "user":
+		if _, err := appendMessageTx(ctx, tx, conversationID, "", "assistant", partial); err != nil {
+			return false, err
+		}
+	case lastRole == "assistant" && len(partial) > len(lastContent):
+		// Grow the progressively-persisted row to the fuller partial (never shrink).
+		if _, err := tx.ExecContext(ctx, `UPDATE messages SET content = ? WHERE id = ?`, partial, lastID); err != nil {
+			return false, fmt.Errorf("chatstore finalize grow: %w", err)
+		}
+	default:
+		// No messages, or the persisted reply already covers the partial.
 		return false, nil
 	}
-	if _, err := appendMessageTx(ctx, tx, conversationID, "", "assistant", partial); err != nil {
-		return false, err
-	}
+
 	if err := touchConversationTx(ctx, tx, conversationID); err != nil {
 		return false, err
 	}

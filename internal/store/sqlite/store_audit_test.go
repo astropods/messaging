@@ -296,6 +296,9 @@ func TestAudit_ListExcludesDeletedAndOrdersByRecency(t *testing.T) {
 		if _, err := st.EnsureForSend(ctx, id, "owner", id); err != nil {
 			t.Fatalf("seed %s: %v", id, err)
 		}
+		if _, err := st.AppendMessage(ctx, id, "owner", "user", "hi"); err != nil {
+			t.Fatalf("seed msg %s: %v", id, err)
+		}
 	}
 	// Bump "a" to most-recent, then delete "b".
 	if _, err := st.EnsureForSend(ctx, "a", "owner", "a"); err != nil {
@@ -318,5 +321,67 @@ func TestAudit_ListExcludesDeletedAndOrdersByRecency(t *testing.T) {
 	}
 	if len(ids) != 2 || ids[0] != "a" {
 		t.Fatalf("expected [a, d] most-recent-first, got %v", ids)
+	}
+}
+
+// ListByUser excludes conversations with no messages (a pre-created "new chat"
+// that was never sent to), so empty rows don't pile up in the sidebar.
+func TestAudit_ListExcludesEmptyConversations(t *testing.T) {
+	st := newTestStore(t)
+	ctx := t.Context()
+	// Pre-created, never sent to (mirrors HandleCreateConversation's Upsert).
+	if err := st.Upsert(ctx, "empty", "owner", ""); err != nil {
+		t.Fatalf("pre-create: %v", err)
+	}
+	// A real conversation with a message.
+	if _, err := st.EnsureForSend(ctx, "full", "owner", "Full"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, "full", "owner", "user", "hi"); err != nil {
+		t.Fatalf("seed msg: %v", err)
+	}
+
+	convs, err := st.ListByUser(ctx, "owner")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(convs) != 1 || convs[0].ConversationID != "full" {
+		t.Fatalf("expected only [full], got %+v", convs)
+	}
+}
+
+// Cancel after progressive persistence: FinalizeStopped grows the trailing
+// assistant row to the fuller buffered partial (the persisted snapshot lags the
+// buffer), but never shrinks it.
+func TestAudit_FinalizeStoppedGrowsButNeverShrinks(t *testing.T) {
+	st := newTestStore(t)
+	ctx := t.Context()
+	if _, err := st.EnsureForSend(ctx, "c", "owner", "t"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "q"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	// Progressive snapshot (lags what the user saw).
+	if _, err := st.UpsertAssistantProgress(ctx, "c", "partial so"); err != nil {
+		t.Fatalf("progress: %v", err)
+	}
+
+	// Stop with the fuller buffered partial → grows the row.
+	if ok, err := st.FinalizeStopped(ctx, "c", "owner", "partial so far and then some more"); err != nil || !ok {
+		t.Fatalf("finalize grow: ok=%v err=%v", ok, err)
+	}
+	msgs, _ := st.ListMessages(ctx, "c")
+	if len(msgs) != 2 || msgs[1].Content != "partial so far and then some more" {
+		t.Fatalf("cancel did not grow to the buffered partial: %+v", msgs)
+	}
+
+	// A second stop with a SHORTER partial must not shrink the persisted reply.
+	if _, err := st.FinalizeStopped(ctx, "c", "owner", "short"); err != nil {
+		t.Fatalf("finalize shrink attempt: %v", err)
+	}
+	msgs, _ = st.ListMessages(ctx, "c")
+	if len(msgs) != 2 || msgs[1].Content != "partial so far and then some more" {
+		t.Fatalf("cancel shrank a finished reply: %+v", msgs)
 	}
 }

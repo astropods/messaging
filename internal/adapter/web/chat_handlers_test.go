@@ -243,6 +243,35 @@ func TestHandleSendMessageForeignConversationRejected(t *testing.T) {
 	}
 }
 
+// Hitting the per-conversation message cap is a terminal, user-actionable state,
+// not a transient failure: the send returns 409 (not 503) and does not forward.
+func TestHandleSendMessageAtCapReturns409(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+	if _, err := st.EnsureForSend(t.Context(), "conv-1", "user-1", "t"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	for i := 0; i < sqlite.MaxMessagesPerConversation; i++ {
+		if _, err := st.AppendMessage(t.Context(), "conv-1", "user-1", "user", "m"); err != nil {
+			t.Fatalf("seed fill %d: %v", i, err)
+		}
+	}
+	var forwarded bool
+	h.SetMessageHandler(func(context.Context, *pb.Message) error {
+		forwarded = true
+		return nil
+	})
+
+	w := httptest.NewRecorder()
+	h.HandleSendMessage(w, sendMessageRequest("user-1", "conv-1", "over the cap"))
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409 at message cap, got %d body=%q", w.Code, w.Body.String())
+	}
+	if forwarded {
+		t.Fatal("must not forward to the agent once the conversation is at its cap")
+	}
+}
+
 // The ownership check is an authorization boundary: a store error must fail
 // closed (503) and never forward to the agent with an unverified conversation id.
 func TestHandleSendMessageFailsClosedOnStoreError(t *testing.T) {
