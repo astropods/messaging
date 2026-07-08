@@ -428,6 +428,26 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enforce conversation ownership before subscribing, matching the
+	// send/cancel/get boundary. The SSE stream is a live read of the
+	// conversation's agent output, so a caller who learned another user's
+	// conversation UUID must not be able to subscribe and watch their turn. Done
+	// before any SSE header/flush so a foreign request gets a clean 404 rather
+	// than a hijacked stream. Without a chat store there is no ownership to check
+	// (dev convenience); deployment-level authz above still applies.
+	if h.chatStore != nil {
+		conv, err := h.chatStore.Get(r.Context(), conversationID)
+		if err != nil {
+			slog.Error("[Web] chat stream owner lookup failed", "conversation", conversationID, "err", err)
+			http.Error(w, "chat temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if conv == nil || conv.UserID != session.UserID {
+			http.Error(w, "conversation not found", http.StatusNotFound)
+			return
+		}
+	}
+
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")

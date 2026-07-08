@@ -327,6 +327,67 @@ func (s *Store) ListMessages(ctx context.Context, conversationID string) ([]Mess
 	return out, nil
 }
 
+// PageMessages returns one page of a conversation's messages, ordered by seq
+// ascending, doing the windowing in SQL so a large thread isn't fully
+// materialized to serve a single page. Sequence numbers are contiguous from 1,
+// so the page's oldest seq alone tells us whether older messages remain
+// (hasMore = oldestSeq > 1). When beforeSeq > 0 the page immediately preceding
+// that seq is returned; otherwise the newest page. lastRole is the role of the
+// newest message in the whole thread (independent of the returned page) for the
+// assistant_streaming heuristic; it is "" for an empty thread.
+func (s *Store) PageMessages(ctx context.Context, conversationID string, limit, beforeSeq int) (msgs []Message, hasMore bool, oldestSeq int, lastRole string, err error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	// Fetch the newest `limit` rows (optionally strictly older than beforeSeq)
+	// descending, then reverse to ascending for the caller.
+	query := `SELECT id, role, content, seq FROM messages WHERE conversation_id = ?`
+	args := []any{conversationID}
+	if beforeSeq > 0 {
+		query += ` AND seq < ?`
+		args = append(args, beforeSeq)
+	}
+	query += ` ORDER BY seq DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, false, 0, "", fmt.Errorf("chatstore page messages: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+	for rows.Next() {
+		var m Message
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Seq); err != nil {
+			return nil, false, 0, "", fmt.Errorf("chatstore page messages scan: %w", err)
+		}
+		msgs = append(msgs, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, 0, "", fmt.Errorf("chatstore page messages rows: %w", err)
+	}
+	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
+		msgs[i], msgs[j] = msgs[j], msgs[i]
+	}
+	if len(msgs) > 0 {
+		oldestSeq = msgs[0].Seq
+		hasMore = oldestSeq > 1
+	}
+
+	// The newest message's role drives assistant_streaming and is independent of
+	// the returned page (which may be an older window).
+	err = s.db.QueryRowContext(ctx,
+		`SELECT role FROM messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1`,
+		conversationID,
+	).Scan(&lastRole)
+	if errors.Is(err, sql.ErrNoRows) {
+		return msgs, hasMore, oldestSeq, "", nil
+	}
+	if err != nil {
+		return nil, false, 0, "", fmt.Errorf("chatstore page last role: %w", err)
+	}
+	return msgs, hasMore, oldestSeq, lastRole, nil
+}
+
 // AppendMessage appends one message to a conversation, assigning the next
 // sequence number. Content is truncated to MaxMessageContentRunes.
 func (s *Store) AppendMessage(ctx context.Context, conversationID, userID, role, content string) (Message, error) {

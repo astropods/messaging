@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"github.com/astropods/messaging/internal/store/sqlite"
 )
 
 // Chat-page contract handlers. These serve the platform chat UI (via the
@@ -122,9 +120,12 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	all, err := h.chatStore.ListMessages(r.Context(), conversationID)
+	if limit == 0 {
+		limit = chatDefaultConversationLimit
+	}
+	window, hasMore, oldestSeq, lastRole, err := h.chatStore.PageMessages(r.Context(), conversationID, limit, beforeSeq)
 	if err != nil {
-		slog.Error("[Web] chat list messages failed", "err", err)
+		slog.Error("[Web] chat page messages failed", "err", err)
 		http.Error(w, "failed to load conversation", http.StatusInternalServerError)
 		return
 	}
@@ -133,10 +134,15 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 	// (awaiting the first assistant chunk) OR this sidecar is actively streaming
 	// the assistant reply. The second clause is required because the assistant
 	// row is persisted progressively, so "latest message is the user's" alone no
-	// longer distinguishes an in-flight turn from a finished one.
-	assistantStreaming := (len(all) > 0 && all[len(all)-1].Role == "user") ||
+	// longer distinguishes an in-flight turn from a finished one. lastRole is the
+	// newest message's role for the whole thread, independent of this page.
+	assistantStreaming := lastRole == "user" ||
 		(h.turns != nil && h.turns.isStreaming(conversationID))
-	messages, hasMore, oldestSeq := paginateChatMessages(all, limit, beforeSeq)
+
+	messages := make([]chatMessageResponse, 0, len(window))
+	for _, m := range window {
+		messages = append(messages, chatMessageResponse{ID: m.ID, Role: m.Role, Content: m.Content})
+	}
 
 	writeJSON(w, http.StatusOK, getChatConversationResponse{
 		ConversationID:     conversationID,
@@ -248,60 +254,6 @@ func parseChatPage(r *http.Request) (limit, beforeSeq int, ok bool) {
 		beforeSeq = v
 	}
 	return limit, beforeSeq, true
-}
-
-// paginateChatMessages returns a page of the ordered thread plus pagination
-// markers. Sequence numbers are contiguous from 1, so positional slicing aligns
-// with seq. Mirrors the previous astro-server pagination contract.
-func paginateChatMessages(all []sqlite.Message, limit, beforeSeq int) (messages []chatMessageResponse, hasMore bool, oldestSeq int) {
-	if limit == 0 {
-		limit = chatDefaultConversationLimit
-	}
-	n := len(all)
-	if n == 0 {
-		return nil, false, 0
-	}
-
-	var window []sqlite.Message
-	switch {
-	case beforeSeq > 0:
-		end := beforeSeq - 1
-		// Clamp to the number of stored messages: before_seq is caller-
-		// controlled and may exceed the thread length (crafted query or a
-		// stale client paging past the head). Without this, all[start-1:end]
-		// slices out of range and panics.
-		if end > n {
-			end = n
-		}
-		if end < 1 {
-			return nil, false, 0
-		}
-		start := end - limit + 1
-		if start < 1 {
-			start = 1
-		}
-		window = all[start-1 : end]
-		hasMore = start > 1
-		oldestSeq = start
-	case n <= limit:
-		window = all
-		hasMore = false
-		oldestSeq = 1
-	default:
-		start := n - limit
-		window = all[start:]
-		hasMore = true
-		oldestSeq = start + 1
-	}
-
-	messages = make([]chatMessageResponse, 0, len(window))
-	for _, m := range window {
-		messages = append(messages, chatMessageResponse{ID: m.ID, Role: m.Role, Content: m.Content})
-	}
-	if len(window) > 0 {
-		oldestSeq = window[0].Seq
-	}
-	return messages, hasMore, oldestSeq
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

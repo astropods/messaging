@@ -327,6 +327,42 @@ func TestHandleCancelForeignConversationRejected(t *testing.T) {
 	}
 }
 
+// The SSE stream is a live read: a foreign conversation is rejected with 404
+// before any stream is established, matching the send/cancel/get boundary. Closes
+// the cross-user live-read vector.
+func TestHandleStreamForeignConversationRejected(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+	// conv-1 belongs to user-2.
+	if _, err := st.EnsureForSend(t.Context(), "conv-1", "user-2", "owner"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/conversations/conv-1/stream", nil)
+	req.Header.Set("X-User-ID", "user-1")
+	req.SetPathValue("id", "conv-1")
+	w := httptest.NewRecorder()
+	h.HandleStream(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for foreign stream, got %d body=%q", w.Code, w.Body.String())
+	}
+}
+
+// A stream for a conversation that does not exist is also 404 (no existence leak).
+func TestHandleStreamMissingConversationRejected(t *testing.T) {
+	h, _ := newChatTitleHandlers(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/conversations/nope/stream", nil)
+	req.Header.Set("X-User-ID", "user-1")
+	req.SetPathValue("id", "nope")
+	w := httptest.NewRecorder()
+	h.HandleStream(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for missing stream, got %d body=%q", w.Code, w.Body.String())
+	}
+}
+
 // The owner can cancel: 204, the turn is stopped (gate set), and the partial is
 // finalized so the thread no longer derives as streaming.
 func TestHandleCancelOwnedConversation(t *testing.T) {
