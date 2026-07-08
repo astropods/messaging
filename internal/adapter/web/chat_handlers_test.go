@@ -250,7 +250,9 @@ func TestHandleSendMessageAtCapReturns409(t *testing.T) {
 	if _, err := st.EnsureForSend(t.Context(), "conv-1", "user-1", "t"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	for i := 0; i < sqlite.MaxMessagesPerConversation; i++ {
+	// Fill to the reserved cap (user turns hold back the final slot for a reply);
+	// the next user send then has no room and must 409.
+	for i := 0; i < sqlite.MaxMessagesPerConversation-1; i++ {
 		if _, err := st.AppendMessage(t.Context(), "conv-1", "user-1", "user", "m"); err != nil {
 			t.Fatalf("seed fill %d: %v", i, err)
 		}
@@ -269,6 +271,72 @@ func TestHandleSendMessageAtCapReturns409(t *testing.T) {
 	}
 	if forwarded {
 		t.Fatal("must not forward to the agent once the conversation is at its cap")
+	}
+}
+
+func cancelRequest(user, conversationID string) *http.Request {
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/conversations/"+conversationID+"/cancel", nil)
+	if user != "" {
+		req.Header.Set("X-User-ID", user)
+	}
+	req.SetPathValue("id", conversationID)
+	return req
+}
+
+// Cancel enforces conversation ownership like every other write path: a foreign
+// cancel is rejected with 404 and has NO side effects — it must not stop the
+// victim's in-flight turn or forward a STOP to their agent.
+func TestHandleCancelForeignConversationRejected(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+	h.turns = newTurnTracker()
+	// conv-1 belongs to user-2, with an in-flight turn streaming.
+	if _, err := st.EnsureForSend(t.Context(), "conv-1", "user-2", "owner"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	h.turns.record("conv-1", &pb.ContentChunk{Type: pb.ContentChunk_START, Content: "hi"})
+
+	var stopSignaled bool
+	h.SetFeedbackHandler(func(context.Context, *pb.PlatformFeedback) error {
+		stopSignaled = true
+		return nil
+	})
+
+	w := httptest.NewRecorder()
+	h.HandleCancel(w, cancelRequest("user-1", "conv-1"))
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for foreign cancel, got %d body=%q", w.Code, w.Body.String())
+	}
+	if !h.turns.isStreaming("conv-1") {
+		t.Fatal("foreign cancel stopped the victim's in-flight turn")
+	}
+	if stopSignaled {
+		t.Fatal("foreign cancel forwarded a STOP to the victim's agent")
+	}
+}
+
+// The owner can cancel: 204, the turn is stopped (gate set), and the partial is
+// finalized so the thread no longer derives as streaming.
+func TestHandleCancelOwnedConversation(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+	h.turns = newTurnTracker()
+	if _, err := st.EnsureForSend(t.Context(), "conv-1", "user-1", "owner"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := st.AppendMessage(t.Context(), "conv-1", "user-1", "user", "q"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	h.turns.record("conv-1", &pb.ContentChunk{Type: pb.ContentChunk_START, Content: "partial reply"})
+
+	w := httptest.NewRecorder()
+	h.HandleCancel(w, cancelRequest("user-1", "conv-1"))
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("want 204 for owner cancel, got %d body=%q", w.Code, w.Body.String())
+	}
+	if h.turns.isStreaming("conv-1") {
+		t.Fatal("owner cancel did not stop the turn")
 	}
 }
 

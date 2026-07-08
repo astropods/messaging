@@ -368,7 +368,16 @@ func appendMessageTx(ctx context.Context, tx *sql.Tx, conversationID, userID, ro
 	).Scan(&nextSeq); err != nil {
 		return Message{}, fmt.Errorf("chatstore next seq: %w", err)
 	}
-	if nextSeq > MaxMessagesPerConversation {
+	// Cap the thread. A user turn is admitted only while the following assistant
+	// reply still fits, so the final slot is reserved for that reply: otherwise a
+	// user turn could land on the last seq, its reply would exceed the cap and go
+	// unpersisted, and the thread would derive assistant_streaming=true forever
+	// (latest row is the user's). Assistant/finalize appends may use the full cap.
+	limit := MaxMessagesPerConversation
+	if role == "user" {
+		limit = MaxMessagesPerConversation - 1
+	}
+	if nextSeq > limit {
 		return Message{}, ErrMessageLimitReached
 	}
 

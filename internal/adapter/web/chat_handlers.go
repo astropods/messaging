@@ -201,15 +201,9 @@ func (h *Handlers) HandleSetChatConversationTitle(w http.ResponseWriter, r *http
 
 // HandleDeleteChatConversation handles DELETE /api/chat/conversations/{id}.
 //
-// Delete is a soft delete: it hides the conversation from the owning user's list.
-// Because the store lives on a durable persistent volume, the soft delete sticks
-// across pod reschedules (no resurrection).
-//
-// It intentionally does NOT touch Langfuse. The agent-run traces in Langfuse are
-// telemetry that powers cost/usage and observability analytics, which a user must
-// not be able to wipe by deleting a chat thread. (The sidecar has no Langfuse
-// access in any case.) True right-to-erasure of that telemetry, if needed, is a
-// separate policy-gated concern handled outside the chat store.
+// Soft delete, scoped to the owning user; durable across reschedules (no
+// resurrection) and does not touch Langfuse telemetry. See the changelog for the
+// data-minimization rationale.
 func (h *Handlers) HandleDeleteChatConversation(w http.ResponseWriter, r *http.Request) {
 	session := h.authenticate(w, r)
 	if session == nil {

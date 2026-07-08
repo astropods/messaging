@@ -149,25 +149,36 @@ func TestAudit_FinalizeStoppedNoOpOnDeleted(t *testing.T) {
 	}
 }
 
-// The per-conversation message cap is enforced: the (cap+1)th append is rejected
-// and nothing beyond the cap is stored.
+// The per-conversation message cap is enforced with a slot reserved for the
+// assistant reply: a user turn is rejected once only the final slot remains, but
+// that slot still admits one assistant reply (reaching the hard cap), after which
+// even assistant appends are rejected. Nothing beyond the hard cap is stored.
 func TestAudit_MessageLimitEnforced(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
 	if _, err := st.EnsureForSend(ctx, "c", "owner", "t"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	for i := 0; i < MaxMessagesPerConversation; i++ {
+	// Fill user turns up to the reserved cap (one slot held back for a reply).
+	for i := 0; i < MaxMessagesPerConversation-1; i++ {
 		if _, err := st.AppendMessage(ctx, "c", "owner", "user", "m"); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
-	_, err := st.AppendMessage(ctx, "c", "owner", "user", "over")
-	if !errors.Is(err, ErrMessageLimitReached) {
-		t.Fatalf("append past cap: want ErrMessageLimitReached, got %v", err)
+	// A further user turn is rejected — no room left for its assistant reply.
+	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "over"); !errors.Is(err, ErrMessageLimitReached) {
+		t.Fatalf("user append at reserved cap: want ErrMessageLimitReached, got %v", err)
+	}
+	// The reserved final slot still admits one assistant reply (hard cap reached).
+	if _, err := st.AppendMessage(ctx, "c", "owner", "assistant", "reply"); err != nil {
+		t.Fatalf("assistant append into reserved slot: %v", err)
+	}
+	// Now truly full: even an assistant append is rejected.
+	if _, err := st.AppendMessage(ctx, "c", "owner", "assistant", "over"); !errors.Is(err, ErrMessageLimitReached) {
+		t.Fatalf("assistant append past hard cap: want ErrMessageLimitReached, got %v", err)
 	}
 	if msgs, _ := st.ListMessages(ctx, "c"); len(msgs) != MaxMessagesPerConversation {
-		t.Fatalf("stored %d messages, want cap %d", len(msgs), MaxMessagesPerConversation)
+		t.Fatalf("stored %d messages, want hard cap %d", len(msgs), MaxMessagesPerConversation)
 	}
 }
 

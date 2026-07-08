@@ -246,14 +246,19 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		title := sqlite.TruncateRunes(req.Content, chatTitleMaxRunes)
 		owned, err := h.chatStore.EnsureForSend(ctx, conversationID, session.UserID, title)
 		if err != nil {
-			// Ownership is an authorization boundary — fail closed on a store
-			// error rather than forwarding to the agent with an unverified
-			// conversation id (which could be another user's).
+			// Store error: we could not VERIFY ownership. This is not an
+			// authorization denial (that's the 404 below) — it's "couldn't
+			// check", a transient store/infra failure. Fail closed (don't forward
+			// an unverified id) and return a retryable 503, not 403/404, so the
+			// client knows to retry rather than treating it as terminal.
 			slog.Error("[Web] chat ensure conversation failed", "err", err)
 			http.Error(w, "chat temporarily unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		if !owned {
+			// Authorization denial: the conversation is missing or owned by
+			// another user. Return 404 (not 403) so we don't leak the existence
+			// of another user's thread — matching SetTitle/SoftDelete.
 			http.Error(w, "conversation not found", http.StatusNotFound)
 			return
 		}
@@ -332,6 +337,26 @@ func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
 	if conversationID == "" {
 		http.Error(w, "Missing conversation ID", http.StatusBadRequest)
 		return
+	}
+
+	// Enforce conversation ownership BEFORE any side effect, matching the
+	// 404-on-foreign pattern used by send/rename/delete. FinalizeStopped is
+	// already user-scoped, but the in-memory stop-gate and the SSE teardown below
+	// act on the raw id — without this guard a deployment user who learned another
+	// user's conversation UUID could drop their in-flight output and close their
+	// stream. Without a chat store there is no ownership to check (dev
+	// convenience); deployment-level authz above still applies.
+	if h.chatStore != nil {
+		conv, err := h.chatStore.Get(r.Context(), conversationID)
+		if err != nil {
+			slog.Error("[Web] chat cancel owner lookup failed", "conversation", conversationID, "err", err)
+			http.Error(w, "chat temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if conv == nil || conv.UserID != session.UserID {
+			http.Error(w, "conversation not found", http.StatusNotFound)
+			return
+		}
 	}
 
 	// Mark the turn stopped and capture the partial the client has seen so far.
