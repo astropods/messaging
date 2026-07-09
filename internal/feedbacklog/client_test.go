@@ -23,9 +23,9 @@ func (c *failingHTTPClient) Do(req *http.Request) (*http.Response, error) {
 }
 
 type fakeHTTPClient struct {
-	req  *http.Request
-	body []byte
-	resp *http.Response
+	status int
+	req    *http.Request
+	body   []byte
 }
 
 func (c *fakeHTTPClient) Do(req *http.Request) (*http.Response, error) {
@@ -33,14 +33,10 @@ func (c *fakeHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	if req.Body != nil {
 		c.body, _ = io.ReadAll(req.Body)
 	}
-	return c.resp, nil
-}
-
-func newResponse(status int) *http.Response {
 	return &http.Response{
-		StatusCode: status,
+		StatusCode: c.status,
 		Body:       io.NopCloser(strings.NewReader("")),
-	}
+	}, nil
 }
 
 func TestBuildRequestThumbsUp(t *testing.T) {
@@ -157,7 +153,7 @@ func TestBuildRequestSkipsMissingResponseID(t *testing.T) {
 }
 
 func TestRecordPostsFeedback(t *testing.T) {
-	httpClient := &fakeHTTPClient{resp: newResponse(http.StatusOK)}
+	httpClient := &fakeHTTPClient{status: http.StatusOK}
 	client := &Client{
 		httpClient: httpClient,
 		serverURL:  "https://astro.example",
@@ -208,7 +204,7 @@ func TestRecordPostsFeedback(t *testing.T) {
 }
 
 func TestRecordReturnsErrorOnNon2xx(t *testing.T) {
-	httpClient := &fakeHTTPClient{resp: newResponse(http.StatusInternalServerError)}
+	httpClient := &fakeHTTPClient{status: http.StatusInternalServerError}
 	client := &Client{
 		httpClient: httpClient,
 		serverURL:  "https://astro.example",
