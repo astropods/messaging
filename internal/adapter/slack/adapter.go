@@ -20,6 +20,7 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -817,16 +818,20 @@ func (a *SlackAdapter) forwardFeedback(ctx context.Context, fb *pb.PlatformFeedb
 }
 
 func (a *SlackAdapter) forwardFeedbackLog(ctx context.Context, fb *pb.PlatformFeedback) {
-	if a.feedbackLogHandler == nil {
+	handler := a.feedbackLogHandler
+	if handler == nil {
 		return
 	}
 	if fb.GetTraceContext() == nil {
 		slog.Debug("[Slack] Feedback log skipped: missing trace context")
 		return
 	}
-	if err := a.feedbackLogHandler(ctx, fb); err != nil {
-		slog.Error("[Slack] Feedback log forward failed", "err", err)
-	}
+	feedback := proto.Clone(fb).(*pb.PlatformFeedback)
+	go func() {
+		if err := handler(ctx, feedback); err != nil {
+			slog.Error("[Slack] Feedback log forward failed", "err", err)
+		}
+	}()
 }
 
 // routeButtonClickToAgent forwards a Slack block-action button click to the agent
@@ -877,7 +882,7 @@ func (a *SlackAdapter) routeButtonClickToAgent(ctx context.Context, callback *sl
 			ChannelId:    channelID,
 			ThreadId:     threadTS,
 			ThreadRootId: threadRootID,
-			EventKind: pb.PlatformContext_EVENT_KIND_BUTTON_CLICK,
+			EventKind:    pb.PlatformContext_EVENT_KIND_BUTTON_CLICK,
 			BotUserId:    a.botUserID,
 		},
 		User: &pb.User{Id: callback.User.ID},
@@ -977,7 +982,7 @@ func (a *SlackAdapter) handleAssistantThreadStarted(ctx context.Context, ev *sla
 			ChannelId:    channelID,
 			ThreadId:     threadTS,
 			ThreadRootId: threadTS,
-			EventKind: pb.PlatformContext_EVENT_KIND_ASSISTANT_THREAD_STARTED,
+			EventKind:    pb.PlatformContext_EVENT_KIND_ASSISTANT_THREAD_STARTED,
 			BotUserId:    a.botUserID,
 		},
 		User: &pb.User{Id: userID},
@@ -1042,7 +1047,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 			ChannelId:    ev.Channel,
 			ThreadId:     threadID,
 			ThreadRootId: ev.ThreadTimeStamp, // empty for top-level mentions
-			EventKind: pb.PlatformContext_EVENT_KIND_APP_MENTION,
+			EventKind:    pb.PlatformContext_EVENT_KIND_APP_MENTION,
 			BotUserId:    a.botUserID,
 		},
 		User: &pb.User{
@@ -1103,7 +1108,7 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 			ChannelId:    ev.Item.Channel,
 			ThreadId:     threadID,
 			ThreadRootId: parentThreadTs, // empty when reaction is on a top-level message
-			EventKind: pb.PlatformContext_EVENT_KIND_REACTION,
+			EventKind:    pb.PlatformContext_EVENT_KIND_REACTION,
 			BotUserId:    a.botUserID,
 		},
 		User: &pb.User{

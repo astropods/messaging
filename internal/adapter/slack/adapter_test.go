@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/authz"
@@ -1237,6 +1238,18 @@ func (c *captureFeedbackHandler) count() int {
 	return len(c.calls)
 }
 
+func (c *captureFeedbackHandler) waitForCount(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if c.count() == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected %d feedback calls, got %d", want, c.count())
+}
+
 func (c *captureFeedbackHandler) last() *pb.PlatformFeedback {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1299,9 +1312,7 @@ func TestHandleFeedbackButton_ThumbsUpForwardedToHandler(t *testing.T) {
 	if fb.TraceContext == nil || fb.TraceContext.Traceparent == "" {
 		t.Fatalf("expected forwarded trace context, got %+v", fb.TraceContext)
 	}
-	if feedbackLogHandler.count() != 1 {
-		t.Fatalf("expected 1 logged feedback, got %d", feedbackLogHandler.count())
-	}
+	feedbackLogHandler.waitForCount(t, 1)
 	if feedbackLogHandler.last().TraceContext.Traceparent != fb.TraceContext.Traceparent {
 		t.Errorf("feedback log traceparent: got %q want %q", feedbackLogHandler.last().TraceContext.Traceparent, fb.TraceContext.Traceparent)
 	}
@@ -1426,9 +1437,7 @@ func TestHandleViewSubmission_TextForwarded(t *testing.T) {
 	if fb.TraceContext == nil || fb.TraceContext.Traceparent == "" {
 		t.Fatalf("expected text feedback trace context, got %+v", fb.TraceContext)
 	}
-	if feedbackLogHandler.count() != 1 {
-		t.Fatalf("expected 1 feedback log call, got %d", feedbackLogHandler.count())
-	}
+	feedbackLogHandler.waitForCount(t, 1)
 }
 
 func TestHandleViewSubmission_EmptySubmissionNotForwarded(t *testing.T) {
