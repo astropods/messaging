@@ -110,6 +110,12 @@ func buildRequest(fb *pb.PlatformFeedback) (request, bool) {
 		return request{}, false
 	}
 
+	// The server requires these to attribute and dedupe the score, so drop
+	// feedback that can't be identified rather than forwarding a doomed 400.
+	if fb.GetResponseId() == "" || fb.GetUser().GetId() == "" {
+		return request{}, false
+	}
+
 	feedback, ok := feedbackFromProto(fb)
 	if !ok {
 		return request{}, false
@@ -124,12 +130,10 @@ func buildRequest(fb *pb.PlatformFeedback) (request, bool) {
 			Tracestate:  trace.Tracestate,
 		},
 		Feedback: feedback,
+		User:     user{ID: fb.GetUser().GetId(), Username: fb.GetUser().GetUsername()},
 	}
 	if ts := fb.GetTimestamp(); ts != nil {
 		req.Timestamp = ts.AsTime().UTC().Format(time.RFC3339Nano)
-	}
-	if u := fb.GetUser(); u != nil {
-		req.User = user{ID: u.Id, Username: u.Username}
 	}
 	return req, true
 }

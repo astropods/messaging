@@ -60,6 +60,7 @@ func TestBuildRequestComment(t *testing.T) {
 			Traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
 			Tracestate:  "vendor=value",
 		},
+		User: &pb.User{Id: "U123", Username: "alice"},
 		Feedback: &pb.PlatformFeedback_Text{
 			Text: &pb.TextFeedback{
 				Text:   "  useful but incomplete  ",
@@ -113,5 +114,35 @@ func TestBuildRequestSkipsMissingTraceContext(t *testing.T) {
 	})
 	if ok {
 		t.Fatal("expected missing trace context to be skipped")
+	}
+}
+
+func TestBuildRequestSkipsMissingResponseID(t *testing.T) {
+	_, ok := buildRequest(&pb.PlatformFeedback{
+		TraceContext: &pb.TraceContext{
+			Traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+		},
+		User: &pb.User{Id: "U123"},
+		Feedback: &pb.PlatformFeedback_Reaction{
+			Reaction: &pb.MessageReaction{Type: pb.MessageReaction_THUMBS_UP},
+		},
+	})
+	if ok {
+		t.Fatal("expected missing response id to be skipped")
+	}
+}
+
+func TestBuildRequestSkipsMissingUser(t *testing.T) {
+	_, ok := buildRequest(&pb.PlatformFeedback{
+		ResponseId: "1700000000.000002",
+		TraceContext: &pb.TraceContext{
+			Traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+		},
+		Feedback: &pb.PlatformFeedback_Reaction{
+			Reaction: &pb.MessageReaction{Type: pb.MessageReaction_THUMBS_UP},
+		},
+	})
+	if ok {
+		t.Fatal("expected missing user to be skipped")
 	}
 }
