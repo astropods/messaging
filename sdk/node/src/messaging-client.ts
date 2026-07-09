@@ -87,11 +87,17 @@ export interface Attachment {
   title?: string;
 }
 
+export interface TraceContext {
+  traceparent?: string;
+  tracestate?: string;
+}
+
 // AgentResponse uses proto-loader's oneof flattening (oneofs: true).
 // The active oneof field goes directly on the object, not nested under "payload".
 export interface AgentResponse {
   conversationId: string;
   responseId?: string;
+  traceContext?: TraceContext;
   // oneof payload — only one of these should be set:
   incomingMessage?: Message;
   status?: StatusUpdate;
@@ -119,6 +125,7 @@ export interface PlatformFeedback {
   conversationId: string;
   responseId?: string;
   timestamp?: Timestamp;
+  traceContext?: TraceContext;
   user?: User;
   // oneof feedback — only one of these is set:
   reaction?: MessageReaction;
@@ -188,6 +195,7 @@ export interface ContentChunk {
   attachments?: any[];
   platformMessageId?: string;
   options?: any;
+  traceContext?: TraceContext;
 }
 
 export interface SuggestedPrompts {

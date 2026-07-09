@@ -206,6 +206,7 @@ type AgentResponse struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"` // Matches incoming Message.conversation_id
 	ResponseId     string                 `protobuf:"bytes,2,opt,name=response_id,json=responseId,proto3" json:"response_id,omitempty"`             // Stable ID for this response (for updates)
+	TraceContext   *TraceContext          `protobuf:"bytes,15,opt,name=trace_context,json=traceContext,proto3" json:"trace_context,omitempty"`      // Trace context for this assistant response
 	// Types that are valid to be assigned to Payload:
 	//
 	//	*AgentResponse_IncomingMessage
@@ -267,6 +268,13 @@ func (x *AgentResponse) GetResponseId() string {
 		return x.ResponseId
 	}
 	return ""
+}
+
+func (x *AgentResponse) GetTraceContext() *TraceContext {
+	if x != nil {
+		return x.TraceContext
+	}
+	return nil
 }
 
 func (x *AgentResponse) GetPayload() isAgentResponse_Payload {
@@ -541,7 +549,9 @@ type ContentChunk struct {
 	// Platform message ID (returned after START, used for updates)
 	PlatformMessageId string `protobuf:"bytes,4,opt,name=platform_message_id,json=platformMessageId,proto3" json:"platform_message_id,omitempty"` // Optional
 	// Options for message creation
-	Options       *MessageOptions `protobuf:"bytes,5,opt,name=options,proto3" json:"options,omitempty"` // Optional
+	Options *MessageOptions `protobuf:"bytes,5,opt,name=options,proto3" json:"options,omitempty"` // Optional
+	// Trace context associated with this assistant message.
+	TraceContext  *TraceContext `protobuf:"bytes,6,opt,name=trace_context,json=traceContext,proto3" json:"trace_context,omitempty"` // Optional
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -607,6 +617,13 @@ func (x *ContentChunk) GetPlatformMessageId() string {
 func (x *ContentChunk) GetOptions() *MessageOptions {
 	if x != nil {
 		return x.Options
+	}
+	return nil
+}
+
+func (x *ContentChunk) GetTraceContext() *TraceContext {
+	if x != nil {
+		return x.TraceContext
 	}
 	return nil
 }
@@ -1628,11 +1645,12 @@ var File_astro_messaging_v1_response_proto protoreflect.FileDescriptor
 
 const file_astro_messaging_v1_response_proto_rawDesc = "" +
 	"\n" +
-	"!astro/messaging/v1/response.proto\x12\x12astro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a astro/messaging/v1/message.proto\x1a\x1eastro/messaging/v1/audio.proto\x1a!astro/messaging/v1/feedback.proto\x1a#astro/messaging/v1/renderable.proto\"\xa0\a\n" +
+	"!astro/messaging/v1/response.proto\x12\x12astro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a astro/messaging/v1/message.proto\x1a\x1eastro/messaging/v1/audio.proto\x1a!astro/messaging/v1/feedback.proto\x1a#astro/messaging/v1/renderable.proto\x1a\x1eastro/messaging/v1/trace.proto\"\xe7\a\n" +
 	"\rAgentResponse\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x1f\n" +
 	"\vresponse_id\x18\x02 \x01(\tR\n" +
-	"responseId\x12H\n" +
+	"responseId\x12E\n" +
+	"\rtrace_context\x18\x0f \x01(\v2 .astro.messaging.v1.TraceContextR\ftraceContext\x12H\n" +
 	"\x10incoming_message\x18\x03 \x01(\v2\x1b.astro.messaging.v1.MessageH\x00R\x0fincomingMessage\x12:\n" +
 	"\x06status\x18\x04 \x01(\v2 .astro.messaging.v1.StatusUpdateH\x00R\x06status\x12<\n" +
 	"\acontent\x18\x05 \x01(\v2 .astro.messaging.v1.ContentChunkH\x00R\acontent\x12@\n" +
@@ -1667,13 +1685,14 @@ const file_astro_messaging_v1_response_proto_rawDesc = "" +
 	"\tANALYZING\x10\x05\x12\n" +
 	"\n" +
 	"\x06CUSTOM\x10\n" +
-	"\"\xf5\x02\n" +
+	"\"\xbc\x03\n" +
 	"\fContentChunk\x12>\n" +
 	"\x04type\x18\x01 \x01(\x0e2*.astro.messaging.v1.ContentChunk.ChunkTypeR\x04type\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontent\x12H\n" +
 	"\vattachments\x18\x03 \x03(\v2&.astro.messaging.v1.ResponseAttachmentR\vattachments\x12.\n" +
 	"\x13platform_message_id\x18\x04 \x01(\tR\x11platformMessageId\x12<\n" +
-	"\aoptions\x18\x05 \x01(\v2\".astro.messaging.v1.MessageOptionsR\aoptions\"S\n" +
+	"\aoptions\x18\x05 \x01(\v2\".astro.messaging.v1.MessageOptionsR\aoptions\x12E\n" +
+	"\rtrace_context\x18\x06 \x01(\v2 .astro.messaging.v1.TraceContextR\ftraceContext\"S\n" +
 	"\tChunkType\x12\x1a\n" +
 	"\x16CHUNK_TYPE_UNSPECIFIED\x10\x00\x12\t\n" +
 	"\x05START\x10\x01\x12\t\n" +
@@ -1812,51 +1831,54 @@ var file_astro_messaging_v1_response_proto_goTypes = []any{
 	(*ThreadMessage)(nil),           // 18: astro.messaging.v1.ThreadMessage
 	(*SuggestedPrompts_Prompt)(nil), // 19: astro.messaging.v1.SuggestedPrompts.Prompt
 	nil,                             // 20: astro.messaging.v1.ThreadMessage.PlatformDataEntry
-	(*Message)(nil),                 // 21: astro.messaging.v1.Message
-	(*AudioStreamConfig)(nil),       // 22: astro.messaging.v1.AudioStreamConfig
-	(*AudioChunk)(nil),              // 23: astro.messaging.v1.AudioChunk
-	(*PlatformFeedback)(nil),        // 24: astro.messaging.v1.PlatformFeedback
-	(*Renderable)(nil),              // 25: astro.messaging.v1.Renderable
-	(*timestamppb.Timestamp)(nil),   // 26: google.protobuf.Timestamp
-	(*User)(nil),                    // 27: astro.messaging.v1.User
-	(*Attachment)(nil),              // 28: astro.messaging.v1.Attachment
+	(*TraceContext)(nil),            // 21: astro.messaging.v1.TraceContext
+	(*Message)(nil),                 // 22: astro.messaging.v1.Message
+	(*AudioStreamConfig)(nil),       // 23: astro.messaging.v1.AudioStreamConfig
+	(*AudioChunk)(nil),              // 24: astro.messaging.v1.AudioChunk
+	(*PlatformFeedback)(nil),        // 25: astro.messaging.v1.PlatformFeedback
+	(*Renderable)(nil),              // 26: astro.messaging.v1.Renderable
+	(*timestamppb.Timestamp)(nil),   // 27: google.protobuf.Timestamp
+	(*User)(nil),                    // 28: astro.messaging.v1.User
+	(*Attachment)(nil),              // 29: astro.messaging.v1.Attachment
 }
 var file_astro_messaging_v1_response_proto_depIdxs = []int32{
-	21, // 0: astro.messaging.v1.AgentResponse.incoming_message:type_name -> astro.messaging.v1.Message
-	4,  // 1: astro.messaging.v1.AgentResponse.status:type_name -> astro.messaging.v1.StatusUpdate
-	5,  // 2: astro.messaging.v1.AgentResponse.content:type_name -> astro.messaging.v1.ContentChunk
-	12, // 3: astro.messaging.v1.AgentResponse.prompts:type_name -> astro.messaging.v1.SuggestedPrompts
-	13, // 4: astro.messaging.v1.AgentResponse.thread_metadata:type_name -> astro.messaging.v1.ThreadMetadata
-	15, // 5: astro.messaging.v1.AgentResponse.error:type_name -> astro.messaging.v1.ErrorResponse
-	16, // 6: astro.messaging.v1.AgentResponse.context_request:type_name -> astro.messaging.v1.ThreadHistoryRequest
-	14, // 7: astro.messaging.v1.AgentResponse.transcript:type_name -> astro.messaging.v1.Transcript
-	22, // 8: astro.messaging.v1.AgentResponse.audio_config:type_name -> astro.messaging.v1.AudioStreamConfig
-	23, // 9: astro.messaging.v1.AgentResponse.audio_chunk:type_name -> astro.messaging.v1.AudioChunk
-	24, // 10: astro.messaging.v1.AgentResponse.feedback:type_name -> astro.messaging.v1.PlatformFeedback
-	25, // 11: astro.messaging.v1.AgentResponse.renderable:type_name -> astro.messaging.v1.Renderable
-	0,  // 12: astro.messaging.v1.StatusUpdate.status:type_name -> astro.messaging.v1.StatusUpdate.Status
-	1,  // 13: astro.messaging.v1.ContentChunk.type:type_name -> astro.messaging.v1.ContentChunk.ChunkType
-	6,  // 14: astro.messaging.v1.ContentChunk.attachments:type_name -> astro.messaging.v1.ResponseAttachment
-	11, // 15: astro.messaging.v1.ContentChunk.options:type_name -> astro.messaging.v1.MessageOptions
-	7,  // 16: astro.messaging.v1.ResponseAttachment.image:type_name -> astro.messaging.v1.ImageAttachment
-	8,  // 17: astro.messaging.v1.ResponseAttachment.file:type_name -> astro.messaging.v1.FileAttachment
-	9,  // 18: astro.messaging.v1.ResponseAttachment.card:type_name -> astro.messaging.v1.CardAttachment
-	10, // 19: astro.messaging.v1.ResponseAttachment.link:type_name -> astro.messaging.v1.LinkPreview
-	19, // 20: astro.messaging.v1.SuggestedPrompts.prompts:type_name -> astro.messaging.v1.SuggestedPrompts.Prompt
-	2,  // 21: astro.messaging.v1.ErrorResponse.code:type_name -> astro.messaging.v1.ErrorResponse.ErrorCode
-	18, // 22: astro.messaging.v1.ThreadHistoryResponse.messages:type_name -> astro.messaging.v1.ThreadMessage
-	26, // 23: astro.messaging.v1.ThreadHistoryResponse.fetched_at:type_name -> google.protobuf.Timestamp
-	27, // 24: astro.messaging.v1.ThreadMessage.user:type_name -> astro.messaging.v1.User
-	28, // 25: astro.messaging.v1.ThreadMessage.attachments:type_name -> astro.messaging.v1.Attachment
-	26, // 26: astro.messaging.v1.ThreadMessage.timestamp:type_name -> google.protobuf.Timestamp
-	26, // 27: astro.messaging.v1.ThreadMessage.edited_at:type_name -> google.protobuf.Timestamp
-	26, // 28: astro.messaging.v1.ThreadMessage.deleted_at:type_name -> google.protobuf.Timestamp
-	20, // 29: astro.messaging.v1.ThreadMessage.platform_data:type_name -> astro.messaging.v1.ThreadMessage.PlatformDataEntry
-	30, // [30:30] is the sub-list for method output_type
-	30, // [30:30] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	21, // 0: astro.messaging.v1.AgentResponse.trace_context:type_name -> astro.messaging.v1.TraceContext
+	22, // 1: astro.messaging.v1.AgentResponse.incoming_message:type_name -> astro.messaging.v1.Message
+	4,  // 2: astro.messaging.v1.AgentResponse.status:type_name -> astro.messaging.v1.StatusUpdate
+	5,  // 3: astro.messaging.v1.AgentResponse.content:type_name -> astro.messaging.v1.ContentChunk
+	12, // 4: astro.messaging.v1.AgentResponse.prompts:type_name -> astro.messaging.v1.SuggestedPrompts
+	13, // 5: astro.messaging.v1.AgentResponse.thread_metadata:type_name -> astro.messaging.v1.ThreadMetadata
+	15, // 6: astro.messaging.v1.AgentResponse.error:type_name -> astro.messaging.v1.ErrorResponse
+	16, // 7: astro.messaging.v1.AgentResponse.context_request:type_name -> astro.messaging.v1.ThreadHistoryRequest
+	14, // 8: astro.messaging.v1.AgentResponse.transcript:type_name -> astro.messaging.v1.Transcript
+	23, // 9: astro.messaging.v1.AgentResponse.audio_config:type_name -> astro.messaging.v1.AudioStreamConfig
+	24, // 10: astro.messaging.v1.AgentResponse.audio_chunk:type_name -> astro.messaging.v1.AudioChunk
+	25, // 11: astro.messaging.v1.AgentResponse.feedback:type_name -> astro.messaging.v1.PlatformFeedback
+	26, // 12: astro.messaging.v1.AgentResponse.renderable:type_name -> astro.messaging.v1.Renderable
+	0,  // 13: astro.messaging.v1.StatusUpdate.status:type_name -> astro.messaging.v1.StatusUpdate.Status
+	1,  // 14: astro.messaging.v1.ContentChunk.type:type_name -> astro.messaging.v1.ContentChunk.ChunkType
+	6,  // 15: astro.messaging.v1.ContentChunk.attachments:type_name -> astro.messaging.v1.ResponseAttachment
+	11, // 16: astro.messaging.v1.ContentChunk.options:type_name -> astro.messaging.v1.MessageOptions
+	21, // 17: astro.messaging.v1.ContentChunk.trace_context:type_name -> astro.messaging.v1.TraceContext
+	7,  // 18: astro.messaging.v1.ResponseAttachment.image:type_name -> astro.messaging.v1.ImageAttachment
+	8,  // 19: astro.messaging.v1.ResponseAttachment.file:type_name -> astro.messaging.v1.FileAttachment
+	9,  // 20: astro.messaging.v1.ResponseAttachment.card:type_name -> astro.messaging.v1.CardAttachment
+	10, // 21: astro.messaging.v1.ResponseAttachment.link:type_name -> astro.messaging.v1.LinkPreview
+	19, // 22: astro.messaging.v1.SuggestedPrompts.prompts:type_name -> astro.messaging.v1.SuggestedPrompts.Prompt
+	2,  // 23: astro.messaging.v1.ErrorResponse.code:type_name -> astro.messaging.v1.ErrorResponse.ErrorCode
+	18, // 24: astro.messaging.v1.ThreadHistoryResponse.messages:type_name -> astro.messaging.v1.ThreadMessage
+	27, // 25: astro.messaging.v1.ThreadHistoryResponse.fetched_at:type_name -> google.protobuf.Timestamp
+	28, // 26: astro.messaging.v1.ThreadMessage.user:type_name -> astro.messaging.v1.User
+	29, // 27: astro.messaging.v1.ThreadMessage.attachments:type_name -> astro.messaging.v1.Attachment
+	27, // 28: astro.messaging.v1.ThreadMessage.timestamp:type_name -> google.protobuf.Timestamp
+	27, // 29: astro.messaging.v1.ThreadMessage.edited_at:type_name -> google.protobuf.Timestamp
+	27, // 30: astro.messaging.v1.ThreadMessage.deleted_at:type_name -> google.protobuf.Timestamp
+	20, // 31: astro.messaging.v1.ThreadMessage.platform_data:type_name -> astro.messaging.v1.ThreadMessage.PlatformDataEntry
+	32, // [32:32] is the sub-list for method output_type
+	32, // [32:32] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_astro_messaging_v1_response_proto_init() }
@@ -1868,6 +1890,7 @@ func file_astro_messaging_v1_response_proto_init() {
 	file_astro_messaging_v1_audio_proto_init()
 	file_astro_messaging_v1_feedback_proto_init()
 	file_astro_messaging_v1_renderable_proto_init()
+	file_astro_messaging_v1_trace_proto_init()
 	file_astro_messaging_v1_response_proto_msgTypes[0].OneofWrappers = []any{
 		(*AgentResponse_IncomingMessage)(nil),
 		(*AgentResponse_Status)(nil),
