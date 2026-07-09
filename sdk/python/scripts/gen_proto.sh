@@ -23,6 +23,7 @@ python -m grpc_tools.protoc \
 for f in "$OUT_DIR"/astro/messaging/v1/*_pb2*.py; do
   sed -i.bak 's/^from astro\.messaging\.v1 import \([a-z_]*_pb2\)/from . import \1/' "$f"
   sed -i.bak 's/^import \([a-z_]*_pb2\)/from . import \1/' "$f"
+  sed -i.bak '${/^$/d;}' "$f"
   rm -f "$f.bak"
 done
 
