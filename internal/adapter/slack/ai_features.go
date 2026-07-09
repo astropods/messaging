@@ -120,7 +120,7 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 			a.traceBuffers = make(map[string]*pb.TraceContext)
 		}
 		a.contentBuffers[conversationID] = ""
-		if traceContext := firstTraceContext(content.TraceContext, responseTrace); traceContext != nil {
+		if traceContext := firstTraceContext(responseTrace); traceContext != nil {
 			a.traceBuffers[conversationID] = traceContext
 		} else {
 			delete(a.traceBuffers, conversationID)
@@ -129,7 +129,7 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 
 	case pb.ContentChunk_DELTA:
 		// Accumulate content
-		if traceContext := firstTraceContext(content.TraceContext, responseTrace); traceContext != nil {
+		if traceContext := firstTraceContext(responseTrace); traceContext != nil {
 			if a.traceBuffers == nil {
 				a.traceBuffers = make(map[string]*pb.TraceContext)
 			}
@@ -141,7 +141,7 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 	case pb.ContentChunk_END:
 		// Flush the buffered content as a single Slack message
 		fullContent := a.contentBuffers[conversationID]
-		traceContext := firstTraceContext(content.TraceContext, responseTrace, a.traceBuffers[conversationID])
+		traceContext := firstTraceContext(responseTrace, a.traceBuffers[conversationID])
 		delete(a.contentBuffers, conversationID)
 		delete(a.traceBuffers, conversationID)
 
