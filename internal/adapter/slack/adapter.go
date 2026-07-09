@@ -25,19 +25,21 @@ import (
 
 // SlackAdapter implements the adapter.Adapter interface for Slack
 type SlackAdapter struct {
-	client          *slack.Client
-	socketClient    *socketmode.Client
-	config          adapter.Config
-	msgHandler      adapter.MessageHandler
-	feedbackHandler adapter.FeedbackHandler
-	authz           authz.Authorizer // nil = skip authz (dev convenience)
-	rateLimiter     *RateLimiter
-	stopChan        chan struct{}
-	aiClient        *SlackAIClient
+	client             *slack.Client
+	socketClient       *socketmode.Client
+	config             adapter.Config
+	msgHandler         adapter.MessageHandler
+	feedbackHandler    adapter.FeedbackHandler
+	feedbackLogHandler adapter.FeedbackLogHandler
+	authz              authz.Authorizer // nil = skip authz (dev convenience)
+	rateLimiter        *RateLimiter
+	stopChan           chan struct{}
+	aiClient           *SlackAIClient
 
 	// contentBuffers accumulates DELTA chunks per conversation so the adapter
 	// can send a single complete message to Slack on END.
 	contentBuffers map[string]string
+	traceBuffers   map[string]*pb.TraceContext
 
 	// actionableReactions is the set of emoji names forwarded to the agent.
 	// Built from config at initialization; empty map means no reactions are forwarded.
@@ -62,6 +64,10 @@ type SlackAdapter struct {
 // Authorizer in main.
 func (a *SlackAdapter) SetAuthorizer(az authz.Authorizer) {
 	a.authz = az
+}
+
+func (a *SlackAdapter) SetFeedbackLogHandler(handler adapter.FeedbackLogHandler) {
+	a.feedbackLogHandler = handler
 }
 
 // errAuthzDenied / errAuthzUnavailable are sentinel errors returned by
@@ -155,6 +161,7 @@ func New() *SlackAdapter {
 	return &SlackAdapter{
 		stopChan:       make(chan struct{}),
 		contentBuffers: make(map[string]string),
+		traceBuffers:   make(map[string]*pb.TraceContext),
 	}
 }
 
@@ -502,6 +509,7 @@ func (a *SlackAdapter) handleBlockActions(ctx context.Context, callback *slack.I
 // developer's on_feedback callback fires.
 func (a *SlackAdapter) handleFeedbackButton(ctx context.Context, callback *slack.InteractionCallback, action *slack.BlockAction) {
 	feedbackType := action.Value // "positive_feedback" or "negative_feedback"
+	traceContext := traceContextFromSlackMessage(callback.Message)
 	slog.Debug(fmt.Sprintf("[Slack] Feedback received: %s from user %s on message %s",
 		feedbackType, callback.User.ID, callback.Message.Timestamp))
 
@@ -555,10 +563,11 @@ func (a *SlackAdapter) handleFeedbackButton(ctx context.Context, callback *slack
 		slog.Debug(fmt.Sprintf("[Slack] Feedback acknowledged with :%s: reaction", emojiName))
 	}
 
-	// Forward to agent so developer-supplied callback fires.
-	a.forwardFeedback(ctx, &pb.PlatformFeedback{
+	// Build one feedback event so downstream handlers receive the same payload.
+	fb := &pb.PlatformFeedback{
 		ConversationId: conversationIDFromCallback(callback),
 		ResponseId:     callback.Message.Timestamp,
+		TraceContext:   traceContext,
 		Timestamp:      timestamppb.Now(),
 		User: &pb.User{
 			Id:       callback.User.ID,
@@ -570,7 +579,9 @@ func (a *SlackAdapter) handleFeedbackButton(ctx context.Context, callback *slack
 				Added: true,
 			},
 		},
-	})
+	}
+	a.forwardFeedback(ctx, fb)
+	a.forwardFeedbackLog(ctx, fb)
 }
 
 // Block / action / callback identifiers for the feedback UI. Centralised so
@@ -611,12 +622,18 @@ func (a *SlackAdapter) handleFeedbackCommentOpen(ctx context.Context, callback *
 		return
 	}
 
-	privateMeta, err := json.Marshal(map[string]string{
-		"channel_id":     callback.Channel.ID,
-		"message_ts":     callback.Message.Timestamp,
-		"thread_ts":      callback.Message.ThreadTimestamp,
+	traceContext := traceContextFromSlackMessage(callback.Message)
+	privateMetaMap := map[string]string{
+		"channel_id":      callback.Channel.ID,
+		"message_ts":      callback.Message.Timestamp,
+		"thread_ts":       callback.Message.ThreadTimestamp,
 		"conversation_id": conversationIDFromCallback(callback),
-	})
+	}
+	if traceContext != nil {
+		privateMetaMap[slackTraceMetadataTraceparent] = traceContext.Traceparent
+		privateMetaMap[slackTraceMetadataTracestate] = traceContext.Tracestate
+	}
+	privateMeta, err := json.Marshal(privateMetaMap)
 	if err != nil {
 		slog.Error("[Slack] feedback_comment: failed to encode private_metadata", "err", err)
 		return
@@ -671,6 +688,8 @@ func (a *SlackAdapter) handleViewSubmission(ctx context.Context, req *socketmode
 		MessageTS      string `json:"message_ts"`
 		ThreadTS       string `json:"thread_ts"`
 		ConversationID string `json:"conversation_id"`
+		Traceparent    string `json:"traceparent"`
+		Tracestate     string `json:"tracestate"`
 	}
 	if err := json.Unmarshal([]byte(view.PrivateMetadata), &meta); err != nil {
 		slog.Error("[Slack] feedback_comment: bad private_metadata", "err", err)
@@ -708,10 +727,14 @@ func (a *SlackAdapter) handleViewSubmission(ctx context.Context, req *socketmode
 		}
 	}
 
-	a.forwardFeedback(ctx, &pb.PlatformFeedback{
+	fb := &pb.PlatformFeedback{
 		ConversationId: meta.ConversationID,
 		ResponseId:     meta.MessageTS,
-		Timestamp:      timestamppb.Now(),
+		TraceContext: firstTraceContext(&pb.TraceContext{
+			Traceparent: meta.Traceparent,
+			Tracestate:  meta.Tracestate,
+		}),
+		Timestamp: timestamppb.Now(),
 		User: &pb.User{
 			Id:       callback.User.ID,
 			Username: callback.User.Name,
@@ -722,7 +745,9 @@ func (a *SlackAdapter) handleViewSubmission(ctx context.Context, req *socketmode
 				Prompt: "What did you think of this reply?",
 			},
 		},
-	})
+	}
+	a.forwardFeedback(ctx, fb)
+	a.forwardFeedbackLog(ctx, fb)
 }
 
 // ackViewSubmission sends the socket-mode ack for a view_submission. payload
@@ -755,6 +780,26 @@ func conversationIDFromCallback(callback *slack.InteractionCallback) string {
 	return fmt.Sprintf("%s-%s", callback.Channel.ID, threadTS)
 }
 
+func traceContextFromSlackMessage(msg slack.Message) *pb.TraceContext {
+	if msg.Metadata.EventType != slackTraceMetadataEventType {
+		return nil
+	}
+	payload := msg.Metadata.EventPayload
+	if payload == nil {
+		return nil
+	}
+	traceContext := &pb.TraceContext{
+		Traceparent: slackMetadataString(payload, slackTraceMetadataTraceparent),
+		Tracestate:  slackMetadataString(payload, slackTraceMetadataTracestate),
+	}
+	return firstTraceContext(traceContext)
+}
+
+func slackMetadataString(payload map[string]any, key string) string {
+	value, _ := payload[key].(string)
+	return value
+}
+
 // forwardFeedback routes a PlatformFeedback through the registered handler.
 // No-ops cleanly when the handler is unset (single-binary dev runs) or when
 // no agent is currently connected.
@@ -768,6 +813,19 @@ func (a *SlackAdapter) forwardFeedback(ctx context.Context, fb *pb.PlatformFeedb
 			return
 		}
 		slog.Error("[Slack] Feedback forward failed", "err", err)
+	}
+}
+
+func (a *SlackAdapter) forwardFeedbackLog(ctx context.Context, fb *pb.PlatformFeedback) {
+	if a.feedbackLogHandler == nil {
+		return
+	}
+	if fb.GetTraceContext() == nil {
+		slog.Debug("[Slack] Feedback log skipped: missing trace context")
+		return
+	}
+	if err := a.feedbackLogHandler(ctx, fb); err != nil {
+		slog.Error("[Slack] Feedback log forward failed", "err", err)
 	}
 }
 

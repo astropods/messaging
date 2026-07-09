@@ -10,10 +10,15 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
 const (
-	slackAPIBaseURL = "https://slack.com/api"
+	slackAPIBaseURL               = "https://slack.com/api"
+	slackTraceMetadataEventType   = "astropods_trace_context"
+	slackTraceMetadataTraceparent = "traceparent"
+	slackTraceMetadataTracestate  = "tracestate"
 )
 
 // SlackAIClient handles calls to Slack AI APIs that aren't in the slack-go library yet
@@ -140,14 +145,19 @@ const maxMarkdownBlockChars = 10000
 // code block — and each chunk is posted as its own message in the thread, so we
 // stay under Slack's per-block and per-message size limits. The footer and
 // feedback widgets ride on the last message. Returns the first message's ts.
-func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, content, threadID string) (string, error) {
+func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, content, threadID string, traceContextOpt ...*pb.TraceContext) (string, error) {
 	chunks := chunkMarkdown(content, maxMarkdownBlockChars)
 	trailing := c.feedbackTrailingBlocks()
+	var traceContext *pb.TraceContext
+	if len(traceContextOpt) > 0 {
+		traceContext = traceContextOpt[0]
+	}
 
 	var firstTS string
 	for i, chunk := range chunks {
+		isLast := i == len(chunks)-1
 		blocks := []map[string]interface{}{markdownBlock(chunk)}
-		if i == len(chunks)-1 {
+		if isLast {
 			blocks = append(blocks, trailing...)
 		}
 
@@ -165,6 +175,11 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 		}
 		if threadID != "" {
 			payload["thread_ts"] = threadID
+		}
+		if isLast {
+			if metadata := slackTraceMetadata(traceContext); metadata != nil {
+				payload["metadata"] = metadata
+			}
 		}
 
 		slog.Debug("[SlackAI] Posting message", "channel", channelID, "part", i+1, "parts", len(chunks))
@@ -191,6 +206,23 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 
 	slog.Debug("[SlackAI] Message posted successfully", "timestamp", firstTS, "parts", len(chunks))
 	return firstTS, nil
+}
+
+func slackTraceMetadata(traceContext *pb.TraceContext) map[string]interface{} {
+	if traceContext == nil || traceContext.Traceparent == "" {
+		return nil
+	}
+	payload := map[string]interface{}{}
+	if traceContext.Traceparent != "" {
+		payload[slackTraceMetadataTraceparent] = traceContext.Traceparent
+	}
+	if traceContext.Tracestate != "" {
+		payload[slackTraceMetadataTracestate] = traceContext.Tracestate
+	}
+	return map[string]interface{}{
+		"event_type":    slackTraceMetadataEventType,
+		"event_payload": payload,
+	}
 }
 
 // markdownBlock builds a Slack markdown block. Slack renders the Markdown

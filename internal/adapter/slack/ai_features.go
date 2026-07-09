@@ -20,7 +20,7 @@ func (a *SlackAdapter) HandleAgentResponse(ctx context.Context, response *pb.Age
 	case *pb.AgentResponse_Status:
 		return a.setSlackStatus(ctx, response.ConversationId, payload.Status)
 	case *pb.AgentResponse_Content:
-		return a.handleContentChunk(ctx, response.ConversationId, payload.Content)
+		return a.handleContentChunk(ctx, response.ConversationId, payload.Content, response.TraceContext)
 	case *pb.AgentResponse_Prompts:
 		return a.setSlackPrompts(ctx, response.ConversationId, payload.Prompts)
 	case *pb.AgentResponse_ThreadMetadata:
@@ -102,7 +102,7 @@ func (a *SlackAdapter) setSlackPrompts(ctx context.Context, conversationID strin
 }
 
 // handleContentChunk buffers DELTA chunks and sends a single message to Slack on END.
-func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID string, content *pb.ContentChunk) error {
+func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID string, content *pb.ContentChunk, responseTrace *pb.TraceContext) error {
 	if content == nil {
 		return fmt.Errorf("nil content chunk")
 	}
@@ -113,18 +113,37 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 	switch content.Type {
 	case pb.ContentChunk_START:
 		// Reset buffer for this conversation
+		if a.contentBuffers == nil {
+			a.contentBuffers = make(map[string]string)
+		}
+		if a.traceBuffers == nil {
+			a.traceBuffers = make(map[string]*pb.TraceContext)
+		}
 		a.contentBuffers[conversationID] = ""
+		if traceContext := firstTraceContext(content.TraceContext, responseTrace); traceContext != nil {
+			a.traceBuffers[conversationID] = traceContext
+		} else {
+			delete(a.traceBuffers, conversationID)
+		}
 		return nil
 
 	case pb.ContentChunk_DELTA:
 		// Accumulate content
+		if traceContext := firstTraceContext(content.TraceContext, responseTrace); traceContext != nil {
+			if a.traceBuffers == nil {
+				a.traceBuffers = make(map[string]*pb.TraceContext)
+			}
+			a.traceBuffers[conversationID] = traceContext
+		}
 		a.contentBuffers[conversationID] += content.Content
 		return nil
 
 	case pb.ContentChunk_END:
 		// Flush the buffered content as a single Slack message
 		fullContent := a.contentBuffers[conversationID]
+		traceContext := firstTraceContext(content.TraceContext, responseTrace, a.traceBuffers[conversationID])
 		delete(a.contentBuffers, conversationID)
+		delete(a.traceBuffers, conversationID)
 
 		if fullContent == "" {
 			slog.Debug(fmt.Sprintf("[Slack] Skipping empty message for %s", conversationID))
@@ -144,7 +163,7 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 			return fmt.Errorf("rate limit wait failed: %w", err)
 		}
 
-		_, err = a.aiClient.PostMessageWithFeedback(ctx, channelID, fullContent, threadTS)
+		_, err = a.aiClient.PostMessageWithFeedback(ctx, channelID, fullContent, threadTS, traceContext)
 		if err != nil {
 			return fmt.Errorf("failed to send message: %w", err)
 		}
@@ -194,6 +213,18 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 		slog.Warn(fmt.Sprintf("[Slack] Unknown content chunk type: %v", content.Type))
 		return nil
 	}
+}
+
+func firstTraceContext(candidates ...*pb.TraceContext) *pb.TraceContext {
+	for _, c := range candidates {
+		if c == nil {
+			continue
+		}
+		if c.Traceparent != "" {
+			return c
+		}
+	}
+	return nil
 }
 
 // handleThreadMetadata handles thread metadata updates

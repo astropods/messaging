@@ -1253,7 +1253,9 @@ func TestHandleFeedbackButton_ThumbsUpForwardedToHandler(t *testing.T) {
 	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
 
 	fbHandler := &captureFeedbackHandler{}
+	feedbackLogHandler := &captureFeedbackHandler{}
 	a.feedbackHandler = fbHandler.handle
+	a.feedbackLogHandler = feedbackLogHandler.handle
 
 	cb := &slacklib.InteractionCallback{
 		User:      slacklib.User{ID: "U999", Name: "alice"},
@@ -1261,6 +1263,12 @@ func TestHandleFeedbackButton_ThumbsUpForwardedToHandler(t *testing.T) {
 		Container: slacklib.Container{ThreadTs: "1700000000.000001"},
 	}
 	cb.Message.Timestamp = "1700000000.000002"
+	cb.Message.Metadata = slacklib.SlackMetadata{
+		EventType: slackTraceMetadataEventType,
+		EventPayload: map[string]any{
+			slackTraceMetadataTraceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+		},
+	}
 
 	action := &slacklib.BlockAction{ActionID: feedbackButtonsActionID, Value: "positive_feedback"}
 	a.handleFeedbackButton(t.Context(), cb, action)
@@ -1287,6 +1295,15 @@ func TestHandleFeedbackButton_ThumbsUpForwardedToHandler(t *testing.T) {
 	}
 	if !react.Added {
 		t.Error("expected Added=true")
+	}
+	if fb.TraceContext == nil || fb.TraceContext.Traceparent == "" {
+		t.Fatalf("expected forwarded trace context, got %+v", fb.TraceContext)
+	}
+	if feedbackLogHandler.count() != 1 {
+		t.Fatalf("expected 1 logged feedback, got %d", feedbackLogHandler.count())
+	}
+	if feedbackLogHandler.last().TraceContext.Traceparent != fb.TraceContext.Traceparent {
+		t.Errorf("feedback log traceparent: got %q want %q", feedbackLogHandler.last().TraceContext.Traceparent, fb.TraceContext.Traceparent)
 	}
 }
 
@@ -1357,13 +1374,16 @@ func TestHandleViewSubmission_TextForwarded(t *testing.T) {
 	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
 
 	fbHandler := &captureFeedbackHandler{}
+	feedbackLogHandler := &captureFeedbackHandler{}
 	a.feedbackHandler = fbHandler.handle
+	a.feedbackLogHandler = feedbackLogHandler.handle
 
 	meta, _ := json.Marshal(map[string]string{
 		"channel_id":      "C123",
 		"message_ts":      "1700000000.000002",
 		"thread_ts":       "1700000000.000001",
 		"conversation_id": "C123-1700000000.000001",
+		"traceparent":     "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
 	})
 
 	cb := &slacklib.InteractionCallback{
@@ -1402,6 +1422,12 @@ func TestHandleViewSubmission_TextForwarded(t *testing.T) {
 	}
 	if tf.Prompt == "" {
 		t.Error("expected Prompt to be set")
+	}
+	if fb.TraceContext == nil || fb.TraceContext.Traceparent == "" {
+		t.Fatalf("expected text feedback trace context, got %+v", fb.TraceContext)
+	}
+	if feedbackLogHandler.count() != 1 {
+		t.Fatalf("expected 1 feedback log call, got %d", feedbackLogHandler.count())
 	}
 }
 

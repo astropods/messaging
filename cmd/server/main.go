@@ -15,6 +15,7 @@ import (
 	"github.com/astropods/messaging/internal/adapter/slack"
 	"github.com/astropods/messaging/internal/adapter/web"
 	"github.com/astropods/messaging/internal/authz"
+	"github.com/astropods/messaging/internal/feedbacklog"
 	"github.com/astropods/messaging/internal/grpc"
 	"github.com/astropods/messaging/internal/store"
 	"github.com/astropods/messaging/internal/store/files"
@@ -58,6 +59,18 @@ func buildAuthorizer(cfg config.AuthzConfig) authz.Authorizer {
 		return authz.DenyAll()
 	}
 	return a
+}
+
+func buildFeedbackLogHandler(cfg config.AuthzConfig) adapter.FeedbackLogHandler {
+	if cfg.IdentityToken == "" {
+		return nil
+	}
+	client, err := feedbacklog.NewFromToken(cfg.IdentityToken)
+	if err != nil {
+		slog.Error("Failed to initialize feedback log client; feedback logging disabled", "err", err)
+		return nil
+	}
+	return client.Record
 }
 
 func main() {
@@ -183,9 +196,10 @@ func main() {
 	// Adapters check Allowed() at request ingress; the cache lives inside
 	// the Authorizer so all adapters share one cache for the deployment.
 	authorizer := buildAuthorizer(cfg.Authz)
+	feedbackLogHandler := buildFeedbackLogHandler(cfg.Authz)
 
 	// Initialize adapters
-	adapters := initializeAdapters(ctx, cfg, threadStore, agentConfigStore, authorizer, chatStore, fileStore)
+	adapters := initializeAdapters(ctx, cfg, threadStore, agentConfigStore, authorizer, chatStore, fileStore, feedbackLogHandler)
 	if len(adapters) == 0 && !cfg.GRPC.Enabled {
 		slog.Error("No adapters enabled or configured and gRPC is disabled")
 		os.Exit(1)
@@ -286,7 +300,7 @@ func main() {
 }
 
 // initializeAdapters creates and initializes adapters based on configuration
-func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer, chatStore *sqlite.Store, fileStore files.FileStore) map[string]adapter.Adapter {
+func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer, chatStore *sqlite.Store, fileStore files.FileStore, feedbackLogHandler adapter.FeedbackLogHandler) map[string]adapter.Adapter {
 	adapters := make(map[string]adapter.Adapter)
 
 	// Initialize Slack adapter if enabled
@@ -297,6 +311,7 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			slog.Error("Error initializing Slack adapter", "err", err)
 		} else {
 			slackAdapter.SetAuthorizer(authorizer)
+			slackAdapter.SetFeedbackLogHandler(feedbackLogHandler)
 			adapters["slack"] = slackAdapter
 			slog.Info("Slack adapter initialized")
 		}
