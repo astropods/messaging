@@ -212,9 +212,8 @@ func slackTraceMetadata(traceContext *pb.TraceContext) map[string]interface{} {
 	if traceContext == nil || traceContext.Traceparent == "" {
 		return nil
 	}
-	payload := map[string]interface{}{}
-	if traceContext.Traceparent != "" {
-		payload[slackTraceMetadataTraceparent] = traceContext.Traceparent
+	payload := map[string]interface{}{
+		slackTraceMetadataTraceparent: traceContext.Traceparent,
 	}
 	if traceContext.Tracestate != "" {
 		payload[slackTraceMetadataTracestate] = traceContext.Tracestate
