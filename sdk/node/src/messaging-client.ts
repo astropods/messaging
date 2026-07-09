@@ -195,7 +195,6 @@ export interface ContentChunk {
   attachments?: any[];
   platformMessageId?: string;
   options?: any;
-  traceContext?: TraceContext;
 }
 
 export interface SuggestedPrompts {
@@ -727,9 +726,14 @@ export class ConversationStream extends EventEmitter {
   /**
    * Send a content chunk (START/DELTA/END) for a conversation
    */
-  sendContentChunk(conversationId: string, chunk: ContentChunk): void {
+  sendContentChunk(
+    conversationId: string,
+    chunk: ContentChunk,
+    response?: Pick<AgentResponse, 'responseId' | 'traceContext'>
+  ): void {
     this.sendAgentResponse({
       conversationId,
+      ...response,
       content: chunk,
     });
   }

@@ -11,14 +11,13 @@ A new `trace.proto` defines `TraceContext` with W3C `traceparent` and optional
 `tracestate` values. The message is shared by both response and feedback paths:
 
 - `AgentResponse.trace_context` carries trace context for an assistant response.
-- `ContentChunk.trace_context` carries the same context on streamed content
-  chunks, so streaming bridges can attach it at the point they emit chunks.
 - `PlatformFeedback.trace_context` carries the context back when platform
   feedback references that response.
+Content chunks remain payload-only; streaming responses attach trace context to
+the enclosing `AgentResponse`.
 
 The Go and Python protobuf stubs are regenerated, and the TypeScript SDK types
-now expose `TraceContext` on `AgentResponse`, `ContentChunk`, and
-`PlatformFeedback`.
+now expose `TraceContext` on `AgentResponse` and `PlatformFeedback`.
 
 # Migration
 

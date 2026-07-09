@@ -549,9 +549,7 @@ type ContentChunk struct {
 	// Platform message ID (returned after START, used for updates)
 	PlatformMessageId string `protobuf:"bytes,4,opt,name=platform_message_id,json=platformMessageId,proto3" json:"platform_message_id,omitempty"` // Optional
 	// Options for message creation
-	Options *MessageOptions `protobuf:"bytes,5,opt,name=options,proto3" json:"options,omitempty"` // Optional
-	// Trace context associated with this assistant message.
-	TraceContext  *TraceContext `protobuf:"bytes,6,opt,name=trace_context,json=traceContext,proto3" json:"trace_context,omitempty"` // Optional
+	Options       *MessageOptions `protobuf:"bytes,5,opt,name=options,proto3" json:"options,omitempty"` // Optional
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -617,13 +615,6 @@ func (x *ContentChunk) GetPlatformMessageId() string {
 func (x *ContentChunk) GetOptions() *MessageOptions {
 	if x != nil {
 		return x.Options
-	}
-	return nil
-}
-
-func (x *ContentChunk) GetTraceContext() *TraceContext {
-	if x != nil {
-		return x.TraceContext
 	}
 	return nil
 }
@@ -1685,14 +1676,13 @@ const file_astro_messaging_v1_response_proto_rawDesc = "" +
 	"\tANALYZING\x10\x05\x12\n" +
 	"\n" +
 	"\x06CUSTOM\x10\n" +
-	"\"\xbc\x03\n" +
+	"\"\xf5\x02\n" +
 	"\fContentChunk\x12>\n" +
 	"\x04type\x18\x01 \x01(\x0e2*.astro.messaging.v1.ContentChunk.ChunkTypeR\x04type\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontent\x12H\n" +
 	"\vattachments\x18\x03 \x03(\v2&.astro.messaging.v1.ResponseAttachmentR\vattachments\x12.\n" +
 	"\x13platform_message_id\x18\x04 \x01(\tR\x11platformMessageId\x12<\n" +
-	"\aoptions\x18\x05 \x01(\v2\".astro.messaging.v1.MessageOptionsR\aoptions\x12E\n" +
-	"\rtrace_context\x18\x06 \x01(\v2 .astro.messaging.v1.TraceContextR\ftraceContext\"S\n" +
+	"\aoptions\x18\x05 \x01(\v2\".astro.messaging.v1.MessageOptionsR\aoptions\"S\n" +
 	"\tChunkType\x12\x1a\n" +
 	"\x16CHUNK_TYPE_UNSPECIFIED\x10\x00\x12\t\n" +
 	"\x05START\x10\x01\x12\t\n" +
@@ -1859,26 +1849,25 @@ var file_astro_messaging_v1_response_proto_depIdxs = []int32{
 	1,  // 14: astro.messaging.v1.ContentChunk.type:type_name -> astro.messaging.v1.ContentChunk.ChunkType
 	6,  // 15: astro.messaging.v1.ContentChunk.attachments:type_name -> astro.messaging.v1.ResponseAttachment
 	11, // 16: astro.messaging.v1.ContentChunk.options:type_name -> astro.messaging.v1.MessageOptions
-	21, // 17: astro.messaging.v1.ContentChunk.trace_context:type_name -> astro.messaging.v1.TraceContext
-	7,  // 18: astro.messaging.v1.ResponseAttachment.image:type_name -> astro.messaging.v1.ImageAttachment
-	8,  // 19: astro.messaging.v1.ResponseAttachment.file:type_name -> astro.messaging.v1.FileAttachment
-	9,  // 20: astro.messaging.v1.ResponseAttachment.card:type_name -> astro.messaging.v1.CardAttachment
-	10, // 21: astro.messaging.v1.ResponseAttachment.link:type_name -> astro.messaging.v1.LinkPreview
-	19, // 22: astro.messaging.v1.SuggestedPrompts.prompts:type_name -> astro.messaging.v1.SuggestedPrompts.Prompt
-	2,  // 23: astro.messaging.v1.ErrorResponse.code:type_name -> astro.messaging.v1.ErrorResponse.ErrorCode
-	18, // 24: astro.messaging.v1.ThreadHistoryResponse.messages:type_name -> astro.messaging.v1.ThreadMessage
-	27, // 25: astro.messaging.v1.ThreadHistoryResponse.fetched_at:type_name -> google.protobuf.Timestamp
-	28, // 26: astro.messaging.v1.ThreadMessage.user:type_name -> astro.messaging.v1.User
-	29, // 27: astro.messaging.v1.ThreadMessage.attachments:type_name -> astro.messaging.v1.Attachment
-	27, // 28: astro.messaging.v1.ThreadMessage.timestamp:type_name -> google.protobuf.Timestamp
-	27, // 29: astro.messaging.v1.ThreadMessage.edited_at:type_name -> google.protobuf.Timestamp
-	27, // 30: astro.messaging.v1.ThreadMessage.deleted_at:type_name -> google.protobuf.Timestamp
-	20, // 31: astro.messaging.v1.ThreadMessage.platform_data:type_name -> astro.messaging.v1.ThreadMessage.PlatformDataEntry
-	32, // [32:32] is the sub-list for method output_type
-	32, // [32:32] is the sub-list for method input_type
-	32, // [32:32] is the sub-list for extension type_name
-	32, // [32:32] is the sub-list for extension extendee
-	0,  // [0:32] is the sub-list for field type_name
+	7,  // 17: astro.messaging.v1.ResponseAttachment.image:type_name -> astro.messaging.v1.ImageAttachment
+	8,  // 18: astro.messaging.v1.ResponseAttachment.file:type_name -> astro.messaging.v1.FileAttachment
+	9,  // 19: astro.messaging.v1.ResponseAttachment.card:type_name -> astro.messaging.v1.CardAttachment
+	10, // 20: astro.messaging.v1.ResponseAttachment.link:type_name -> astro.messaging.v1.LinkPreview
+	19, // 21: astro.messaging.v1.SuggestedPrompts.prompts:type_name -> astro.messaging.v1.SuggestedPrompts.Prompt
+	2,  // 22: astro.messaging.v1.ErrorResponse.code:type_name -> astro.messaging.v1.ErrorResponse.ErrorCode
+	18, // 23: astro.messaging.v1.ThreadHistoryResponse.messages:type_name -> astro.messaging.v1.ThreadMessage
+	27, // 24: astro.messaging.v1.ThreadHistoryResponse.fetched_at:type_name -> google.protobuf.Timestamp
+	28, // 25: astro.messaging.v1.ThreadMessage.user:type_name -> astro.messaging.v1.User
+	29, // 26: astro.messaging.v1.ThreadMessage.attachments:type_name -> astro.messaging.v1.Attachment
+	27, // 27: astro.messaging.v1.ThreadMessage.timestamp:type_name -> google.protobuf.Timestamp
+	27, // 28: astro.messaging.v1.ThreadMessage.edited_at:type_name -> google.protobuf.Timestamp
+	27, // 29: astro.messaging.v1.ThreadMessage.deleted_at:type_name -> google.protobuf.Timestamp
+	20, // 30: astro.messaging.v1.ThreadMessage.platform_data:type_name -> astro.messaging.v1.ThreadMessage.PlatformDataEntry
+	31, // [31:31] is the sub-list for method output_type
+	31, // [31:31] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_astro_messaging_v1_response_proto_init() }

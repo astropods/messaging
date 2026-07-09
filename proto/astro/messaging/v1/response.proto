@@ -85,8 +85,6 @@ message ContentChunk {
   // Options for message creation
   MessageOptions options = 5;             // Optional
 
-  // Trace context associated with this assistant message.
-  TraceContext trace_context = 6;         // Optional
 }
 
 // Attachments in agent responses (richer than user attachments)
