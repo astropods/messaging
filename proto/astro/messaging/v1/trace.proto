@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package astro.messaging.v1;
+
+option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
+
+// Vendor-neutral tracing metadata for a single assistant turn.
+message TraceContext {
+  // W3C traceparent header value.
+  string traceparent = 1;
+
+  // Optional W3C tracestate header.
+  string tracestate = 2;
+}

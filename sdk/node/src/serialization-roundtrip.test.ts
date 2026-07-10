@@ -86,6 +86,33 @@ describe('Proto-loader binary roundtrip: ConversationRequest oneof', () => {
     expect(result.agentResponse.content.content).toBe('Final message');
   });
 
+  it('should roundtrip traceContext on the AgentResponse wrapper', () => {
+    const traceContext = {
+      traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      tracestate: 'vendor=value',
+    };
+    const request = {
+      agentResponse: {
+        conversationId: 'conv-trace-001',
+        responseId: 'resp-trace-001',
+        traceContext,
+        content: {
+          type: 'DELTA',
+          content: 'Traced token',
+        },
+      },
+    };
+
+    const buf = serializeRequest(request);
+    const result = deserializeRequest(buf);
+
+    expect(result.request).toBe('agentResponse');
+    expect(result.agentResponse.payload).toBe('content');
+    expect(result.agentResponse.traceContext).toEqual(traceContext);
+    expect(result.agentResponse.content.content).toBe('Traced token');
+    expect(result.agentResponse.content.traceContext).toBeUndefined();
+  });
+
   it('should roundtrip agentResponse with status (StatusUpdate)', () => {
     const request = {
       agentResponse: {
@@ -210,6 +237,32 @@ describe('Proto-loader binary roundtrip: ConversationRequest oneof', () => {
     expect(result.feedback.renderableResponse.action).toBe('RENDERABLE_ACTION_SUBMIT');
     expect(result.feedback.renderableResponse.contentJson).toBe('{"table":"invoices","rows":4}');
   });
+
+  it('should roundtrip traceContext on platform feedback', () => {
+    const traceContext = {
+      traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      tracestate: 'vendor=value',
+    };
+    const request = {
+      feedback: {
+        conversationId: 'conv-feedback-001',
+        responseId: 'resp-feedback-001',
+        traceContext,
+        text: {
+          text: 'useful answer',
+          prompt: 'What did you think of this reply?',
+        },
+      },
+    };
+
+    const buf = serializeRequest(request);
+    const result = deserializeRequest(buf);
+
+    expect(result.request).toBe('feedback');
+    expect(result.feedback.feedback).toBe('text');
+    expect(result.feedback.traceContext).toEqual(traceContext);
+    expect(result.feedback.text.text).toBe('useful answer');
+  });
 });
 
 describe('Proto-loader binary roundtrip: AgentResponse oneof', () => {
@@ -265,6 +318,30 @@ describe('Proto-loader binary roundtrip: AgentResponse oneof', () => {
     expect(result.content.type).toBe('DELTA');
     expect(result.content.content).toBe('Streaming token');
     expect(result.content.platformMessageId).toBe('plat-msg-011');
+  });
+
+  it('should roundtrip traceContext on AgentResponse with content', () => {
+    const traceContext = {
+      traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      tracestate: 'vendor=value',
+    };
+    const response = {
+      conversationId: 'conv-011-trace',
+      responseId: 'resp-011-trace',
+      traceContext,
+      content: {
+        type: 'END',
+        content: 'Final traced content',
+      },
+    };
+
+    const buf = serializeResponse(response);
+    const result = deserializeResponse(buf);
+
+    expect(result.payload).toBe('content');
+    expect(result.traceContext).toEqual(traceContext);
+    expect(result.content.content).toBe('Final traced content');
+    expect(result.content.traceContext).toBeUndefined();
   });
 
   it('should roundtrip AgentResponse with status (StatusUpdate)', () => {

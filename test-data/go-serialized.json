@@ -2,6 +2,10 @@
   "agentResponseWithContent": {
     "conversationId": "conv-go-011",
     "responseId": "resp-go-011",
+    "traceContext": {
+      "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+      "tracestate": "vendor=value"
+    },
     "content": {
       "type": "END",
       "content": "Final content from Go",
@@ -13,6 +17,7 @@
   "agentResponseWithMessage": {
     "conversationId": "conv-go-010",
     "responseId": "resp-go-010",
+    "traceContext": null,
     "incomingMessage": {
       "id": "msg-go-incoming-001",
       "timestamp": null,
@@ -45,6 +50,10 @@
     "agentResponse": {
       "conversationId": "conv-go-001",
       "responseId": "resp-go-001",
+      "traceContext": {
+        "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+        "tracestate": "vendor=value"
+      },
       "content": {
         "type": "DELTA",
         "content": "Streaming from Go",
@@ -54,10 +63,27 @@
       }
     }
   },
+  "conversationRequestWithFeedback": {
+    "feedback": {
+      "conversationId": "conv-go-feedback-001",
+      "responseId": "resp-go-feedback-001",
+      "timestamp": null,
+      "traceContext": {
+        "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+        "tracestate": "vendor=value"
+      },
+      "text": {
+        "text": "useful answer",
+        "prompt": "What did you think of this reply?"
+      },
+      "user": null
+    }
+  },
   "conversationRequestWithStatus": {
     "agentResponse": {
       "conversationId": "conv-go-002",
       "responseId": "resp-go-002",
+      "traceContext": null,
       "status": {
         "status": "THINKING",
         "customMessage": "Processing in Go...",

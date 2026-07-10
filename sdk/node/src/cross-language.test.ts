@@ -1,7 +1,15 @@
 import { describe, it, expect, beforeAll } from 'bun:test';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import type { Message, PlatformContext, User, ThreadMessage, ConversationRequest, AgentResponse } from './messaging-client';
+import type {
+  AgentResponse,
+  ConversationRequest,
+  Message,
+  PlatformContext,
+  ThreadMessage,
+  TraceContext,
+  User,
+} from './messaging-client';
 
 /**
  * Cross-language serialization tests
@@ -72,11 +80,17 @@ describe('Cross-language serialization: Go ↔ TypeScript', () => {
         user,
       };
 
+      const traceContext: TraceContext = {
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+        tracestate: 'vendor=value',
+      };
+
       // ConversationRequest with agentResponse containing ContentChunk (the bug)
       const conversationRequestWithContent: ConversationRequest = {
         agentResponse: {
           conversationId: 'conv-ts-001',
           responseId: 'resp-ts-001',
+          traceContext,
           content: {
             type: 'DELTA',
             content: 'Streaming from TypeScript',
@@ -111,6 +125,19 @@ describe('Cross-language serialization: Go ↔ TypeScript', () => {
         },
       };
 
+      // ConversationRequest with platform feedback carrying TraceContext
+      const conversationRequestWithFeedback: ConversationRequest = {
+        feedback: {
+          conversationId: 'conv-ts-feedback-001',
+          responseId: 'resp-ts-feedback-001',
+          traceContext,
+          text: {
+            text: 'useful answer',
+            prompt: 'What did you think of this reply?',
+          },
+        },
+      };
+
       // AgentResponse with incomingMessage (server→agent)
       const agentResponseWithMessage: AgentResponse = {
         conversationId: 'conv-ts-010',
@@ -136,6 +163,7 @@ describe('Cross-language serialization: Go ↔ TypeScript', () => {
       const agentResponseWithContent: AgentResponse = {
         conversationId: 'conv-ts-011',
         responseId: 'resp-ts-011',
+        traceContext,
         content: {
           type: 'END',
           content: 'Final content from TS',
@@ -151,6 +179,7 @@ describe('Cross-language serialization: Go ↔ TypeScript', () => {
         conversationRequestWithContent,
         conversationRequestWithStatus,
         conversationRequestWithError,
+        conversationRequestWithFeedback,
         agentResponseWithMessage,
         agentResponseWithContent,
       };
@@ -167,6 +196,8 @@ describe('Cross-language serialization: Go ↔ TypeScript', () => {
       expect(user.avatarUrl).toBe('https://example.com/ts-avatar.png');
       expect(user.userData).toBeDefined();
       expect(threadMessage.isDeleted).toBe(false);
+      expect(conversationRequestWithContent.agentResponse?.traceContext).toEqual(traceContext);
+      expect(conversationRequestWithFeedback.feedback?.traceContext).toEqual(traceContext);
 
       // Verify displayName does NOT exist
       expect((user as any).displayName).toBeUndefined();
@@ -290,6 +321,9 @@ describe('Cross-language serialization: Go ↔ TypeScript', () => {
       expect(crContent.agentResponse!.content).toBeDefined();
       expect(crContent.agentResponse!.content!.type).toBe('DELTA');
       expect(crContent.agentResponse!.content!.content).toBe('Streaming from Go');
+      expect(crContent.agentResponse!.traceContext?.traceparent).toBe(
+        '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01'
+      );
 
       // ConversationRequest with agentResponse.status
       const crStatus = data.conversationRequestWithStatus as ConversationRequest;
@@ -298,10 +332,22 @@ describe('Cross-language serialization: Go ↔ TypeScript', () => {
       expect(crStatus.agentResponse!.status).toBeDefined();
       expect(crStatus.agentResponse!.status!.status).toBe('THINKING');
 
+      // ConversationRequest with platform feedback trace context
+      const crFeedback = data.conversationRequestWithFeedback as ConversationRequest;
+      expect(crFeedback).toBeDefined();
+      expect(crFeedback.feedback).toBeDefined();
+      expect(crFeedback.feedback.traceContext?.traceparent).toBe(
+        '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01'
+      );
+      expect(crFeedback.feedback.text?.text).toBe('useful answer');
+
       // AgentResponse with content
       const arContent = data.agentResponseWithContent as AgentResponse;
       expect(arContent).toBeDefined();
       expect(arContent.conversationId).toBe('conv-go-011');
+      expect(arContent.traceContext?.traceparent).toBe(
+        '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01'
+      );
       expect(arContent.content).toBeDefined();
       expect(arContent.content!.type).toBe('END');
       expect(arContent.content!.content).toBe('Final content from Go');
@@ -365,6 +411,15 @@ describe('Cross-language serialization: Go ↔ TypeScript', () => {
       expect(tmRaw.is_deleted).toBeUndefined();
       expect(tmRaw.wasDeleted).toBeUndefined();  // Bug: should be isDeleted
       expect(tmRaw.original_content).toBeUndefined();
+
+      // Verify traceContext uses camelCase on both response and feedback.
+      const arRaw = JSON.parse(JSON.stringify(data.agentResponseWithContent));
+      expect(arRaw.traceContext).toBeDefined();
+      expect(arRaw.trace_context).toBeUndefined();
+
+      const fbRaw = JSON.parse(JSON.stringify(data.conversationRequestWithFeedback.feedback));
+      expect(fbRaw.traceContext).toBeDefined();
+      expect(fbRaw.trace_context).toBeUndefined();
 
       console.log('✓ All field names use correct camelCase format');
     });

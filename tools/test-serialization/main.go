@@ -87,6 +87,11 @@ func serializeFromGo() {
 		User:            user,
 	}
 
+	traceContext := &pb.TraceContext{
+		Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+		Tracestate:  "vendor=value",
+	}
+
 	// Serialize using protojson (what gRPC uses)
 	marshaler := protojson.MarshalOptions{
 		UseProtoNames:   false, // Use JSON names (camelCase)
@@ -100,11 +105,29 @@ func serializeFromGo() {
 			AgentResponse: &pb.AgentResponse{
 				ConversationId: "conv-go-001",
 				ResponseId:     "resp-go-001",
+				TraceContext:   traceContext,
 				Payload: &pb.AgentResponse_Content{
 					Content: &pb.ContentChunk{
 						Type:              pb.ContentChunk_DELTA,
 						Content:           "Streaming from Go",
 						PlatformMessageId: "plat-go-001",
+					},
+				},
+			},
+		},
+	}
+
+	// ConversationRequest with platform feedback carrying trace context
+	crWithFeedback := &pb.ConversationRequest{
+		Request: &pb.ConversationRequest_Feedback{
+			Feedback: &pb.PlatformFeedback{
+				ConversationId: "conv-go-feedback-001",
+				ResponseId:     "resp-go-feedback-001",
+				TraceContext:   traceContext,
+				Feedback: &pb.PlatformFeedback_Text{
+					Text: &pb.TextFeedback{
+						Text:   "useful answer",
+						Prompt: "What did you think of this reply?",
 					},
 				},
 			},
@@ -153,6 +176,7 @@ func serializeFromGo() {
 	arWithContent := &pb.AgentResponse{
 		ConversationId: "conv-go-011",
 		ResponseId:     "resp-go-011",
+		TraceContext:   traceContext,
 		Payload: &pb.AgentResponse_Content{
 			Content: &pb.ContentChunk{
 				Type:    pb.ContentChunk_END,
@@ -168,19 +192,21 @@ func serializeFromGo() {
 	msgJSON, _ := marshaler.Marshal(msg)
 	crContentJSON, _ := marshaler.Marshal(crWithContent)
 	crStatusJSON, _ := marshaler.Marshal(crWithStatus)
+	crFeedbackJSON, _ := marshaler.Marshal(crWithFeedback)
 	arMessageJSON, _ := marshaler.Marshal(arWithMessage)
 	arContentJSON, _ := marshaler.Marshal(arWithContent)
 
 	// Create output structure
 	output := map[string]json.RawMessage{
-		"platformContext":                pcJSON,
-		"user":                           userJSON,
-		"threadMessage":                  tmJSON,
-		"message":                        msgJSON,
-		"conversationRequestWithContent": crContentJSON,
-		"conversationRequestWithStatus":  crStatusJSON,
-		"agentResponseWithMessage":       arMessageJSON,
-		"agentResponseWithContent":       arContentJSON,
+		"platformContext":                 pcJSON,
+		"user":                            userJSON,
+		"threadMessage":                   tmJSON,
+		"message":                         msgJSON,
+		"conversationRequestWithContent":  crContentJSON,
+		"conversationRequestWithStatus":   crStatusJSON,
+		"conversationRequestWithFeedback": crFeedbackJSON,
+		"agentResponseWithMessage":        arMessageJSON,
+		"agentResponseWithContent":        arContentJSON,
 	}
 
 	// Write to file
@@ -317,6 +343,9 @@ func deserializeFromTS() {
 		fmt.Println("✓ Deserialized ConversationRequest with agentResponse.content from TypeScript:")
 		fmt.Printf("  conversationId: %s\n", ar.ConversationId)
 		fmt.Printf("  content.type: %v\n", ar.GetContent().Type)
+		if ar.TraceContext != nil {
+			fmt.Printf("  traceContext.traceparent: %s\n", ar.TraceContext.Traceparent)
+		}
 		fmt.Printf("  content.content: %s\n\n", ar.GetContent().Content)
 	}
 
@@ -361,6 +390,31 @@ func deserializeFromTS() {
 		fmt.Printf("  error.message: %s\n\n", ar.GetError().Message)
 	}
 
+	// Deserialize ConversationRequest with platform feedback trace context
+	if crJSON, ok := input["conversationRequestWithFeedback"]; ok {
+		cr := &pb.ConversationRequest{}
+		if err := unmarshaler.Unmarshal(crJSON, cr); err != nil {
+			fmt.Printf("❌ Failed to deserialize ConversationRequest (feedback): %v\n", err)
+			os.Exit(1)
+		}
+		fb := cr.GetFeedback()
+		if fb == nil {
+			fmt.Println("❌ ERROR: ConversationRequest.feedback is nil!")
+			os.Exit(1)
+		}
+		if fb.TraceContext == nil {
+			fmt.Println("❌ ERROR: PlatformFeedback.trace_context is nil!")
+			os.Exit(1)
+		}
+		if fb.GetText() == nil {
+			fmt.Println("❌ ERROR: PlatformFeedback.text is nil (feedback oneof not set!)")
+			os.Exit(1)
+		}
+		fmt.Println("✓ Deserialized ConversationRequest with feedback trace context from TypeScript:")
+		fmt.Printf("  traceContext.traceparent: %s\n", fb.TraceContext.Traceparent)
+		fmt.Printf("  text: %s\n\n", fb.GetText().Text)
+	}
+
 	// Deserialize AgentResponse with incomingMessage
 	if arJSON, ok := input["agentResponseWithMessage"]; ok {
 		ar := &pb.AgentResponse{}
@@ -390,6 +444,9 @@ func deserializeFromTS() {
 		}
 		fmt.Println("✓ Deserialized AgentResponse with content from TypeScript:")
 		fmt.Printf("  content.type: %v\n", ar.GetContent().Type)
+		if ar.TraceContext != nil {
+			fmt.Printf("  traceContext.traceparent: %s\n", ar.TraceContext.Traceparent)
+		}
 		fmt.Printf("  content.content: %s\n\n", ar.GetContent().Content)
 	}
 

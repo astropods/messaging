@@ -18,7 +18,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install grpcio-tools
-        run: pip install grpcio-tools
+        run: pip install grpcio-tools==1.81.1 protobuf==6.33.5
 
       - name: Regenerate stubs
         run: bash sdk/python/scripts/gen_proto.sh
