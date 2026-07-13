@@ -35,7 +35,7 @@ func (a *WebAdapter) emitRenderable(ctx context.Context, conversationID string, 
 	}
 
 	if a.interactions != nil {
-		if _, err := a.interactions.AppendInteraction(conversationID, a.conversationOwner(ctx, conversationID), r); err != nil {
+		if _, err := a.interactions.AppendInteraction(ctx, conversationID, a.conversationOwner(ctx, conversationID), r); err != nil {
 			slog.Error("[Web] persist interaction failed", "conversation", conversationID, "err", err)
 			return
 		}

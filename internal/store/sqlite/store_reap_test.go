@@ -43,7 +43,7 @@ func TestReapDanglingUserTurns(t *testing.T) {
 	// d: soft-deleted, user-last -> untouched (not resurrected).
 	ensure("d")
 	appendUser("d")
-	if _, err := st.SoftDelete(ctx, "d", "owner"); err != nil {
+	if _, _, err := st.SoftDelete(ctx, "d", "owner"); err != nil {
 		t.Fatalf("delete d: %v", err)
 	}
 

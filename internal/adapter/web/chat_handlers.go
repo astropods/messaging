@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
 // Chat-page contract handlers. These serve the platform chat UI (via the
@@ -225,11 +227,19 @@ func (h *Handlers) HandleDeleteChatConversation(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	deleted, err := h.chatStore.SoftDelete(r.Context(), conversationID, session.UserID)
+	cancelled, deleted, err := h.chatStore.SoftDelete(r.Context(), conversationID, session.UserID)
 	if err != nil {
 		slog.Error("[Web] chat delete conversation failed", "conversation", conversationID, "err", err)
 		http.Error(w, "failed to delete conversation", http.StatusInternalServerError)
 		return
+	}
+	// Deleting cancels the conversation's pending interactions; tell the agent so a
+	// suspended turn resolves instead of hanging.
+	for _, id := range cancelled {
+		h.emitRenderableResponse(r.Context(), conversationID, session.UserID, &pb.RenderableResponse{
+			Id:     id,
+			Action: pb.RenderableAction_RENDERABLE_ACTION_CANCEL,
+		})
 	}
 	if !deleted {
 		http.Error(w, "conversation not found", http.StatusNotFound)

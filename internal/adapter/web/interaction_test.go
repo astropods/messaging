@@ -129,7 +129,7 @@ func TestRenderable_DegradeStrict_Unsupported(t *testing.T) {
 	if events := drainSSE(conn); len(events) != 0 {
 		t.Errorf("strict degrade must not emit SSE events, got %d", len(events))
 	}
-	if all, _ := a.interactions.ListInteractions("conv"); len(all) != 0 {
+	if all, _ := a.interactions.ListInteractions(context.Background(), "conv"); len(all) != 0 {
 		t.Errorf("strict degrade must not persist an interaction, got %d", len(all))
 	}
 }
@@ -281,7 +281,7 @@ func TestRenderable_CapabilityOn_EmitsInteraction(t *testing.T) {
 	}
 
 	// Persisted as pending in the injected store.
-	it, found, _ := its.GetInteraction("conv", "i1")
+	it, found, _ := its.GetInteraction(context.Background(), "conv", "i1")
 	if !found || it.Status != store.InteractionPending {
 		t.Errorf("interaction not persisted as pending: found=%v status=%q", found, it.Status)
 	}
@@ -304,7 +304,7 @@ func TestRenderable_CapabilityOn_MalformedSchemaDropped(t *testing.T) {
 	if events := drainSSE(conn); hasEvent(events, EventInteraction) {
 		t.Errorf("malformed renderable must not emit an interaction event")
 	}
-	if all, _ := a.interactions.ListInteractions("conv"); len(all) != 0 {
+	if all, _ := a.interactions.ListInteractions(context.Background(), "conv"); len(all) != 0 {
 		t.Errorf("malformed renderable must not persist, got %d", len(all))
 	}
 }
@@ -459,7 +459,7 @@ func TestRenderable_CapabilityOn_ExternalRefSchemaDropped(t *testing.T) {
 	if events := drainSSE(conn); hasEvent(events, EventInteraction) {
 		t.Errorf("renderable with external $ref must not emit an interaction event")
 	}
-	if all, _ := a.interactions.ListInteractions("conv"); len(all) != 0 {
+	if all, _ := a.interactions.ListInteractions(context.Background(), "conv"); len(all) != 0 {
 		t.Errorf("renderable with external $ref must not persist, got %d", len(all))
 	}
 }
@@ -527,7 +527,7 @@ func newEndpointHandlers(t *testing.T) (*Handlers, *store.MemoryInteractionStore
 
 func seedInteraction(t *testing.T, its *store.MemoryInteractionStore, userID string, actions ...pb.RenderableAction) {
 	t.Helper()
-	if _, err := its.AppendInteraction("conv", userID, testRenderable("i1", actions...)); err != nil {
+	if _, err := its.AppendInteraction(context.Background(), "conv", userID, testRenderable("i1", actions...)); err != nil {
 		t.Fatalf("seed interaction: %v", err)
 	}
 }
@@ -564,7 +564,7 @@ func TestHandleInteractionResponse_SubmitValid(t *testing.T) {
 	if !strings.Contains(rr.GetContentJson(), "octocat") {
 		t.Errorf("content_json missing payload: %q", rr.GetContentJson())
 	}
-	it, _, _ := its.GetInteraction("conv", "i1")
+	it, _, _ := its.GetInteraction(context.Background(), "conv", "i1")
 	if it.Status != store.InteractionSubmitted {
 		t.Errorf("status: got %q, want submitted", it.Status)
 	}
@@ -586,7 +586,7 @@ func TestHandleInteractionResponse_SubmitInvalidSchema_422(t *testing.T) {
 	if fc.count() != 0 {
 		t.Errorf("invalid content must not be delivered to the agent")
 	}
-	it, _, _ := its.GetInteraction("conv", "i1")
+	it, _, _ := its.GetInteraction(context.Background(), "conv", "i1")
 	if it.Status != store.InteractionPending {
 		t.Errorf("status changed on invalid submit: %q", it.Status)
 	}
@@ -668,7 +668,7 @@ func TestHandleInteractionResponse_Decline(t *testing.T) {
 	if rr := fc.last().GetRenderableResponse(); rr == nil || rr.GetAction() != pb.RenderableAction_RENDERABLE_ACTION_DECLINE {
 		t.Fatalf("want DECLINE, got %+v", fc.last())
 	}
-	it, _, _ := its.GetInteraction("conv", "i1")
+	it, _, _ := its.GetInteraction(context.Background(), "conv", "i1")
 	if it.Status != store.InteractionDeclined {
 		t.Errorf("status: got %q, want declined", it.Status)
 	}

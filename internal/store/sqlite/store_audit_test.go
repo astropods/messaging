@@ -25,7 +25,7 @@ func TestAudit_SoftDeletedNotRevivedBySend(t *testing.T) {
 	if _, err := st.EnsureForSend(ctx, "c", "owner", "t"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := st.SoftDelete(ctx, "c", "owner"); err != nil {
+	if _, _, err := st.SoftDelete(ctx, "c", "owner"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
@@ -52,7 +52,7 @@ func TestAudit_UpsertAssistantProgressNoOpOnDeleted(t *testing.T) {
 	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "hi"); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-	if _, err := st.SoftDelete(ctx, "c", "owner"); err != nil {
+	if _, _, err := st.SoftDelete(ctx, "c", "owner"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
@@ -138,7 +138,7 @@ func TestAudit_FinalizeStoppedNoOpOnDeleted(t *testing.T) {
 	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "q"); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-	if _, err := st.SoftDelete(ctx, "c", "owner"); err != nil {
+	if _, _, err := st.SoftDelete(ctx, "c", "owner"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if ok, err := st.FinalizeStopped(ctx, "c", "owner", "partial"); err != nil || ok {
@@ -280,7 +280,7 @@ func TestAudit_ConcurrentFinalizeAndSoftDelete(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() { defer wg.Done(); _, _ = st.FinalizeStopped(ctx, cid, "owner", "partial") }()
-		go func() { defer wg.Done(); _, _ = st.SoftDelete(ctx, cid, "owner") }()
+		go func() { defer wg.Done(); _, _, _ = st.SoftDelete(ctx, cid, "owner") }()
 		wg.Wait()
 
 		if conv, _ := st.Get(ctx, cid); conv != nil {
@@ -315,7 +315,7 @@ func TestAudit_ListExcludesDeletedAndOrdersByRecency(t *testing.T) {
 	if _, err := st.EnsureForSend(ctx, "a", "owner", "a"); err != nil {
 		t.Fatalf("touch a: %v", err)
 	}
-	if _, err := st.SoftDelete(ctx, "b", "owner"); err != nil {
+	if _, _, err := st.SoftDelete(ctx, "b", "owner"); err != nil {
 		t.Fatalf("delete b: %v", err)
 	}
 

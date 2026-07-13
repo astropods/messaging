@@ -114,6 +114,22 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conv
 	ON messages(conversation_id, seq);
+
+CREATE TABLE IF NOT EXISTS interactions (
+	id              TEXT    NOT NULL,
+	conversation_id TEXT    NOT NULL,
+	user_id         TEXT    NOT NULL,
+	seq             INTEGER NOT NULL,
+	render_json     TEXT    NOT NULL,
+	status          TEXT    NOT NULL DEFAULT 'pending',
+	response_json   TEXT,
+	created_at      INTEGER NOT NULL,
+	responded_at    INTEGER,
+	PRIMARY KEY (conversation_id, id),
+	UNIQUE (conversation_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_interactions_pending
+	ON interactions(conversation_id, seq) WHERE status = 'pending';
 `
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("chat sqlite schema: %w", err)
@@ -279,24 +295,69 @@ func (s *Store) ListByUser(ctx context.Context, userID string) ([]Conversation, 
 	return out, nil
 }
 
-// SoftDelete marks a conversation deleted for the owning user. Returns true when
-// a row was affected. The message bodies are left in place locally and the
-// conversation's Langfuse traces are intentionally NOT erased — see the
-// conundrum note in HandleDeleteChatConversation.
-func (s *Store) SoftDelete(ctx context.Context, conversationID, userID string) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `
+// SoftDelete marks a conversation deleted for its owner and, in the same
+// transaction, cancels its pending interactions so a suspended agent doesn't hang
+// on an interaction the user can no longer answer. It returns the ids of the
+// interactions it cancelled (for the caller to deliver a CANCEL response to the
+// agent) and whether the conversation was deleted.
+func (s *Store) SoftDelete(ctx context.Context, conversationID, userID string) (cancelled []string, deleted bool, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("chatstore soft delete begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful commit
+
+	res, err := tx.ExecContext(ctx, `
 		UPDATE conversations SET deleted_at = ?
 		WHERE conversation_id = ? AND user_id = ? AND deleted_at IS NULL`,
 		time.Now().UnixMilli(), conversationID, userID,
 	)
 	if err != nil {
-		return false, fmt.Errorf("chatstore soft delete: %w", err)
+		return nil, false, fmt.Errorf("chatstore soft delete: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return false, fmt.Errorf("chatstore soft delete rows: %w", err)
+		return nil, false, fmt.Errorf("chatstore soft delete rows: %w", err)
 	}
-	return n > 0, nil
+	if n == 0 {
+		return nil, false, nil
+	}
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id FROM interactions WHERE conversation_id = ? AND status = 'pending'`,
+		conversationID,
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("chatstore soft delete pending: %w", err)
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return nil, false, fmt.Errorf("chatstore soft delete pending scan: %w", err)
+		}
+		cancelled = append(cancelled, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, false, fmt.Errorf("chatstore soft delete pending rows: %w", err)
+	}
+	_ = rows.Close()
+
+	if len(cancelled) > 0 {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE interactions SET status = 'cancelled', responded_at = ?
+			WHERE conversation_id = ? AND status = 'pending'`,
+			time.Now().UnixMilli(), conversationID,
+		); err != nil {
+			return nil, false, fmt.Errorf("chatstore soft delete cancel interactions: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, false, fmt.Errorf("chatstore soft delete commit: %w", err)
+	}
+	return cancelled, true, nil
 }
 
 // ListMessages returns the full ordered thread for one conversation.
@@ -327,14 +388,28 @@ func (s *Store) ListMessages(ctx context.Context, conversationID string) ([]Mess
 	return out, nil
 }
 
+// hasMessagesBefore reports whether any message row precedes seq. seq is shared
+// with interactions so message rows aren't contiguous — position can't be read
+// off seq, hence the EXISTS.
+func (s *Store) hasMessagesBefore(ctx context.Context, conversationID string, seq int) (bool, error) {
+	var exists bool
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id = ? AND seq < ?)`,
+		conversationID, seq,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("chatstore has messages before: %w", err)
+	}
+	return exists, nil
+}
+
 // PageMessages returns one page of a conversation's messages, ordered by seq
 // ascending, doing the windowing in SQL so a large thread isn't fully
-// materialized to serve a single page. Sequence numbers are contiguous from 1,
-// so the page's oldest seq alone tells us whether older messages remain
-// (hasMore = oldestSeq > 1). When beforeSeq > 0 the page immediately preceding
-// that seq is returned; otherwise the newest page. lastRole is the role of the
-// newest message in the whole thread (independent of the returned page) for the
-// assistant_streaming heuristic; it is "" for an empty thread.
+// materialized to serve a single page. seq is shared with interactions, so
+// message rows can have gaps; hasMore is decided by an EXISTS on older message
+// rows rather than derived from the oldest seq. When beforeSeq > 0 the page
+// immediately preceding that seq is returned; otherwise the newest page. lastRole
+// is the role of the newest message in the whole thread (independent of the
+// returned page) for the assistant_streaming heuristic; it is "" for an empty thread.
 func (s *Store) PageMessages(ctx context.Context, conversationID string, limit, beforeSeq int) (msgs []Message, hasMore bool, oldestSeq int, lastRole string, err error) {
 	if limit <= 0 {
 		limit = 1
@@ -370,7 +445,10 @@ func (s *Store) PageMessages(ctx context.Context, conversationID string, limit, 
 	}
 	if len(msgs) > 0 {
 		oldestSeq = msgs[0].Seq
-		hasMore = oldestSeq > 1
+		hasMore, err = s.hasMessagesBefore(ctx, conversationID, oldestSeq)
+		if err != nil {
+			return nil, false, 0, "", err
+		}
 	}
 
 	// The newest message's role drives assistant_streaming and is independent of
@@ -414,6 +492,25 @@ func (s *Store) AppendMessage(ctx context.Context, conversationID, userID, role,
 	return msg, nil
 }
 
+// nextSeqTx returns the next sequence number for a conversation, allocated across
+// BOTH messages and interactions so the two share one monotonic ordering space
+// and interleave by seq. The caller holds the tx (and, with MaxOpenConns(1), the
+// only connection), so the read is atomic against concurrent writers.
+func nextSeqTx(ctx context.Context, tx *sql.Tx, conversationID string) (int, error) {
+	var nextSeq int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX(seq), 0) + 1 FROM (
+			SELECT seq FROM messages WHERE conversation_id = ?
+			UNION ALL
+			SELECT seq FROM interactions WHERE conversation_id = ?
+		)`,
+		conversationID, conversationID,
+	).Scan(&nextSeq); err != nil {
+		return 0, fmt.Errorf("chatstore next seq: %w", err)
+	}
+	return nextSeq, nil
+}
+
 // appendMessageTx assigns the next seq and inserts a message within an existing
 // transaction. The caller holds the tx (and, with MaxOpenConns(1), the only
 // connection), so the read-then-insert is atomic against concurrent writers —
@@ -422,23 +519,28 @@ func (s *Store) AppendMessage(ctx context.Context, conversationID, userID, role,
 func appendMessageTx(ctx context.Context, tx *sql.Tx, conversationID, userID, role, content string) (Message, error) {
 	content = TruncateRunes(content, MaxMessageContentRunes)
 
-	var nextSeq int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE conversation_id = ?`,
-		conversationID,
-	).Scan(&nextSeq); err != nil {
-		return Message{}, fmt.Errorf("chatstore next seq: %w", err)
+	nextSeq, err := nextSeqTx(ctx, tx, conversationID)
+	if err != nil {
+		return Message{}, err
 	}
-	// Cap the thread. A user turn is admitted only while the following assistant
-	// reply still fits, so the final slot is reserved for that reply: otherwise a
-	// user turn could land on the last seq, its reply would exceed the cap and go
-	// unpersisted, and the thread would derive assistant_streaming=true forever
-	// (latest row is the user's). Assistant/finalize appends may use the full cap.
+	// Cap on the message count, not the shared seq: interactions share the seq
+	// space for ordering but must not consume the message budget. A user turn is
+	// admitted only while the following assistant reply still fits, so the final
+	// slot is reserved for that reply: otherwise a user turn could land in the last
+	// slot, its reply would exceed the cap and go unpersisted, and the thread would
+	// derive assistant_streaming=true forever. Assistant/finalize appends may use
+	// the full cap.
+	var msgCount int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM messages WHERE conversation_id = ?`, conversationID,
+	).Scan(&msgCount); err != nil {
+		return Message{}, fmt.Errorf("chatstore message count: %w", err)
+	}
 	limit := MaxMessagesPerConversation
 	if role == "user" {
 		limit = MaxMessagesPerConversation - 1
 	}
-	if nextSeq > limit {
+	if msgCount+1 > limit {
 		return Message{}, ErrMessageLimitReached
 	}
 

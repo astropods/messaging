@@ -73,7 +73,7 @@ func TestSetTitle(t *testing.T) {
 		if err := st.Upsert(t.Context(), "conv-del", "user-1", "orig"); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		if _, err := st.SoftDelete(t.Context(), "conv-del", "user-1"); err != nil {
+		if _, _, err := st.SoftDelete(t.Context(), "conv-del", "user-1"); err != nil {
 			t.Fatalf("soft delete: %v", err)
 		}
 		ok, err := st.SetTitle(t.Context(), "conv-del", "user-1", "revived")
