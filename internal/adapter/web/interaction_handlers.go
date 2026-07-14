@@ -31,6 +31,7 @@ type interactionResponseAck struct {
 // /api/chat/conversations/{id}/interactions/{interactionId}: the user's answer to
 // a blocking interaction.
 func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	session := h.authenticate(w, r)
 	if session == nil {
 		return
@@ -55,7 +56,7 @@ func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	it, found, err := h.interactions.GetInteraction(conversationID, interactionID)
+	it, found, err := h.interactions.GetInteraction(ctx, conversationID, interactionID)
 	if err != nil {
 		slog.Error("[Web] load interaction failed", "conversation", conversationID, "interaction", interactionID, "err", err)
 		http.Error(w, "failed to load interaction", http.StatusInternalServerError)
@@ -122,7 +123,7 @@ func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Requ
 		resp.Text = input.Text
 	}
 
-	recorded, wasRecorded, err := h.interactions.RecordInteractionResponse(conversationID, interactionID, resp)
+	recorded, wasRecorded, err := h.interactions.RecordInteractionResponse(ctx, conversationID, interactionID, resp)
 	if err != nil {
 		if errors.Is(err, store.ErrInteractionNotFound) {
 			http.Error(w, "interaction not found", http.StatusNotFound)

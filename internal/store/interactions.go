@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"time"
@@ -38,15 +39,15 @@ type Interaction struct {
 // InteractionStore is the persistence seam for interactions: in-memory here,
 // SQLite-backed in the store phase.
 type InteractionStore interface {
-	AppendInteraction(conversationID, userID string, r *pb.Renderable) (Interaction, error)
-	GetInteraction(conversationID, interactionID string) (interaction Interaction, found bool, err error)
+	AppendInteraction(ctx context.Context, conversationID, userID string, r *pb.Renderable) (Interaction, error)
+	GetInteraction(ctx context.Context, conversationID, interactionID string) (interaction Interaction, found bool, err error)
 	// RecordInteractionResponse resolves a pending interaction. recorded is false
 	// when it was already answered (a re-POST or a concurrent second responder),
 	// so the caller can replay the result rather than deliver it twice.
-	RecordInteractionResponse(conversationID, interactionID string, resp *pb.RenderableResponse) (interaction Interaction, recorded bool, err error)
-	ListInteractions(conversationID string) ([]Interaction, error)
+	RecordInteractionResponse(ctx context.Context, conversationID, interactionID string, resp *pb.RenderableResponse) (interaction Interaction, recorded bool, err error)
+	ListInteractions(ctx context.Context, conversationID string) ([]Interaction, error)
 	// PendingInteractions returns the still-pending FIFO queue, ordered by seq.
-	PendingInteractions(conversationID string) ([]Interaction, error)
+	PendingInteractions(ctx context.Context, conversationID string) ([]Interaction, error)
 }
 
 func StatusForAction(a pb.RenderableAction) InteractionStatus {
@@ -88,7 +89,7 @@ func (m *MemoryInteractionStore) conv(conversationID string) *convInteractions {
 	return c
 }
 
-func (m *MemoryInteractionStore) AppendInteraction(conversationID, userID string, r *pb.Renderable) (Interaction, error) {
+func (m *MemoryInteractionStore) AppendInteraction(_ context.Context, conversationID, userID string, r *pb.Renderable) (Interaction, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -113,7 +114,7 @@ func (m *MemoryInteractionStore) AppendInteraction(conversationID, userID string
 	return *it, nil
 }
 
-func (m *MemoryInteractionStore) GetInteraction(conversationID, interactionID string) (Interaction, bool, error) {
+func (m *MemoryInteractionStore) GetInteraction(_ context.Context, conversationID, interactionID string) (Interaction, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -128,7 +129,7 @@ func (m *MemoryInteractionStore) GetInteraction(conversationID, interactionID st
 	return *it, true, nil
 }
 
-func (m *MemoryInteractionStore) RecordInteractionResponse(conversationID, interactionID string, resp *pb.RenderableResponse) (Interaction, bool, error) {
+func (m *MemoryInteractionStore) RecordInteractionResponse(_ context.Context, conversationID, interactionID string, resp *pb.RenderableResponse) (Interaction, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -149,7 +150,7 @@ func (m *MemoryInteractionStore) RecordInteractionResponse(conversationID, inter
 	return *it, true, nil
 }
 
-func (m *MemoryInteractionStore) ListInteractions(conversationID string) ([]Interaction, error) {
+func (m *MemoryInteractionStore) ListInteractions(_ context.Context, conversationID string) ([]Interaction, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -164,7 +165,7 @@ func (m *MemoryInteractionStore) ListInteractions(conversationID string) ([]Inte
 	return out, nil
 }
 
-func (m *MemoryInteractionStore) PendingInteractions(conversationID string) ([]Interaction, error) {
+func (m *MemoryInteractionStore) PendingInteractions(_ context.Context, conversationID string) ([]Interaction, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
