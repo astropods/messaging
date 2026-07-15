@@ -258,6 +258,7 @@ func (h *Handlers) HandleGetFileContent(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if url, err := h.fileStore.PresignGet(r.Context(), key); err == nil {
+		// #nosec G710 -- url is a store-issued presigned URL, not user-controlled.
 		http.Redirect(w, r, url, http.StatusFound)
 		return
 	} else if !errors.Is(err, files.ErrUnsupported) {

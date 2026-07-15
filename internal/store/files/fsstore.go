@@ -69,7 +69,7 @@ func NewFSStore(dir string) (*FSStore, error) {
 	if strings.TrimSpace(dir) == "" {
 		return nil, fmt.Errorf("files: empty directory")
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("files: create dir %q: %w", dir, err)
 	}
 	return &FSStore{dir: dir}, nil
@@ -101,7 +101,7 @@ func (s *FSStore) WriteMeta(_ context.Context, meta FileMeta) error {
 	}
 	// Write atomically: a partial meta file would break List and ReadMeta.
 	tmp := s.keyPath(meta.Key, metaSuffix) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("files: write meta: %w", err)
 	}
 	if err := os.Rename(tmp, s.keyPath(meta.Key, metaSuffix)); err != nil {
@@ -113,6 +113,7 @@ func (s *FSStore) WriteMeta(_ context.Context, meta FileMeta) error {
 
 func (s *FSStore) ReadMeta(_ context.Context, key string) (FileMeta, error) {
 	// API-managed file: explicit sidecar.
+	// #nosec G304 -- key is sanitized; path is confined to the store dir.
 	data, err := os.ReadFile(s.keyPath(key, metaSuffix))
 	if err == nil {
 		var meta FileMeta
@@ -186,6 +187,7 @@ func (s *FSStore) List(ctx context.Context) ([]FileMeta, error) {
 
 func (s *FSStore) WriteBlob(_ context.Context, key string, r io.Reader) (int64, error) {
 	tmp := s.keyPath(key, blobSuffix) + ".tmp"
+	// #nosec G304 -- key is sanitized; path is confined to the store dir.
 	f, err := os.Create(tmp)
 	if err != nil {
 		return 0, fmt.Errorf("files: create blob: %w", err)
@@ -209,6 +211,7 @@ func (s *FSStore) WriteBlob(_ context.Context, key string, r io.Reader) (int64, 
 
 func (s *FSStore) OpenBlob(_ context.Context, key string) (io.ReadCloser, error) {
 	// API-managed blob first.
+	// #nosec G304 -- key is sanitized; path is confined to the store dir.
 	f, err := os.Open(s.keyPath(key, blobSuffix))
 	if err == nil {
 		return f, nil
@@ -221,6 +224,7 @@ func (s *FSStore) OpenBlob(_ context.Context, key string) (io.ReadCloser, error)
 	if isReservedName(base) {
 		return nil, ErrNotFound
 	}
+	// #nosec G304 -- key is sanitized (isReservedName-checked); path is confined to the store dir.
 	pf, perr := os.Open(s.plainPath(key))
 	if perr != nil {
 		if os.IsNotExist(perr) {
