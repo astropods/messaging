@@ -5,6 +5,7 @@ package astro.messaging.v1;
 import "google/protobuf/timestamp.proto";
 import "astro/messaging/v1/message.proto";
 import "astro/messaging/v1/renderable.proto";
+import "astro/messaging/v1/trace.proto";
 
 option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
 
@@ -14,6 +15,7 @@ message PlatformFeedback {
   string conversation_id = 1;
   string response_id = 2;                 // Which agent message this relates to (optional)
   google.protobuf.Timestamp timestamp = 3;
+  TraceContext trace_context = 12;        // Trace context for the referenced response
 
   oneof feedback {
     StreamControl stream_control = 4;     // Stop/pause generation

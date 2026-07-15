@@ -7,6 +7,7 @@ import "astro/messaging/v1/message.proto";
 import "astro/messaging/v1/audio.proto";
 import "astro/messaging/v1/feedback.proto";
 import "astro/messaging/v1/renderable.proto";
+import "astro/messaging/v1/trace.proto";
 
 option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
 
@@ -16,6 +17,7 @@ option go_package = "github.com/postman/astro/messaging/v1;messagingv1";
 message AgentResponse {
   string conversation_id = 1;             // Matches incoming Message.conversation_id
   string response_id = 2;                 // Stable ID for this response (for updates)
+  TraceContext trace_context = 15;        // Trace context for this assistant response
 
   oneof payload {
     Message incoming_message = 3;         // Incoming platform message (server → agent)
@@ -82,6 +84,7 @@ message ContentChunk {
 
   // Options for message creation
   MessageOptions options = 5;             // Optional
+
 }
 
 // Attachments in agent responses (richer than user attachments)

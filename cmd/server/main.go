@@ -327,6 +327,12 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 				web.NewHeaderSessionManager("x-amzn-oidc-identity", "", ""),
 			))
 		}
+		// Back interactions with the durable SQLite store when present (otherwise
+		// the adapter defaults to the in-memory store). Guarded so a nil *sqlite.Store
+		// isn't wrapped into a non-nil interface.
+		if chatStore != nil {
+			webOpts = append(webOpts, web.WithInteractionStore(chatStore))
+		}
 		webAdapter := web.New(webOpts...)
 		if err := webAdapter.Initialize(ctx, adapter.Config{}); err != nil {
 			slog.Error("Error initializing Web adapter", "err", err)

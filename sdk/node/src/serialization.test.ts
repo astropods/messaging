@@ -219,6 +219,7 @@ describe('Proto field name serialization', () => {
 
       expect(fieldNames).toContain('conversationId');
       expect(fieldNames).toContain('responseId');
+      expect(fieldNames).toContain('traceContext');
       expect(fieldNames).toContain('incomingMessage');
       expect(fieldNames).toContain('status');
       expect(fieldNames).toContain('content');
@@ -230,9 +231,41 @@ describe('Proto field name serialization', () => {
       // Should NOT have snake_case
       expect(fieldNames).not.toContain('conversation_id');
       expect(fieldNames).not.toContain('response_id');
+      expect(fieldNames).not.toContain('trace_context');
       expect(fieldNames).not.toContain('incoming_message');
       expect(fieldNames).not.toContain('thread_metadata');
       expect(fieldNames).not.toContain('context_request');
+    });
+  });
+
+  describe('PlatformFeedback fields', () => {
+    it('should have traceContext (not trace_context)', () => {
+      const feedbackType = packageDefinition['astro.messaging.v1.PlatformFeedback'];
+      expect(feedbackType).toBeDefined();
+
+      const fieldNames = getFieldNames(feedbackType);
+
+      expect(fieldNames).toContain('conversationId');
+      expect(fieldNames).toContain('responseId');
+      expect(fieldNames).toContain('traceContext');
+      expect(fieldNames).toContain('text');
+      expect(fieldNames).toContain('reaction');
+
+      expect(fieldNames).not.toContain('conversation_id');
+      expect(fieldNames).not.toContain('response_id');
+      expect(fieldNames).not.toContain('trace_context');
+    });
+  });
+
+  describe('TraceContext fields', () => {
+    it('should expose W3C trace fields', () => {
+      const traceType = packageDefinition['astro.messaging.v1.TraceContext'];
+      expect(traceType).toBeDefined();
+
+      const fieldNames = getFieldNames(traceType);
+
+      expect(fieldNames).toContain('traceparent');
+      expect(fieldNames).toContain('tracestate');
     });
   });
 
@@ -251,6 +284,8 @@ describe('Proto field name serialization', () => {
 
       // Should NOT have snake_case
       expect(fieldNames).not.toContain('platform_message_id');
+      expect(fieldNames).not.toContain('traceContext');
+      expect(fieldNames).not.toContain('trace_context');
     });
   });
 
@@ -266,6 +301,8 @@ describe('Proto field name serialization', () => {
         'astro.messaging.v1.AgentResponse',
         'astro.messaging.v1.ThreadMessage',
         'astro.messaging.v1.ThreadHistoryResponse',
+        'astro.messaging.v1.PlatformFeedback',
+        'astro.messaging.v1.TraceContext',
         'astro.messaging.v1.ContentChunk',
       ];
 

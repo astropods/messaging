@@ -489,6 +489,23 @@ describe('ConversationStream', () => {
       const written = mockGrpc.written[0] as ConversationRequest;
       expect(written.agentResponse?.conversationId).toBe('my-conv');
     });
+
+    it('should set optional response metadata on the AgentResponse wrapper', () => {
+      const traceContext = {
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      };
+
+      stream.sendContentChunk(
+        'conv-1',
+        { type: 'DELTA', content: 'x' },
+        { responseId: 'resp-1', traceContext }
+      );
+
+      const written = mockGrpc.written[0] as ConversationRequest;
+      expect(written.agentResponse?.responseId).toBe('resp-1');
+      expect(written.agentResponse?.traceContext).toEqual(traceContext);
+      expect(written.agentResponse?.content).toEqual({ type: 'DELTA', content: 'x' });
+    });
   });
 
   describe('sendStatusUpdate', () => {

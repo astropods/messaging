@@ -68,6 +68,10 @@
     "agentResponse": {
       "conversationId": "conv-ts-001",
       "responseId": "resp-ts-001",
+      "traceContext": {
+        "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+        "tracestate": "vendor=value"
+      },
       "content": {
         "type": "DELTA",
         "content": "Streaming from TypeScript",
@@ -97,6 +101,20 @@
       }
     }
   },
+  "conversationRequestWithFeedback": {
+    "feedback": {
+      "conversationId": "conv-ts-feedback-001",
+      "responseId": "resp-ts-feedback-001",
+      "traceContext": {
+        "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+        "tracestate": "vendor=value"
+      },
+      "text": {
+        "text": "useful answer",
+        "prompt": "What did you think of this reply?"
+      }
+    }
+  },
   "agentResponseWithMessage": {
     "conversationId": "conv-ts-010",
     "responseId": "resp-ts-010",
@@ -119,6 +137,10 @@
   "agentResponseWithContent": {
     "conversationId": "conv-ts-011",
     "responseId": "resp-ts-011",
+    "traceContext": {
+      "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+      "tracestate": "vendor=value"
+    },
     "content": {
       "type": "END",
       "content": "Final content from TS"

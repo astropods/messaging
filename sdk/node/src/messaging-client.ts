@@ -91,11 +91,17 @@ export interface Attachment {
   storageKey?: string;
 }
 
+export interface TraceContext {
+  traceparent?: string;
+  tracestate?: string;
+}
+
 // AgentResponse uses proto-loader's oneof flattening (oneofs: true).
 // The active oneof field goes directly on the object, not nested under "payload".
 export interface AgentResponse {
   conversationId: string;
   responseId?: string;
+  traceContext?: TraceContext;
   // oneof payload — only one of these should be set:
   incomingMessage?: Message;
   status?: StatusUpdate;
@@ -123,6 +129,7 @@ export interface PlatformFeedback {
   conversationId: string;
   responseId?: string;
   timestamp?: Timestamp;
+  traceContext?: TraceContext;
   user?: User;
   // oneof feedback — only one of these is set:
   reaction?: MessageReaction;
@@ -723,9 +730,14 @@ export class ConversationStream extends EventEmitter {
   /**
    * Send a content chunk (START/DELTA/END) for a conversation
    */
-  sendContentChunk(conversationId: string, chunk: ContentChunk): void {
+  sendContentChunk(
+    conversationId: string,
+    chunk: ContentChunk,
+    response?: Pick<AgentResponse, 'responseId' | 'traceContext'>
+  ): void {
     this.sendAgentResponse({
       conversationId,
+      ...response,
       content: chunk,
     });
   }
@@ -733,9 +745,14 @@ export class ConversationStream extends EventEmitter {
   /**
    * Send a status update for a conversation
    */
-  sendStatusUpdate(conversationId: string, status: StatusUpdate): void {
+  sendStatusUpdate(
+    conversationId: string,
+    status: StatusUpdate,
+    response?: Pick<AgentResponse, 'responseId' | 'traceContext'>
+  ): void {
     this.sendAgentResponse({
       conversationId,
+      ...response,
       status,
     });
   }
@@ -751,10 +768,18 @@ export class ConversationStream extends EventEmitter {
    * @param text - The transcribed text from STT
    * @param messageId - Optional: the original "[audio]" message ID to update
    * @param language - Optional: BCP-47 language detected by STT (e.g. "en-US")
+   * @param response - Optional: extra AgentResponse fields (responseId, traceContext)
    */
-  sendTranscript(conversationId: string, text: string, messageId?: string, language?: string): void {
+  sendTranscript(
+    conversationId: string,
+    text: string,
+    messageId?: string,
+    language?: string,
+    response?: Pick<AgentResponse, 'responseId' | 'traceContext'>
+  ): void {
     this.sendAgentResponse({
       conversationId,
+      ...response,
       transcript: { text, messageId, language },
     });
   }

@@ -136,6 +136,7 @@ type PlatformFeedback struct {
 	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
 	ResponseId     string                 `protobuf:"bytes,2,opt,name=response_id,json=responseId,proto3" json:"response_id,omitempty"` // Which agent message this relates to (optional)
 	Timestamp      *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	TraceContext   *TraceContext          `protobuf:"bytes,12,opt,name=trace_context,json=traceContext,proto3" json:"trace_context,omitempty"` // Trace context for the referenced response
 	// Types that are valid to be assigned to Feedback:
 	//
 	//	*PlatformFeedback_StreamControl
@@ -202,6 +203,13 @@ func (x *PlatformFeedback) GetResponseId() string {
 func (x *PlatformFeedback) GetTimestamp() *timestamppb.Timestamp {
 	if x != nil {
 		return x.Timestamp
+	}
+	return nil
+}
+
+func (x *PlatformFeedback) GetTraceContext() *TraceContext {
+	if x != nil {
+		return x.TraceContext
 	}
 	return nil
 }
@@ -754,12 +762,13 @@ var File_astro_messaging_v1_feedback_proto protoreflect.FileDescriptor
 
 const file_astro_messaging_v1_feedback_proto_rawDesc = "" +
 	"\n" +
-	"!astro/messaging/v1/feedback.proto\x12\x12astro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a astro/messaging/v1/message.proto\x1a#astro/messaging/v1/renderable.proto\"\x9c\x06\n" +
+	"!astro/messaging/v1/feedback.proto\x12\x12astro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a astro/messaging/v1/message.proto\x1a#astro/messaging/v1/renderable.proto\x1a\x1eastro/messaging/v1/trace.proto\"\xe3\x06\n" +
 	"\x10PlatformFeedback\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x1f\n" +
 	"\vresponse_id\x18\x02 \x01(\tR\n" +
 	"responseId\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12J\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12E\n" +
+	"\rtrace_context\x18\f \x01(\v2 .astro.messaging.v1.TraceContextR\ftraceContext\x12J\n" +
 	"\x0estream_control\x18\x04 \x01(\v2!.astro.messaging.v1.StreamControlH\x00R\rstreamControl\x12P\n" +
 	"\x10prompt_selection\x18\x05 \x01(\v2#.astro.messaging.v1.PromptSelectionH\x00R\x0fpromptSelection\x12A\n" +
 	"\breaction\x18\x06 \x01(\v2#.astro.messaging.v1.MessageReactionH\x00R\breaction\x12D\n" +
@@ -841,29 +850,31 @@ var file_astro_messaging_v1_feedback_proto_goTypes = []any{
 	(*MessageDelete)(nil),             // 8: astro.messaging.v1.MessageDelete
 	(*TextFeedback)(nil),              // 9: astro.messaging.v1.TextFeedback
 	(*timestamppb.Timestamp)(nil),     // 10: google.protobuf.Timestamp
-	(*RenderableResponse)(nil),        // 11: astro.messaging.v1.RenderableResponse
-	(*User)(nil),                      // 12: astro.messaging.v1.User
+	(*TraceContext)(nil),              // 11: astro.messaging.v1.TraceContext
+	(*RenderableResponse)(nil),        // 12: astro.messaging.v1.RenderableResponse
+	(*User)(nil),                      // 13: astro.messaging.v1.User
 }
 var file_astro_messaging_v1_feedback_proto_depIdxs = []int32{
 	10, // 0: astro.messaging.v1.PlatformFeedback.timestamp:type_name -> google.protobuf.Timestamp
-	3,  // 1: astro.messaging.v1.PlatformFeedback.stream_control:type_name -> astro.messaging.v1.StreamControl
-	4,  // 2: astro.messaging.v1.PlatformFeedback.prompt_selection:type_name -> astro.messaging.v1.PromptSelection
-	5,  // 3: astro.messaging.v1.PlatformFeedback.reaction:type_name -> astro.messaging.v1.MessageReaction
-	6,  // 4: astro.messaging.v1.PlatformFeedback.button_click:type_name -> astro.messaging.v1.ButtonClick
-	7,  // 5: astro.messaging.v1.PlatformFeedback.message_edit:type_name -> astro.messaging.v1.MessageEdit
-	8,  // 6: astro.messaging.v1.PlatformFeedback.message_delete:type_name -> astro.messaging.v1.MessageDelete
-	9,  // 7: astro.messaging.v1.PlatformFeedback.text:type_name -> astro.messaging.v1.TextFeedback
-	11, // 8: astro.messaging.v1.PlatformFeedback.renderable_response:type_name -> astro.messaging.v1.RenderableResponse
-	12, // 9: astro.messaging.v1.PlatformFeedback.user:type_name -> astro.messaging.v1.User
-	0,  // 10: astro.messaging.v1.StreamControl.action:type_name -> astro.messaging.v1.StreamControl.Action
-	1,  // 11: astro.messaging.v1.MessageReaction.type:type_name -> astro.messaging.v1.MessageReaction.ReactionType
-	10, // 12: astro.messaging.v1.MessageEdit.edited_at:type_name -> google.protobuf.Timestamp
-	10, // 13: astro.messaging.v1.MessageDelete.deleted_at:type_name -> google.protobuf.Timestamp
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	11, // 1: astro.messaging.v1.PlatformFeedback.trace_context:type_name -> astro.messaging.v1.TraceContext
+	3,  // 2: astro.messaging.v1.PlatformFeedback.stream_control:type_name -> astro.messaging.v1.StreamControl
+	4,  // 3: astro.messaging.v1.PlatformFeedback.prompt_selection:type_name -> astro.messaging.v1.PromptSelection
+	5,  // 4: astro.messaging.v1.PlatformFeedback.reaction:type_name -> astro.messaging.v1.MessageReaction
+	6,  // 5: astro.messaging.v1.PlatformFeedback.button_click:type_name -> astro.messaging.v1.ButtonClick
+	7,  // 6: astro.messaging.v1.PlatformFeedback.message_edit:type_name -> astro.messaging.v1.MessageEdit
+	8,  // 7: astro.messaging.v1.PlatformFeedback.message_delete:type_name -> astro.messaging.v1.MessageDelete
+	9,  // 8: astro.messaging.v1.PlatformFeedback.text:type_name -> astro.messaging.v1.TextFeedback
+	12, // 9: astro.messaging.v1.PlatformFeedback.renderable_response:type_name -> astro.messaging.v1.RenderableResponse
+	13, // 10: astro.messaging.v1.PlatformFeedback.user:type_name -> astro.messaging.v1.User
+	0,  // 11: astro.messaging.v1.StreamControl.action:type_name -> astro.messaging.v1.StreamControl.Action
+	1,  // 12: astro.messaging.v1.MessageReaction.type:type_name -> astro.messaging.v1.MessageReaction.ReactionType
+	10, // 13: astro.messaging.v1.MessageEdit.edited_at:type_name -> google.protobuf.Timestamp
+	10, // 14: astro.messaging.v1.MessageDelete.deleted_at:type_name -> google.protobuf.Timestamp
+	15, // [15:15] is the sub-list for method output_type
+	15, // [15:15] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_astro_messaging_v1_feedback_proto_init() }
@@ -873,6 +884,7 @@ func file_astro_messaging_v1_feedback_proto_init() {
 	}
 	file_astro_messaging_v1_message_proto_init()
 	file_astro_messaging_v1_renderable_proto_init()
+	file_astro_messaging_v1_trace_proto_init()
 	file_astro_messaging_v1_feedback_proto_msgTypes[0].OneofWrappers = []any{
 		(*PlatformFeedback_StreamControl)(nil),
 		(*PlatformFeedback_PromptSelection)(nil),

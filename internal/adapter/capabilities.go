@@ -19,6 +19,11 @@ type AdapterCapabilities struct {
 	SupportsReactions bool // Platform supports emoji reactions
 	SupportsCards     bool // Platform supports rich cards/embeds
 
+	// Interactive rendering. When false, a Renderable degrades instead of
+	// rendering (see the failure contract). Defaulted false until the switch.
+	SupportsDeclarativeForms   bool // Host can render a declarative form from a JSON Schema
+	SupportsEmbeddedComponents bool // Reserved: sandboxed agent-authored UI (future); false in v1
+
 	// Audio features
 	SupportsAudioInput bool     // Can receive audio streams
 	AudioEncodings     []string // Accepted encodings (e.g., "webm_opus", "linear16", "mulaw")

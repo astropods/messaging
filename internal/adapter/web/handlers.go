@@ -36,7 +36,9 @@ type Handlers struct {
 	fileStore files.FileStore
 	// turns tracks per-conversation streaming state so a client stop can drop
 	// the agent's late output and persist the partial. Shared with WebAdapter.
-	turns *turnTracker
+	turns        *turnTracker
+	interactions store.InteractionStore // shared with WebAdapter
+	degraded     *degradeTracker        // shared with WebAdapter
 }
 
 // NewHandlers creates a new Handlers instance
@@ -218,6 +220,19 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	if req.Content == "" && len(req.Attachments) == 0 {
 		http.Error(w, "Content or attachment is required", http.StatusBadRequest)
 		return
+	}
+
+	// A degraded free-text-tolerant ask: the owner's reply is its RESPOND answer,
+	// not a new turn (a non-owner falls through and leaves it pending).
+	if h.degraded != nil {
+		if interactionID, ok := h.degraded.take(conversationID, session.UserID); ok {
+			h.resolveDegradedRespond(ctx, conversationID, session, interactionID, req.Content)
+			writeJSON(w, http.StatusOK, SendMessageResponse{
+				MessageID: uuid.NewString(),
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+			})
+			return
+		}
 	}
 
 	// Bound the attachment count so a single send can't fan out into thousands

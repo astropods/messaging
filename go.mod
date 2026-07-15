@@ -7,6 +7,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.17.2
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/slack-go/slack v0.23.1
 	golang.org/x/sys v0.44.0
 	google.golang.org/grpc v1.78.0

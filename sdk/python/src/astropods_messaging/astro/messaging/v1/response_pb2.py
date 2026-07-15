@@ -27,9 +27,10 @@ from . import message_pb2 as astro_dot_messaging_dot_v1_dot_message__pb2
 from . import audio_pb2 as astro_dot_messaging_dot_v1_dot_audio__pb2
 from . import feedback_pb2 as astro_dot_messaging_dot_v1_dot_feedback__pb2
 from . import renderable_pb2 as astro_dot_messaging_dot_v1_dot_renderable__pb2
+from . import trace_pb2 as astro_dot_messaging_dot_v1_dot_trace__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n!astro/messaging/v1/response.proto\x12\x12\x61stro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a astro/messaging/v1/message.proto\x1a\x1e\x61stro/messaging/v1/audio.proto\x1a!astro/messaging/v1/feedback.proto\x1a#astro/messaging/v1/renderable.proto\"\xf7\x05\n\rAgentResponse\x12\x17\n\x0f\x63onversation_id\x18\x01 \x01(\t\x12\x13\n\x0bresponse_id\x18\x02 \x01(\t\x12\x37\n\x10incoming_message\x18\x03 \x01(\x0b\x32\x1b.astro.messaging.v1.MessageH\x00\x12\x32\n\x06status\x18\x04 \x01(\x0b\x32 .astro.messaging.v1.StatusUpdateH\x00\x12\x33\n\x07\x63ontent\x18\x05 \x01(\x0b\x32 .astro.messaging.v1.ContentChunkH\x00\x12\x37\n\x07prompts\x18\x06 \x01(\x0b\x32$.astro.messaging.v1.SuggestedPromptsH\x00\x12=\n\x0fthread_metadata\x18\x07 \x01(\x0b\x32\".astro.messaging.v1.ThreadMetadataH\x00\x12\x32\n\x05\x65rror\x18\x08 \x01(\x0b\x32!.astro.messaging.v1.ErrorResponseH\x00\x12\x43\n\x0f\x63ontext_request\x18\t \x01(\x0b\x32(.astro.messaging.v1.ThreadHistoryRequestH\x00\x12\x34\n\ntranscript\x18\n \x01(\x0b\x32\x1e.astro.messaging.v1.TranscriptH\x00\x12=\n\x0c\x61udio_config\x18\x0b \x01(\x0b\x32%.astro.messaging.v1.AudioStreamConfigH\x00\x12\x35\n\x0b\x61udio_chunk\x18\x0c \x01(\x0b\x32\x1e.astro.messaging.v1.AudioChunkH\x00\x12\x38\n\x08\x66\x65\x65\x64\x62\x61\x63k\x18\r \x01(\x0b\x32$.astro.messaging.v1.PlatformFeedbackH\x00\x12\x34\n\nrenderable\x18\x0e \x01(\x0b\x32\x1e.astro.messaging.v1.RenderableH\x00\x42\t\n\x07payload\"\xe8\x01\n\x0cStatusUpdate\x12\x37\n\x06status\x18\x01 \x01(\x0e\x32\'.astro.messaging.v1.StatusUpdate.Status\x12\x16\n\x0e\x63ustom_message\x18\x02 \x01(\t\x12\r\n\x05\x65moji\x18\x03 \x01(\t\"x\n\x06Status\x12\x16\n\x12STATUS_UNSPECIFIED\x10\x00\x12\x0c\n\x08THINKING\x10\x01\x12\r\n\tSEARCHING\x10\x02\x12\x0e\n\nGENERATING\x10\x03\x12\x0e\n\nPROCESSING\x10\x04\x12\r\n\tANALYZING\x10\x05\x12\n\n\x06\x43USTOM\x10\n\"\xbd\x02\n\x0c\x43ontentChunk\x12\x38\n\x04type\x18\x01 \x01(\x0e\x32*.astro.messaging.v1.ContentChunk.ChunkType\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\x12;\n\x0b\x61ttachments\x18\x03 \x03(\x0b\x32&.astro.messaging.v1.ResponseAttachment\x12\x1b\n\x13platform_message_id\x18\x04 \x01(\t\x12\x33\n\x07options\x18\x05 \x01(\x0b\x32\".astro.messaging.v1.MessageOptions\"S\n\tChunkType\x12\x1a\n\x16\x43HUNK_TYPE_UNSPECIFIED\x10\x00\x12\t\n\x05START\x10\x01\x12\t\n\x05\x44\x45LTA\x10\x02\x12\x07\n\x03\x45ND\x10\x03\x12\x0b\n\x07REPLACE\x10\x04\"\xf6\x01\n\x12ResponseAttachment\x12\x34\n\x05image\x18\x01 \x01(\x0b\x32#.astro.messaging.v1.ImageAttachmentH\x00\x12\x32\n\x04\x66ile\x18\x02 \x01(\x0b\x32\".astro.messaging.v1.FileAttachmentH\x00\x12\x32\n\x04\x63\x61rd\x18\x03 \x01(\x0b\x32\".astro.messaging.v1.CardAttachmentH\x00\x12/\n\x04link\x18\x04 \x01(\x0b\x32\x1f.astro.messaging.v1.LinkPreviewH\x00\x42\x11\n\x0f\x61ttachment_type\"^\n\x0fImageAttachment\x12\x0b\n\x03url\x18\x01 \x01(\t\x12\x10\n\x08\x61lt_text\x18\x02 \x01(\t\x12\r\n\x05title\x18\x03 \x01(\t\x12\r\n\x05width\x18\x04 \x01(\x05\x12\x0e\n\x06height\x18\x05 \x01(\x05\"V\n\x0e\x46ileAttachment\x12\x0b\n\x03url\x18\x01 \x01(\t\x12\x10\n\x08\x66ilename\x18\x02 \x01(\t\x12\x11\n\tmime_type\x18\x03 \x01(\t\x12\x12\n\nsize_bytes\x18\x04 \x01(\x03\",\n\x0e\x43\x61rdAttachment\x12\x1a\n\x12platform_card_json\x18\x01 \x01(\t\"Q\n\x0bLinkPreview\x12\x0b\n\x03url\x18\x01 \x01(\t\x12\r\n\x05title\x18\x02 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x03 \x01(\t\x12\x11\n\timage_url\x18\x04 \x01(\t\"g\n\x0eMessageOptions\x12\x11\n\tephemeral\x18\x01 \x01(\x08\x12\x15\n\rcreate_thread\x18\x02 \x01(\x08\x12\x1b\n\x13reply_to_message_id\x18\x03 \x01(\t\x12\x0e\n\x06silent\x18\x04 \x01(\x08\"\x9b\x01\n\x10SuggestedPrompts\x12<\n\x07prompts\x18\x01 \x03(\x0b\x32+.astro.messaging.v1.SuggestedPrompts.Prompt\x1aI\n\x06Prompt\x12\n\n\x02id\x18\x01 \x01(\t\x12\r\n\x05title\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x04 \x01(\t\"F\n\x0eThreadMetadata\x12\x11\n\tthread_id\x18\x01 \x01(\t\x12\r\n\x05title\x18\x02 \x01(\t\x12\x12\n\ncreate_new\x18\x03 \x01(\x08\"@\n\nTranscript\x12\x0c\n\x04text\x18\x01 \x01(\t\x12\x12\n\nmessage_id\x18\x02 \x01(\t\x12\x10\n\x08language\x18\x03 \x01(\t\"\x99\x02\n\rErrorResponse\x12\x39\n\x04\x63ode\x18\x01 \x01(\x0e\x32+.astro.messaging.v1.ErrorResponse.ErrorCode\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x0f\n\x07\x64\x65tails\x18\x03 \x01(\t\x12\x11\n\tretryable\x18\x04 \x01(\x08\"\x97\x01\n\tErrorCode\x12\x1a\n\x16\x45RROR_CODE_UNSPECIFIED\x10\x00\x12\x0e\n\nRATE_LIMIT\x10\x01\x12\x14\n\x10\x43ONTEXT_TOO_LONG\x10\x02\x12\x13\n\x0fINVALID_REQUEST\x10\x03\x12\x0f\n\x0b\x41GENT_ERROR\x10\x04\x12\x0e\n\nTOOL_ERROR\x10\x05\x12\x12\n\x0ePLATFORM_ERROR\x10\x06\"v\n\x14ThreadHistoryRequest\x12\x17\n\x0f\x63onversation_id\x18\x01 \x01(\t\x12\x14\n\x0cmax_messages\x18\x02 \x01(\x05\x12\x16\n\x0einclude_edited\x18\x03 \x01(\x08\x12\x17\n\x0finclude_deleted\x18\x04 \x01(\x08\"\xaa\x01\n\x15ThreadHistoryResponse\x12\x17\n\x0f\x63onversation_id\x18\x01 \x01(\t\x12\x33\n\x08messages\x18\x02 \x03(\x0b\x32!.astro.messaging.v1.ThreadMessage\x12\x13\n\x0bis_complete\x18\x03 \x01(\x08\x12.\n\nfetched_at\x18\x04 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\"\xe2\x03\n\rThreadMessage\x12\x12\n\nmessage_id\x18\x01 \x01(\t\x12&\n\x04user\x18\x02 \x01(\x0b\x32\x18.astro.messaging.v1.User\x12\x0f\n\x07\x63ontent\x18\x03 \x01(\t\x12\x33\n\x0b\x61ttachments\x18\x04 \x03(\x0b\x32\x1e.astro.messaging.v1.Attachment\x12-\n\ttimestamp\x18\x05 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x12\n\nwas_edited\x18\x06 \x01(\x08\x12\x18\n\x10original_content\x18\x07 \x01(\t\x12-\n\tedited_at\x18\x08 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x12\n\nis_deleted\x18\t \x01(\x08\x12.\n\ndeleted_at\x18\n \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12J\n\rplatform_data\x18\x0b \x03(\x0b\x32\x33.astro.messaging.v1.ThreadMessage.PlatformDataEntry\x1a\x33\n\x11PlatformDataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x42\x33Z1github.com/postman/astro/messaging/v1;messagingv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n!astro/messaging/v1/response.proto\x12\x12\x61stro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a astro/messaging/v1/message.proto\x1a\x1e\x61stro/messaging/v1/audio.proto\x1a!astro/messaging/v1/feedback.proto\x1a#astro/messaging/v1/renderable.proto\x1a\x1e\x61stro/messaging/v1/trace.proto\"\xb0\x06\n\rAgentResponse\x12\x17\n\x0f\x63onversation_id\x18\x01 \x01(\t\x12\x13\n\x0bresponse_id\x18\x02 \x01(\t\x12\x37\n\rtrace_context\x18\x0f \x01(\x0b\x32 .astro.messaging.v1.TraceContext\x12\x37\n\x10incoming_message\x18\x03 \x01(\x0b\x32\x1b.astro.messaging.v1.MessageH\x00\x12\x32\n\x06status\x18\x04 \x01(\x0b\x32 .astro.messaging.v1.StatusUpdateH\x00\x12\x33\n\x07\x63ontent\x18\x05 \x01(\x0b\x32 .astro.messaging.v1.ContentChunkH\x00\x12\x37\n\x07prompts\x18\x06 \x01(\x0b\x32$.astro.messaging.v1.SuggestedPromptsH\x00\x12=\n\x0fthread_metadata\x18\x07 \x01(\x0b\x32\".astro.messaging.v1.ThreadMetadataH\x00\x12\x32\n\x05\x65rror\x18\x08 \x01(\x0b\x32!.astro.messaging.v1.ErrorResponseH\x00\x12\x43\n\x0f\x63ontext_request\x18\t \x01(\x0b\x32(.astro.messaging.v1.ThreadHistoryRequestH\x00\x12\x34\n\ntranscript\x18\n \x01(\x0b\x32\x1e.astro.messaging.v1.TranscriptH\x00\x12=\n\x0c\x61udio_config\x18\x0b \x01(\x0b\x32%.astro.messaging.v1.AudioStreamConfigH\x00\x12\x35\n\x0b\x61udio_chunk\x18\x0c \x01(\x0b\x32\x1e.astro.messaging.v1.AudioChunkH\x00\x12\x38\n\x08\x66\x65\x65\x64\x62\x61\x63k\x18\r \x01(\x0b\x32$.astro.messaging.v1.PlatformFeedbackH\x00\x12\x34\n\nrenderable\x18\x0e \x01(\x0b\x32\x1e.astro.messaging.v1.RenderableH\x00\x42\t\n\x07payload\"\xe8\x01\n\x0cStatusUpdate\x12\x37\n\x06status\x18\x01 \x01(\x0e\x32\'.astro.messaging.v1.StatusUpdate.Status\x12\x16\n\x0e\x63ustom_message\x18\x02 \x01(\t\x12\r\n\x05\x65moji\x18\x03 \x01(\t\"x\n\x06Status\x12\x16\n\x12STATUS_UNSPECIFIED\x10\x00\x12\x0c\n\x08THINKING\x10\x01\x12\r\n\tSEARCHING\x10\x02\x12\x0e\n\nGENERATING\x10\x03\x12\x0e\n\nPROCESSING\x10\x04\x12\r\n\tANALYZING\x10\x05\x12\n\n\x06\x43USTOM\x10\n\"\xbd\x02\n\x0c\x43ontentChunk\x12\x38\n\x04type\x18\x01 \x01(\x0e\x32*.astro.messaging.v1.ContentChunk.ChunkType\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\x12;\n\x0b\x61ttachments\x18\x03 \x03(\x0b\x32&.astro.messaging.v1.ResponseAttachment\x12\x1b\n\x13platform_message_id\x18\x04 \x01(\t\x12\x33\n\x07options\x18\x05 \x01(\x0b\x32\".astro.messaging.v1.MessageOptions\"S\n\tChunkType\x12\x1a\n\x16\x43HUNK_TYPE_UNSPECIFIED\x10\x00\x12\t\n\x05START\x10\x01\x12\t\n\x05\x44\x45LTA\x10\x02\x12\x07\n\x03\x45ND\x10\x03\x12\x0b\n\x07REPLACE\x10\x04\"\xf6\x01\n\x12ResponseAttachment\x12\x34\n\x05image\x18\x01 \x01(\x0b\x32#.astro.messaging.v1.ImageAttachmentH\x00\x12\x32\n\x04\x66ile\x18\x02 \x01(\x0b\x32\".astro.messaging.v1.FileAttachmentH\x00\x12\x32\n\x04\x63\x61rd\x18\x03 \x01(\x0b\x32\".astro.messaging.v1.CardAttachmentH\x00\x12/\n\x04link\x18\x04 \x01(\x0b\x32\x1f.astro.messaging.v1.LinkPreviewH\x00\x42\x11\n\x0f\x61ttachment_type\"^\n\x0fImageAttachment\x12\x0b\n\x03url\x18\x01 \x01(\t\x12\x10\n\x08\x61lt_text\x18\x02 \x01(\t\x12\r\n\x05title\x18\x03 \x01(\t\x12\r\n\x05width\x18\x04 \x01(\x05\x12\x0e\n\x06height\x18\x05 \x01(\x05\"V\n\x0e\x46ileAttachment\x12\x0b\n\x03url\x18\x01 \x01(\t\x12\x10\n\x08\x66ilename\x18\x02 \x01(\t\x12\x11\n\tmime_type\x18\x03 \x01(\t\x12\x12\n\nsize_bytes\x18\x04 \x01(\x03\",\n\x0e\x43\x61rdAttachment\x12\x1a\n\x12platform_card_json\x18\x01 \x01(\t\"Q\n\x0bLinkPreview\x12\x0b\n\x03url\x18\x01 \x01(\t\x12\r\n\x05title\x18\x02 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x03 \x01(\t\x12\x11\n\timage_url\x18\x04 \x01(\t\"g\n\x0eMessageOptions\x12\x11\n\tephemeral\x18\x01 \x01(\x08\x12\x15\n\rcreate_thread\x18\x02 \x01(\x08\x12\x1b\n\x13reply_to_message_id\x18\x03 \x01(\t\x12\x0e\n\x06silent\x18\x04 \x01(\x08\"\x9b\x01\n\x10SuggestedPrompts\x12<\n\x07prompts\x18\x01 \x03(\x0b\x32+.astro.messaging.v1.SuggestedPrompts.Prompt\x1aI\n\x06Prompt\x12\n\n\x02id\x18\x01 \x01(\t\x12\r\n\x05title\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x04 \x01(\t\"F\n\x0eThreadMetadata\x12\x11\n\tthread_id\x18\x01 \x01(\t\x12\r\n\x05title\x18\x02 \x01(\t\x12\x12\n\ncreate_new\x18\x03 \x01(\x08\"@\n\nTranscript\x12\x0c\n\x04text\x18\x01 \x01(\t\x12\x12\n\nmessage_id\x18\x02 \x01(\t\x12\x10\n\x08language\x18\x03 \x01(\t\"\x99\x02\n\rErrorResponse\x12\x39\n\x04\x63ode\x18\x01 \x01(\x0e\x32+.astro.messaging.v1.ErrorResponse.ErrorCode\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x0f\n\x07\x64\x65tails\x18\x03 \x01(\t\x12\x11\n\tretryable\x18\x04 \x01(\x08\"\x97\x01\n\tErrorCode\x12\x1a\n\x16\x45RROR_CODE_UNSPECIFIED\x10\x00\x12\x0e\n\nRATE_LIMIT\x10\x01\x12\x14\n\x10\x43ONTEXT_TOO_LONG\x10\x02\x12\x13\n\x0fINVALID_REQUEST\x10\x03\x12\x0f\n\x0b\x41GENT_ERROR\x10\x04\x12\x0e\n\nTOOL_ERROR\x10\x05\x12\x12\n\x0ePLATFORM_ERROR\x10\x06\"v\n\x14ThreadHistoryRequest\x12\x17\n\x0f\x63onversation_id\x18\x01 \x01(\t\x12\x14\n\x0cmax_messages\x18\x02 \x01(\x05\x12\x16\n\x0einclude_edited\x18\x03 \x01(\x08\x12\x17\n\x0finclude_deleted\x18\x04 \x01(\x08\"\xaa\x01\n\x15ThreadHistoryResponse\x12\x17\n\x0f\x63onversation_id\x18\x01 \x01(\t\x12\x33\n\x08messages\x18\x02 \x03(\x0b\x32!.astro.messaging.v1.ThreadMessage\x12\x13\n\x0bis_complete\x18\x03 \x01(\x08\x12.\n\nfetched_at\x18\x04 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\"\xe2\x03\n\rThreadMessage\x12\x12\n\nmessage_id\x18\x01 \x01(\t\x12&\n\x04user\x18\x02 \x01(\x0b\x32\x18.astro.messaging.v1.User\x12\x0f\n\x07\x63ontent\x18\x03 \x01(\t\x12\x33\n\x0b\x61ttachments\x18\x04 \x03(\x0b\x32\x1e.astro.messaging.v1.Attachment\x12-\n\ttimestamp\x18\x05 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x12\n\nwas_edited\x18\x06 \x01(\x08\x12\x18\n\x10original_content\x18\x07 \x01(\t\x12-\n\tedited_at\x18\x08 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x12\n\nis_deleted\x18\t \x01(\x08\x12.\n\ndeleted_at\x18\n \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12J\n\rplatform_data\x18\x0b \x03(\x0b\x32\x33.astro.messaging.v1.ThreadMessage.PlatformDataEntry\x1a\x33\n\x11PlatformDataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x42\x33Z1github.com/postman/astro/messaging/v1;messagingv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -39,46 +40,46 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._serialized_options = b'Z1github.com/postman/astro/messaging/v1;messagingv1'
   _globals['_THREADMESSAGE_PLATFORMDATAENTRY']._loaded_options = None
   _globals['_THREADMESSAGE_PLATFORMDATAENTRY']._serialized_options = b'8\001'
-  _globals['_AGENTRESPONSE']._serialized_start=229
-  _globals['_AGENTRESPONSE']._serialized_end=988
-  _globals['_STATUSUPDATE']._serialized_start=991
-  _globals['_STATUSUPDATE']._serialized_end=1223
-  _globals['_STATUSUPDATE_STATUS']._serialized_start=1103
-  _globals['_STATUSUPDATE_STATUS']._serialized_end=1223
-  _globals['_CONTENTCHUNK']._serialized_start=1226
-  _globals['_CONTENTCHUNK']._serialized_end=1543
-  _globals['_CONTENTCHUNK_CHUNKTYPE']._serialized_start=1460
-  _globals['_CONTENTCHUNK_CHUNKTYPE']._serialized_end=1543
-  _globals['_RESPONSEATTACHMENT']._serialized_start=1546
-  _globals['_RESPONSEATTACHMENT']._serialized_end=1792
-  _globals['_IMAGEATTACHMENT']._serialized_start=1794
-  _globals['_IMAGEATTACHMENT']._serialized_end=1888
-  _globals['_FILEATTACHMENT']._serialized_start=1890
-  _globals['_FILEATTACHMENT']._serialized_end=1976
-  _globals['_CARDATTACHMENT']._serialized_start=1978
-  _globals['_CARDATTACHMENT']._serialized_end=2022
-  _globals['_LINKPREVIEW']._serialized_start=2024
-  _globals['_LINKPREVIEW']._serialized_end=2105
-  _globals['_MESSAGEOPTIONS']._serialized_start=2107
-  _globals['_MESSAGEOPTIONS']._serialized_end=2210
-  _globals['_SUGGESTEDPROMPTS']._serialized_start=2213
-  _globals['_SUGGESTEDPROMPTS']._serialized_end=2368
-  _globals['_SUGGESTEDPROMPTS_PROMPT']._serialized_start=2295
-  _globals['_SUGGESTEDPROMPTS_PROMPT']._serialized_end=2368
-  _globals['_THREADMETADATA']._serialized_start=2370
-  _globals['_THREADMETADATA']._serialized_end=2440
-  _globals['_TRANSCRIPT']._serialized_start=2442
-  _globals['_TRANSCRIPT']._serialized_end=2506
-  _globals['_ERRORRESPONSE']._serialized_start=2509
-  _globals['_ERRORRESPONSE']._serialized_end=2790
-  _globals['_ERRORRESPONSE_ERRORCODE']._serialized_start=2639
-  _globals['_ERRORRESPONSE_ERRORCODE']._serialized_end=2790
-  _globals['_THREADHISTORYREQUEST']._serialized_start=2792
-  _globals['_THREADHISTORYREQUEST']._serialized_end=2910
-  _globals['_THREADHISTORYRESPONSE']._serialized_start=2913
-  _globals['_THREADHISTORYRESPONSE']._serialized_end=3083
-  _globals['_THREADMESSAGE']._serialized_start=3086
-  _globals['_THREADMESSAGE']._serialized_end=3568
-  _globals['_THREADMESSAGE_PLATFORMDATAENTRY']._serialized_start=3517
-  _globals['_THREADMESSAGE_PLATFORMDATAENTRY']._serialized_end=3568
+  _globals['_AGENTRESPONSE']._serialized_start=261
+  _globals['_AGENTRESPONSE']._serialized_end=1077
+  _globals['_STATUSUPDATE']._serialized_start=1080
+  _globals['_STATUSUPDATE']._serialized_end=1312
+  _globals['_STATUSUPDATE_STATUS']._serialized_start=1192
+  _globals['_STATUSUPDATE_STATUS']._serialized_end=1312
+  _globals['_CONTENTCHUNK']._serialized_start=1315
+  _globals['_CONTENTCHUNK']._serialized_end=1632
+  _globals['_CONTENTCHUNK_CHUNKTYPE']._serialized_start=1549
+  _globals['_CONTENTCHUNK_CHUNKTYPE']._serialized_end=1632
+  _globals['_RESPONSEATTACHMENT']._serialized_start=1635
+  _globals['_RESPONSEATTACHMENT']._serialized_end=1881
+  _globals['_IMAGEATTACHMENT']._serialized_start=1883
+  _globals['_IMAGEATTACHMENT']._serialized_end=1977
+  _globals['_FILEATTACHMENT']._serialized_start=1979
+  _globals['_FILEATTACHMENT']._serialized_end=2065
+  _globals['_CARDATTACHMENT']._serialized_start=2067
+  _globals['_CARDATTACHMENT']._serialized_end=2111
+  _globals['_LINKPREVIEW']._serialized_start=2113
+  _globals['_LINKPREVIEW']._serialized_end=2194
+  _globals['_MESSAGEOPTIONS']._serialized_start=2196
+  _globals['_MESSAGEOPTIONS']._serialized_end=2299
+  _globals['_SUGGESTEDPROMPTS']._serialized_start=2302
+  _globals['_SUGGESTEDPROMPTS']._serialized_end=2457
+  _globals['_SUGGESTEDPROMPTS_PROMPT']._serialized_start=2384
+  _globals['_SUGGESTEDPROMPTS_PROMPT']._serialized_end=2457
+  _globals['_THREADMETADATA']._serialized_start=2459
+  _globals['_THREADMETADATA']._serialized_end=2529
+  _globals['_TRANSCRIPT']._serialized_start=2531
+  _globals['_TRANSCRIPT']._serialized_end=2595
+  _globals['_ERRORRESPONSE']._serialized_start=2598
+  _globals['_ERRORRESPONSE']._serialized_end=2879
+  _globals['_ERRORRESPONSE_ERRORCODE']._serialized_start=2728
+  _globals['_ERRORRESPONSE_ERRORCODE']._serialized_end=2879
+  _globals['_THREADHISTORYREQUEST']._serialized_start=2881
+  _globals['_THREADHISTORYREQUEST']._serialized_end=2999
+  _globals['_THREADHISTORYRESPONSE']._serialized_start=3002
+  _globals['_THREADHISTORYRESPONSE']._serialized_end=3172
+  _globals['_THREADMESSAGE']._serialized_start=3175
+  _globals['_THREADMESSAGE']._serialized_end=3657
+  _globals['_THREADMESSAGE_PLATFORMDATAENTRY']._serialized_start=3606
+  _globals['_THREADMESSAGE_PLATFORMDATAENTRY']._serialized_end=3657
 # @@protoc_insertion_point(module_scope)
