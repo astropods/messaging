@@ -85,6 +85,10 @@ export interface Attachment {
   filename?: string;
   mimeType?: string;
   title?: string;
+  /** Bytes size, if known. */
+  sizeBytes?: number;
+  /** Opaque files-API key; the agent resolves the file from AGENT_FILES_DIR. */
+  storageKey?: string;
 }
 
 // AgentResponse uses proto-loader's oneof flattening (oneofs: true).

@@ -117,4 +117,10 @@ message Attachment {
   string description = 7;
   int32 width = 8;                        // For images/videos
   int32 height = 9;
+
+  // Opaque files-API key. For platform (web) chat, the file lives on the
+  // deployment's shared files volume; the agent resolves it from its own
+  // files dir (AGENT_FILES_DIR) rather than fetching `url`. `url` remains the
+  // authenticated download URL (used by the client and by future object stores).
+  string storage_key = 10;
 }

@@ -104,7 +104,7 @@ func TestAppendMessageConcurrentSeqNoDrops(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := st.AppendMessage(ctx, "conv-1", "user-1", "user", "m"); err != nil {
+			if _, err := st.AppendMessage(ctx, "conv-1", "user-1", "user", "m", ""); err != nil {
 				errs <- err
 			}
 		}()
@@ -147,13 +147,13 @@ func TestConcurrentStopAndProgressSingleAssistantRow(t *testing.T) {
 		if _, err := st.EnsureForSend(ctx, conv, "user-1", "t"); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		if _, err := st.AppendMessage(ctx, conv, "user-1", "user", "q"); err != nil {
+		if _, err := st.AppendMessage(ctx, conv, "user-1", "user", "q", ""); err != nil {
 			t.Fatalf("seed user: %v", err)
 		}
 
 		var wg sync.WaitGroup
 		wg.Add(2)
-		go func() { defer wg.Done(); _, _ = st.UpsertAssistantProgress(ctx, conv, "streamed") }()
+		go func() { defer wg.Done(); _, _ = st.UpsertAssistantProgress(ctx, conv, "streamed", "") }()
 		go func() { defer wg.Done(); _, _ = st.FinalizeStopped(ctx, conv, "user-1", "partial") }()
 		wg.Wait()
 
@@ -243,7 +243,7 @@ func TestFinalizeStoppedOwnership(t *testing.T) {
 	if _, err := st.EnsureForSend(t.Context(), "conv-1", "owner", "t"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := st.AppendMessage(t.Context(), "conv-1", "owner", "user", "hi"); err != nil {
+	if _, err := st.AppendMessage(t.Context(), "conv-1", "owner", "user", "hi", ""); err != nil {
 		t.Fatalf("seed user msg: %v", err)
 	}
 

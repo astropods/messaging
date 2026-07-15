@@ -63,6 +63,8 @@ type ChunkEventData struct {
 	ChunkType         string `json:"chunk_type"` // start, delta, end, replace
 	ResponseID        string `json:"response_id,omitempty"`
 	PlatformMessageID string `json:"platform_message_id,omitempty"`
+	// Attachments carries agent-produced files, populated only on the END chunk.
+	Attachments []chatAttachment `json:"attachments,omitempty"`
 }
 
 // StatusEventData represents the data for a status update event
@@ -127,8 +129,10 @@ func NewConnectedEvent(conversationID, connectionID string) SSEEvent {
 	}
 }
 
-// NewChunkEvent creates a content chunk SSE event from a protobuf ContentChunk
-func NewChunkEvent(chunk *pb.ContentChunk, responseID string) SSEEvent {
+// NewChunkEvent creates a content chunk SSE event from a protobuf ContentChunk.
+// attachments carries agent-produced files (resolved to the canonical shape by
+// the caller) and is expected only on the END chunk.
+func NewChunkEvent(chunk *pb.ContentChunk, responseID string, attachments []chatAttachment) SSEEvent {
 	chunkType := "delta"
 	switch chunk.Type {
 	case pb.ContentChunk_START:
@@ -147,6 +151,7 @@ func NewChunkEvent(chunk *pb.ContentChunk, responseID string) SSEEvent {
 		ChunkType:         chunkType,
 		ResponseID:        responseID,
 		PlatformMessageID: chunk.PlatformMessageId,
+		Attachments:       attachments,
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {

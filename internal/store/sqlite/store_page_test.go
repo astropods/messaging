@@ -21,7 +21,7 @@ func seedThread(t *testing.T, st *Store, convID string, n int) {
 		t.Fatalf("seed conversation: %v", err)
 	}
 	for i := 0; i < n; i++ {
-		if _, err := st.AppendMessage(ctx, convID, "owner", "user", strconv.Itoa(i+1)); err != nil {
+		if _, err := st.AppendMessage(ctx, convID, "owner", "user", strconv.Itoa(i+1), ""); err != nil {
 			t.Fatalf("seed message %d: %v", i, err)
 		}
 	}
@@ -38,37 +38,37 @@ func TestPageMessages(t *testing.T) {
 		wantOldest  int
 	}{
 		{
-			name: "before_seq far beyond range does not over-read",
+			name:  "before_seq far beyond range does not over-read",
 			total: 3, limit: 100, beforeSeq: 10,
 			wantLen: 3, wantHasMore: false, wantOldest: 1,
 		},
 		{
-			name: "before_seq beyond range with small limit returns clamped tail",
+			name:  "before_seq beyond range with small limit returns clamped tail",
 			total: 5, limit: 2, beforeSeq: 100,
 			wantLen: 2, wantHasMore: true, wantOldest: 4,
 		},
 		{
-			name: "before_seq within range returns older page",
+			name:  "before_seq within range returns older page",
 			total: 5, limit: 2, beforeSeq: 4,
 			wantLen: 2, wantHasMore: true, wantOldest: 2,
 		},
 		{
-			name: "before_seq at head yields empty page",
+			name:  "before_seq at head yields empty page",
 			total: 3, limit: 10, beforeSeq: 1,
 			wantLen: 0, wantHasMore: false, wantOldest: 0,
 		},
 		{
-			name: "no before_seq, thread fits in limit",
+			name:  "no before_seq, thread fits in limit",
 			total: 3, limit: 10,
 			wantLen: 3, wantHasMore: false, wantOldest: 1,
 		},
 		{
-			name: "no before_seq, thread exceeds limit returns tail",
+			name:  "no before_seq, thread exceeds limit returns tail",
 			total: 5, limit: 2,
 			wantLen: 2, wantHasMore: true, wantOldest: 4,
 		},
 		{
-			name: "empty thread",
+			name:  "empty thread",
 			total: 0, limit: 10,
 			wantLen: 0, wantHasMore: false, wantOldest: 0,
 		},
@@ -110,10 +110,10 @@ func TestPageMessagesLastRole(t *testing.T) {
 	if _, err := st.EnsureForSend(ctx, "c", "owner", "t"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "q"); err != nil {
+	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "q", ""); err != nil {
 		t.Fatalf("user: %v", err)
 	}
-	if _, err := st.UpsertAssistantProgress(ctx, "c", "reply"); err != nil {
+	if _, err := st.UpsertAssistantProgress(ctx, "c", "reply", ""); err != nil {
 		t.Fatalf("assistant: %v", err)
 	}
 
