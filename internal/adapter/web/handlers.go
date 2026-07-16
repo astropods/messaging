@@ -425,6 +425,7 @@ func (h *Handlers) streamTurnTerminal(ctx context.Context, conversationID string
 	if h.turns != nil && h.turns.isStreaming(conversationID) {
 		return false
 	}
+	//nolint:dogsled // PageMessages returns (msgs, hasMore, oldestSeq, lastRole, err); only the last role and error matter here.
 	_, _, _, lastRole, err := h.chatStore.PageMessages(ctx, conversationID, 1, 0)
 	if err != nil {
 		slog.Error("[Web] chat stream terminal-state check failed", "conversation", conversationID, "err", err)
