@@ -25,6 +25,23 @@ var ErrUnsupported = errors.New("files: operation not supported by this store")
 // ErrNotFound is returned when a key has no metadata or no blob.
 var ErrNotFound = errors.New("files: not found")
 
+// ErrOwnedByOther is returned by AttributeOwner when the file already has a real
+// user owner different from the requested one. Ownership is immutable once set,
+// so a shared agent can't transfer one user's file into another's conversation.
+var ErrOwnedByOther = errors.New("files: already owned by another user")
+
+// File lifecycle states, tracked in FileMeta.Status. A managed upload is created
+// StatusReserved (metadata only, no bytes), promoted to StatusReady once the blob
+// is committed. Only ready files are listable, downloadable, or attachable, so an
+// abandoned or in-flight upload never surfaces as a broken download chip. The
+// empty string is treated as ready for backward compatibility and for adopted
+// plain files, whose bytes exist the moment they're seen.
+const (
+	StatusReserved  = "reserved"
+	StatusUploading = "uploading"
+	StatusReady     = "ready"
+)
+
 // FileMeta describes one stored file. Key is the opaque id used across the API
 // and as the storage key; Name is the user-facing filename (never used to build
 // a storage path).
@@ -34,10 +51,21 @@ type FileMeta struct {
 	Size        int64     `json:"size"`
 	ContentType string    `json:"content_type"`
 	UpdatedAt   time.Time `json:"updated_at"`
-	// UploadedBy records the opaque user id that created the file. Files are
-	// deployment-scoped (any authorized user of the deployment can read them);
-	// this is audit metadata only, not an access-control boundary.
+	// UploadedBy records the opaque user id that owns the file. File access is
+	// per-user: this is the access-control key (see web.ownsFile), not merely
+	// audit metadata. Agent-written plain files are unowned ("agent") until
+	// attributed to a conversation owner via AttributeOwner. Once a real user
+	// owns a file the value is immutable.
 	UploadedBy string `json:"uploaded_by,omitempty"`
+	// Status is the lifecycle state (see the Status* constants). Empty means
+	// ready (adopted plain files and legacy metadata predating this field).
+	Status string `json:"status,omitempty"`
+}
+
+// Ready reports whether the file's bytes are committed and it may be listed,
+// downloaded, or attached. Empty status is ready (adopted/legacy).
+func (m FileMeta) Ready() bool {
+	return m.Status == "" || m.Status == StatusReady
 }
 
 // UploadTarget is a direct-upload descriptor for presign-capable stores (S3):
@@ -69,6 +97,13 @@ type FileStore interface {
 	WriteMeta(ctx context.Context, meta FileMeta) error
 	// ReadMeta returns metadata for key, or ErrNotFound.
 	ReadMeta(ctx context.Context, key string) (FileMeta, error)
+	// AttributeOwner atomically assigns owner to key iff the file is currently
+	// unowned (agent-written, no real user owner), and returns the resulting
+	// metadata. If key is already owned by owner it is a no-op success; if it is
+	// owned by a different real user it returns ErrOwnedByOther without changing
+	// anything. The compare-and-set is what prevents two concurrent agent
+	// responses from reassigning the same file across users.
+	AttributeOwner(ctx context.Context, key, owner string) (FileMeta, error)
 	// List returns metadata for every stored file (newest first is not
 	// guaranteed; callers sort as needed).
 	List(ctx context.Context) ([]FileMeta, error)

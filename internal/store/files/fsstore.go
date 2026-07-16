@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,6 +22,18 @@ const (
 	metaSuffix = ".meta.json"
 	tmpSuffix  = ".tmp"
 )
+
+// agentOwner is the sentinel UploadedBy for an adopted plain file — a file the
+// agent dropped into the shared directory with no metadata sidecar. It marks the
+// file as unowned so AttributeOwner can hand it to a conversation owner on first
+// reference without a race with another user's response.
+const agentOwner = "agent"
+
+// unowned reports whether an UploadedBy value represents no real user owner and
+// is therefore eligible for first-time attribution.
+func unowned(uploadedBy string) bool {
+	return uploadedBy == "" || uploadedBy == agentOwner
+}
 
 // FSStore is a filesystem-backed FileStore over a single directory (the
 // deployment's shared persistent volume, mounted into the sidecar). It holds two
@@ -36,6 +49,11 @@ const (
 // shared files directory. It does not support presigned transfer.
 type FSStore struct {
 	dir string
+	// attrMu serialises AttributeOwner so two concurrent agent responses can't
+	// both read an unowned file and each stamp their own owner (last-writer-wins).
+	// The sidecar is single-replica/single-writer (see the deployment doc), so an
+	// in-process lock is a sufficient compare-and-set for metadata attribution.
+	attrMu sync.Mutex
 }
 
 // isReservedName reports whether a directory entry is an API-managed artifact
@@ -60,8 +78,35 @@ func adoptedMeta(name string, info os.FileInfo) FileMeta {
 		Size:        info.Size(),
 		ContentType: ct,
 		UpdatedAt:   info.ModTime().UTC(),
-		UploadedBy:  "agent",
+		UploadedBy:  agentOwner,
+		// An adopted file's bytes already exist on disk, so it is immediately
+		// ready — there is no reserve/upload handshake for agent-dropped files.
+		Status: StatusReady,
 	}
+}
+
+// openNoFollow opens path read-only and refuses to traverse a symlink at the
+// final path component (O_NOFOLLOW → ELOOP). The store directory holds only
+// files whose names are single, separator-free key segments, so blocking a
+// symlinked final component is enough to keep every read inside the store: an
+// agent that drops "output.txt -> /etc/passwd" can neither have it adopted nor
+// served. Callers fstat the returned handle (never re-stat the path) so there is
+// no check/open race.
+func openNoFollow(path string) (*os.File, error) {
+	// #nosec G304 -- key is sanitized to a single path segment and joined under
+	// the store dir; noFollowFlag blocks a symlinked final component on unix.
+	return os.OpenFile(path, os.O_RDONLY|noFollowFlag, 0)
+}
+
+// readFileNoFollow reads an entire file without following a symlinked final
+// component. It is the no-follow analogue of os.ReadFile for metadata sidecars.
+func readFileNoFollow(path string) ([]byte, error) {
+	f, err := openNoFollow(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(f)
 }
 
 // NewFSStore returns a store rooted at dir, creating dir if needed.
@@ -112,9 +157,9 @@ func (s *FSStore) WriteMeta(_ context.Context, meta FileMeta) error {
 }
 
 func (s *FSStore) ReadMeta(_ context.Context, key string) (FileMeta, error) {
-	// API-managed file: explicit sidecar.
-	// #nosec G304 -- key is sanitized; path is confined to the store dir.
-	data, err := os.ReadFile(s.keyPath(key, metaSuffix))
+	// API-managed file: explicit sidecar. Read without following symlinks so a
+	// planted "<key>.meta.json -> /etc/passwd" can't be parsed as our metadata.
+	data, err := readFileNoFollow(s.keyPath(key, metaSuffix))
 	if err == nil {
 		var meta FileMeta
 		if uerr := json.Unmarshal(data, &meta); uerr != nil {
@@ -126,14 +171,42 @@ func (s *FSStore) ReadMeta(_ context.Context, key string) (FileMeta, error) {
 		return FileMeta{}, fmt.Errorf("files: read meta: %w", err)
 	}
 	// Adopted plain file: a regular file with no sidecar (e.g. dropped by the
-	// agent). Synthesize metadata from the filename + stat.
+	// agent). Lstat (not Stat) so a symlink resolves to itself and fails the
+	// IsRegular check — an agent can't get a symlink to a file outside the store
+	// adopted and served.
 	base := filepath.Base(key)
-	if info, statErr := os.Stat(s.plainPath(key)); statErr == nil {
+	if info, statErr := os.Lstat(s.plainPath(key)); statErr == nil {
 		if info.Mode().IsRegular() && !isReservedName(base) {
 			return adoptedMeta(base, info), nil
 		}
 	}
 	return FileMeta{}, ErrNotFound
+}
+
+// AttributeOwner implements FileStore: it assigns owner to key only when the file
+// is currently unowned, immutably. The lock makes the read-decide-write a
+// compare-and-set so concurrent responses in different users' conversations can't
+// both claim the same agent-written file.
+func (s *FSStore) AttributeOwner(ctx context.Context, key, owner string) (FileMeta, error) {
+	s.attrMu.Lock()
+	defer s.attrMu.Unlock()
+
+	meta, err := s.ReadMeta(ctx, key)
+	if err != nil {
+		return FileMeta{}, err
+	}
+	if meta.UploadedBy == owner {
+		return meta, nil // already ours — no-op
+	}
+	if !unowned(meta.UploadedBy) {
+		// Owned by a different real user; ownership is immutable.
+		return FileMeta{}, ErrOwnedByOther
+	}
+	meta.UploadedBy = owner
+	if werr := s.WriteMeta(ctx, meta); werr != nil {
+		return FileMeta{}, werr
+	}
+	return meta, nil
 }
 
 func (s *FSStore) List(ctx context.Context) ([]FileMeta, error) {
@@ -157,6 +230,12 @@ func (s *FSStore) List(ctx context.Context) ([]FileMeta, error) {
 		if err != nil {
 			// A meta file that fails to parse is skipped rather than failing the
 			// whole listing — one bad entry shouldn't hide the rest.
+			continue
+		}
+		if !meta.Ready() {
+			// Reserved/uploading: metadata exists but the blob does not yet (or
+			// never will). Hide it so an abandoned upload isn't listed, attached,
+			// or forwarded as a permanently-broken download chip.
 			continue
 		}
 		out = append(out, meta)
@@ -187,8 +266,12 @@ func (s *FSStore) List(ctx context.Context) ([]FileMeta, error) {
 
 func (s *FSStore) WriteBlob(_ context.Context, key string, r io.Reader) (int64, error) {
 	tmp := s.keyPath(key, blobSuffix) + ".tmp"
+	// O_CREATE|O_EXCL|O_NOFOLLOW: create a fresh temp, never opening (and writing
+	// through) a symlink or pre-existing file planted at the temp path. The final
+	// rename then replaces the destination name atomically, so a symlink planted
+	// at "<key>.blob" is overwritten rather than followed.
 	// #nosec G304 -- key is sanitized; path is confined to the store dir.
-	f, err := os.Create(tmp)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|noFollowFlag, 0o600)
 	if err != nil {
 		return 0, fmt.Errorf("files: create blob: %w", err)
 	}
@@ -210,13 +293,14 @@ func (s *FSStore) WriteBlob(_ context.Context, key string, r io.Reader) (int64, 
 }
 
 func (s *FSStore) OpenBlob(_ context.Context, key string) (io.ReadCloser, error) {
-	// API-managed blob first.
-	// #nosec G304 -- key is sanitized; path is confined to the store dir.
-	f, err := os.Open(s.keyPath(key, blobSuffix))
+	// API-managed blob first. O_NOFOLLOW so a symlinked "<key>.blob" is refused.
+	f, err := openNoFollow(s.keyPath(key, blobSuffix))
 	if err == nil {
 		return f, nil
 	}
-	if !os.IsNotExist(err) {
+	// Missing or a refused symlink falls through to the adopted-file path; only a
+	// real I/O error is surfaced.
+	if !os.IsNotExist(err) && !isSymlinkLoop(err) {
 		return nil, fmt.Errorf("files: open blob: %w", err)
 	}
 	// Adopted plain file: the file itself is the blob.
@@ -224,14 +308,17 @@ func (s *FSStore) OpenBlob(_ context.Context, key string) (io.ReadCloser, error)
 	if isReservedName(base) {
 		return nil, ErrNotFound
 	}
-	// #nosec G304 -- key is sanitized (isReservedName-checked); path is confined to the store dir.
-	pf, perr := os.Open(s.plainPath(key))
+	pf, perr := openNoFollow(s.plainPath(key))
 	if perr != nil {
-		if os.IsNotExist(perr) {
+		// Missing, or a symlink we refuse to follow → not found, so an agent
+		// can't have a link to a file outside the store served as its content.
+		if os.IsNotExist(perr) || isSymlinkLoop(perr) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("files: open blob: %w", perr)
 	}
+	// fstat the open handle (not the path) so the regular-file check can't be
+	// raced by a swap between check and open.
 	if info, serr := pf.Stat(); serr != nil || !info.Mode().IsRegular() {
 		_ = pf.Close()
 		return nil, ErrNotFound

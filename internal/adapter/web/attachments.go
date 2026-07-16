@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 
 	"github.com/astropods/messaging/internal/store/files"
@@ -67,6 +68,11 @@ func resolveAttachment(ctx context.Context, fileStore files.FileStore, key, owne
 		// Owned by another user — deny (do not leak existence beyond "not found").
 		return chatAttachment{}, false
 	}
+	if !meta.Ready() {
+		// A reserved/uploading file has no committed bytes yet; a user can't attach
+		// it (it would ride the message as a permanently-broken download chip).
+		return chatAttachment{}, false
+	}
 	return chatAttachment{
 		Key:         meta.Key,
 		Name:        meta.Name,
@@ -111,12 +117,29 @@ func resolveResponseAttachments(ctx context.Context, fileStore files.FileStore, 
 			out = append(out, chatAttachment{Key: key, Name: key, ContentType: ct, Size: f.GetSizeBytes()})
 			continue
 		}
-		// Attribute the agent's output to the conversation owner if not already
-		// owned (agent-written plain files synthesize UploadedBy="agent").
-		if owner != "" && meta.UploadedBy != owner {
-			meta.UploadedBy = owner
-			if werr := fileStore.WriteMeta(ctx, meta); werr != nil {
-				slog.Warn("[Web] attribute agent file failed", "err", werr)
+		if !meta.Ready() {
+			// The agent referenced a reserved/uploading file that never committed;
+			// don't surface a permanently-broken download chip.
+			slog.Warn("[Web] agent referenced a not-ready file; skipping attachment", "key", key)
+			continue
+		}
+		if owner != "" {
+			// Attribute the agent's output to the conversation owner, but only if
+			// the file is unowned (agent-written). AttributeOwner is compare-and-set:
+			// a file already owned by a *different* user is never transferred into
+			// this conversation, so a shared agent can't move user A's file to user
+			// B by echoing its key. Already-owned-by-owner is a no-op success.
+			attributed, aerr := fileStore.AttributeOwner(ctx, key, owner)
+			switch {
+			case aerr == nil:
+				meta = attributed
+			case errors.Is(aerr, files.ErrOwnedByOther):
+				slog.Warn("[Web] agent returned a file owned by another user; omitting attachment", "key", key)
+				continue
+			default:
+				// Transient attribution failure: render the chip from the file we
+				// read, but it won't be downloadable until attribution succeeds.
+				slog.Warn("[Web] attribute agent file failed", "err", aerr)
 			}
 		}
 		out = append(out, chatAttachment{

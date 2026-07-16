@@ -118,6 +118,10 @@ func (h *Handlers) HandleCreateFile(w http.ResponseWriter, r *http.Request) {
 		ContentType: normalizeContentType(input.ContentType),
 		UpdatedAt:   time.Now().UTC(),
 		UploadedBy:  session.UserID,
+		// Reserved until the blob is committed: the metadata exists (so the client
+		// has a key to PUT to) but the file is not yet listable, downloadable, or
+		// attachable. HandlePutFileContent promotes it to ready.
+		Status: files.StatusReserved,
 	}
 
 	// Prefer a direct-to-store upload when the backend supports it (S3). The
@@ -192,7 +196,29 @@ func (h *Handlers) HandlePutFileContent(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	body := http.MaxBytesReader(w, r.Body, filesMaxUploadBytes)
+	// The declared size (recorded at create) is the hard ceiling for this PUT, not
+	// the coarse global cap. This is what makes the create-time capacity reserve
+	// meaningful: a client can't declare 1 byte to pass the reserve check and then
+	// stream 100 MiB. MaxBytesReader trips at the declared size → 413.
+	limit := meta.Size
+	if limit < 0 || limit > filesMaxUploadBytes {
+		// Defensive: create already bounds this, so a stored size outside the
+		// range means corrupt metadata rather than a valid reservation.
+		http.Error(w, "invalid file size", http.StatusBadRequest)
+		return
+	}
+
+	// Re-check capacity against the declared size immediately before writing, so
+	// uploads created earlier can't collectively overrun the volume if space was
+	// consumed between create and PUT.
+	if usage, uerr := h.fileStore.Usage(r.Context()); uerr == nil && usage.TotalBytes > 0 {
+		if uint64(meta.Size)+filesStorageReserveBytes > usage.AvailableBytes {
+			http.Error(w, "not enough storage available on the deployment volume", http.StatusInsufficientStorage)
+			return
+		}
+	}
+
+	body := http.MaxBytesReader(w, r.Body, limit)
 	n, err := h.fileStore.WriteBlob(r.Context(), key, body)
 	if err != nil {
 		var maxErr *http.MaxBytesError
@@ -201,9 +227,9 @@ func (h *Handlers) HandlePutFileContent(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if errors.Is(err, syscall.ENOSPC) {
-			// The volume filled mid-write (size under-declared, or a concurrent
-			// writer raced us past the create-time check). Surface it as 507 so
-			// the client shows "storage full", not a generic error.
+			// The volume filled mid-write (a concurrent writer raced us past the
+			// recheck above). Surface it as 507 so the client shows "storage
+			// full", not a generic error.
 			http.Error(w, "not enough storage available on the deployment volume", http.StatusInsufficientStorage)
 			return
 		}
@@ -212,7 +238,12 @@ func (h *Handlers) HandlePutFileContent(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Reconcile the recorded size to the bytes actually committed and mark the
+	// file ready: only now is it listable, downloadable, and attachable. Promoting
+	// to ready is the atomic point that turns a reservation into a real file, so an
+	// abandoned or interrupted upload never surfaces as a broken download chip.
 	meta.Size = n
+	meta.Status = files.StatusReady
 	meta.UpdatedAt = time.Now().UTC()
 	if err := h.fileStore.WriteMeta(r.Context(), meta); err != nil {
 		slog.Error("[Web] files put: update meta failed", "err", err)
@@ -253,6 +284,12 @@ func (h *Handlers) HandleGetFileContent(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if !ownsFile(session, meta) {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+	if !meta.Ready() {
+		// Reserved/uploading: no committed bytes to serve. Treat as not found so a
+		// half-created upload isn't downloadable.
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
@@ -384,6 +421,11 @@ func (h *Handlers) HandleGetFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ownsFile(session, meta) {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+	if !meta.Ready() {
+		// A reserved/uploading file isn't a real file yet; don't expose it.
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
