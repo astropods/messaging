@@ -154,7 +154,7 @@ func TestInteractions_SharedSeqInterleaved(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	m1, err := st.AppendMessage(ctx, "conv", "alice", "user", "hello")
+	m1, err := st.AppendMessage(ctx, "conv", "alice", "user", "hello", "")
 	if err != nil {
 		t.Fatalf("msg1: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestInteractions_SharedSeqInterleaved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("int1: %v", err)
 	}
-	m2, err := st.AppendMessage(ctx, "conv", "alice", "assistant", "hi")
+	m2, err := st.AppendMessage(ctx, "conv", "alice", "assistant", "hi", "")
 	if err != nil {
 		t.Fatalf("msg2: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestInteractions_DoNotConsumeMessageCap(t *testing.T) {
 		}
 	}
 
-	m, err := st.AppendMessage(ctx, "conv", "alice", "user", "hi")
+	m, err := st.AppendMessage(ctx, "conv", "alice", "user", "hi", "")
 	if err != nil {
 		t.Fatalf("append message: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestInteractions_PaginationNotFooledByLeadingInteraction(t *testing.T) {
 	if _, err := st.AppendInteraction(ctx, "conv", "alice", renderable("i1")); err != nil {
 		t.Fatalf("append interaction: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, "conv", "alice", "user", "hi"); err != nil {
+	if _, err := st.AppendMessage(ctx, "conv", "alice", "user", "hi", ""); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 

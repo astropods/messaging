@@ -49,14 +49,14 @@ func TestAudit_UpsertAssistantProgressNoOpOnDeleted(t *testing.T) {
 	if _, err := st.EnsureForSend(ctx, "c", "owner", "t"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "hi"); err != nil {
+	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "hi", ""); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	if _, _, err := st.SoftDelete(ctx, "c", "owner"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
-	id, err := st.UpsertAssistantProgress(ctx, "c", "late chunk")
+	id, err := st.UpsertAssistantProgress(ctx, "c", "late chunk", "")
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -77,11 +77,11 @@ func TestAudit_FinalizeTerminalDoesNotBlankCompletedReply(t *testing.T) {
 	if _, err := st.EnsureForSend(ctx, "c", "owner", "t"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "q"); err != nil {
+	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "q", ""); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	// A completed assistant reply.
-	if _, err := st.UpsertAssistantProgress(ctx, "c", "the full answer"); err != nil {
+	if _, err := st.UpsertAssistantProgress(ctx, "c", "the full answer", ""); err != nil {
 		t.Fatalf("assistant: %v", err)
 	}
 
@@ -110,7 +110,7 @@ func TestAudit_FinalizeTerminalResolvesStreamingOnErroredTurn(t *testing.T) {
 	if _, err := st.EnsureForSend(ctx, "c", "owner", "t"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "q"); err != nil {
+	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "q", ""); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	// Precondition: derived streaming true (last is user).
@@ -135,7 +135,7 @@ func TestAudit_FinalizeStoppedNoOpOnDeleted(t *testing.T) {
 	if _, err := st.EnsureForSend(ctx, "c", "owner", "t"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "q"); err != nil {
+	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "q", ""); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	if _, _, err := st.SoftDelete(ctx, "c", "owner"); err != nil {
@@ -161,20 +161,20 @@ func TestAudit_MessageLimitEnforced(t *testing.T) {
 	}
 	// Fill user turns up to the reserved cap (one slot held back for a reply).
 	for i := 0; i < MaxMessagesPerConversation-1; i++ {
-		if _, err := st.AppendMessage(ctx, "c", "owner", "user", "m"); err != nil {
+		if _, err := st.AppendMessage(ctx, "c", "owner", "user", "m", ""); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
 	// A further user turn is rejected — no room left for its assistant reply.
-	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "over"); !errors.Is(err, ErrMessageLimitReached) {
+	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "over", ""); !errors.Is(err, ErrMessageLimitReached) {
 		t.Fatalf("user append at reserved cap: want ErrMessageLimitReached, got %v", err)
 	}
 	// The reserved final slot still admits one assistant reply (hard cap reached).
-	if _, err := st.AppendMessage(ctx, "c", "owner", "assistant", "reply"); err != nil {
+	if _, err := st.AppendMessage(ctx, "c", "owner", "assistant", "reply", ""); err != nil {
 		t.Fatalf("assistant append into reserved slot: %v", err)
 	}
 	// Now truly full: even an assistant append is rejected.
-	if _, err := st.AppendMessage(ctx, "c", "owner", "assistant", "over"); !errors.Is(err, ErrMessageLimitReached) {
+	if _, err := st.AppendMessage(ctx, "c", "owner", "assistant", "over", ""); !errors.Is(err, ErrMessageLimitReached) {
 		t.Fatalf("assistant append past hard cap: want ErrMessageLimitReached, got %v", err)
 	}
 	if msgs, _ := st.ListMessages(ctx, "c"); len(msgs) != MaxMessagesPerConversation {
@@ -191,7 +191,7 @@ func TestAudit_ContentTruncatedAtRuneCap(t *testing.T) {
 	}
 	// Multibyte runes so a byte-based cut would corrupt UTF-8.
 	oversized := strings.Repeat("é", MaxMessageContentRunes+50)
-	if _, err := st.AppendMessage(ctx, "c", "owner", "user", oversized); err != nil {
+	if _, err := st.AppendMessage(ctx, "c", "owner", "user", oversized, ""); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	msgs, _ := st.ListMessages(ctx, "c")
@@ -237,7 +237,7 @@ func TestAudit_ConcurrentAppendsAcrossConversations(t *testing.T) {
 			wg.Add(1)
 			go func(cid string) {
 				defer wg.Done()
-				if _, err := st.AppendMessage(ctx, cid, "owner", "user", "m"); err != nil {
+				if _, err := st.AppendMessage(ctx, cid, "owner", "user", "m", ""); err != nil {
 					errCh <- err
 				}
 			}("c" + strconv.Itoa(c))
@@ -274,7 +274,7 @@ func TestAudit_ConcurrentFinalizeAndSoftDelete(t *testing.T) {
 		if _, err := st.EnsureForSend(ctx, cid, "owner", "t"); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		if _, err := st.AppendMessage(ctx, cid, "owner", "user", "q"); err != nil {
+		if _, err := st.AppendMessage(ctx, cid, "owner", "user", "q", ""); err != nil {
 			t.Fatalf("seed user: %v", err)
 		}
 		var wg sync.WaitGroup
@@ -307,7 +307,7 @@ func TestAudit_ListExcludesDeletedAndOrdersByRecency(t *testing.T) {
 		if _, err := st.EnsureForSend(ctx, id, "owner", id); err != nil {
 			t.Fatalf("seed %s: %v", id, err)
 		}
-		if _, err := st.AppendMessage(ctx, id, "owner", "user", "hi"); err != nil {
+		if _, err := st.AppendMessage(ctx, id, "owner", "user", "hi", ""); err != nil {
 			t.Fatalf("seed msg %s: %v", id, err)
 		}
 	}
@@ -348,7 +348,7 @@ func TestAudit_ListExcludesEmptyConversations(t *testing.T) {
 	if _, err := st.EnsureForSend(ctx, "full", "owner", "Full"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, "full", "owner", "user", "hi"); err != nil {
+	if _, err := st.AppendMessage(ctx, "full", "owner", "user", "hi", ""); err != nil {
 		t.Fatalf("seed msg: %v", err)
 	}
 
@@ -370,11 +370,11 @@ func TestAudit_FinalizeStoppedGrowsButNeverShrinks(t *testing.T) {
 	if _, err := st.EnsureForSend(ctx, "c", "owner", "t"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "q"); err != nil {
+	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "q", ""); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	// Progressive snapshot (lags what the user saw).
-	if _, err := st.UpsertAssistantProgress(ctx, "c", "partial so"); err != nil {
+	if _, err := st.UpsertAssistantProgress(ctx, "c", "partial so", ""); err != nil {
 		t.Fatalf("progress: %v", err)
 	}
 

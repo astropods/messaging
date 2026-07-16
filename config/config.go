@@ -36,8 +36,23 @@ type Config struct {
 	// Chat persistence (deployment-local SQLite for the platform chat UI)
 	Chat ChatConfig
 
+	// Files (deployment-local file upload/download on the shared volume)
+	Files FilesConfig
+
 	// Logging
 	LogLevel string
+}
+
+// FilesConfig holds the agent files API configuration.
+type FilesConfig struct {
+	// Dir is the directory the files API reads/writes. Empty disables the
+	// feature (e.g. local dev). In deployed sidecars astro-server points this at
+	// a subtree of the agent's shared persistent volume, so files survive pod
+	// reschedules and are visible to the agent under /data/files.
+	Dir string
+	// Backend selects the storage implementation: "fs" (default) uses Dir; "s3"
+	// is reserved for a future presigned-object implementation.
+	Backend string
 }
 
 // ChatConfig holds deployment-local chat persistence configuration.
@@ -242,6 +257,14 @@ func Load() (*Config, error) {
 	// unset locally, which disables persistence.
 	cfg.Chat = ChatConfig{
 		DBPath: getEnv("CHAT_DB_PATH", ""),
+	}
+
+	// Files: astro-server points FILES_DIR at a subtree of the agent's shared
+	// persistent volume in deployed sidecars; unset locally, which disables the
+	// files API.
+	cfg.Files = FilesConfig{
+		Dir:     getEnv("FILES_DIR", ""),
+		Backend: getEnv("FILES_BACKEND", "fs"),
 	}
 
 	return cfg, nil

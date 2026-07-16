@@ -17,6 +17,7 @@ import (
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/grpc"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/files"
 	"github.com/astropods/messaging/internal/store/sqlite"
 	"github.com/astropods/messaging/internal/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -147,6 +148,29 @@ func main() {
 		slog.Info("Chat persistence disabled (CHAT_DB_PATH unset)")
 	}
 
+	// Initialize the agent files store (upload/download). Disabled when FILES_DIR
+	// is unset (local dev). In deployed sidecars the dir is a subtree of the
+	// agent's shared persistent volume, so files survive reschedules and are
+	// visible to the agent under /data/files.
+	var fileStore files.FileStore
+	if cfg.Files.Dir != "" {
+		switch cfg.Files.Backend {
+		case "", "fs":
+			fs, err := files.NewFSStore(cfg.Files.Dir)
+			if err != nil {
+				slog.Error("Failed to initialize file store", "err", err, "dir", cfg.Files.Dir)
+				os.Exit(1)
+			}
+			fileStore = fs
+			slog.Info("File store initialized", "dir", cfg.Files.Dir, "backend", "fs")
+		default:
+			slog.Error("Unknown FILES_BACKEND", "backend", cfg.Files.Backend)
+			os.Exit(1)
+		}
+	} else {
+		slog.Info("Files API disabled (FILES_DIR unset)")
+	}
+
 	// Initialize gRPC server (if enabled)
 	var grpcServer *grpc.Server
 	if cfg.GRPC.Enabled {
@@ -161,7 +185,7 @@ func main() {
 	authorizer := buildAuthorizer(cfg.Authz)
 
 	// Initialize adapters
-	adapters := initializeAdapters(ctx, cfg, threadStore, agentConfigStore, authorizer, chatStore)
+	adapters := initializeAdapters(ctx, cfg, threadStore, agentConfigStore, authorizer, chatStore, fileStore)
 	if len(adapters) == 0 && !cfg.GRPC.Enabled {
 		slog.Error("No adapters enabled or configured and gRPC is disabled")
 		os.Exit(1)
@@ -262,7 +286,7 @@ func main() {
 }
 
 // initializeAdapters creates and initializes adapters based on configuration
-func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer, chatStore *sqlite.Store) map[string]adapter.Adapter {
+func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer, chatStore *sqlite.Store, fileStore files.FileStore) map[string]adapter.Adapter {
 	adapters := make(map[string]adapter.Adapter)
 
 	// Initialize Slack adapter if enabled
@@ -317,6 +341,7 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			webAdapter.SetAgentConfigStore(agentConfigStore)
 			webAdapter.SetAuthorizer(authorizer)
 			webAdapter.SetChatStore(chatStore)
+			webAdapter.SetFileStore(fileStore)
 			adapters["web"] = webAdapter
 			slog.Info("Web adapter initialized")
 		}

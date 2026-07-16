@@ -25,9 +25,10 @@ const (
 )
 
 type chatMessageResponse struct {
-	ID      string `json:"id"`
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	ID          string           `json:"id"`
+	Role        string           `json:"role"`
+	Content     string           `json:"content"`
+	Attachments []chatAttachment `json:"attachments,omitempty"`
 }
 
 type chatConversationSummary struct {
@@ -143,7 +144,12 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 
 	messages := make([]chatMessageResponse, 0, len(window))
 	for _, m := range window {
-		messages = append(messages, chatMessageResponse{ID: m.ID, Role: m.Role, Content: m.Content})
+		messages = append(messages, chatMessageResponse{
+			ID:          m.ID,
+			Role:        m.Role,
+			Content:     m.Content,
+			Attachments: unmarshalAttachments(m.Attachments),
+		})
 	}
 
 	writeJSON(w, http.StatusOK, getChatConversationResponse{

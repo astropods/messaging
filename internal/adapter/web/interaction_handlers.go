@@ -179,7 +179,7 @@ func (h *Handlers) resolveDegradedRespond(ctx context.Context, conversationID st
 	// one isn't given an orphan row (or resurrected via EnsureForSend).
 	if h.chatStore != nil {
 		if conv, err := h.chatStore.Get(ctx, conversationID); err == nil && conv != nil {
-			if _, err := h.chatStore.AppendMessage(ctx, conversationID, session.UserID, "user", text); err != nil {
+			if _, err := h.chatStore.AppendMessage(ctx, conversationID, session.UserID, "user", text, ""); err != nil {
 				slog.Error("[Web] chat persist degraded respond failed", "conversation", conversationID, "err", err)
 			}
 		}

@@ -67,8 +67,12 @@ COPY --from=builder /app/messaging .
 
 # Copy config (optional - can be overridden by env vars)
 
-# Set ownership and switch to non-root user
-RUN chown -R astro:astro /app
+# Pre-create the shared data dir owned by the runtime user. In Kubernetes the
+# volume mount + fsGroup govern ownership, but under docker compose a fresh named
+# volume is seeded from the first mounting container's image — so owning /data
+# here lets the non-root sidecar create the files API directory on the shared
+# volume it shares with the agent.
+RUN mkdir -p /data && chown -R astro:astro /app /data
 USER astro
 
 # Expose ports: 8080 (HTTP/SSE), 9090 (gRPC), 9091 (Prometheus metrics)

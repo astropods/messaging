@@ -50,6 +50,9 @@ type Message struct {
 	Role    string
 	Content string
 	Seq     int
+	// Attachments is the JSON-encoded array of file attachments on this turn
+	// (user uploads or agent-produced files). Empty string means none.
+	Attachments string
 }
 
 // Store wraps the SQLite database. A single connection serializes writes, which
@@ -110,6 +113,7 @@ CREATE TABLE IF NOT EXISTS messages (
 	content         TEXT NOT NULL,
 	seq             INTEGER NOT NULL,
 	created_at      INTEGER NOT NULL,
+	attachments     TEXT NOT NULL DEFAULT '',
 	UNIQUE(conversation_id, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conv
@@ -133,6 +137,42 @@ CREATE INDEX IF NOT EXISTS idx_interactions_pending
 `
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("chat sqlite schema: %w", err)
+	}
+	// Migrate existing volumes: the messages.attachments column was added after
+	// the initial schema shipped. There is no versioned migration framework, and
+	// SQLite has no ADD COLUMN IF NOT EXISTS, so add it only when absent.
+	if err := ensureColumn(db, "messages", "attachments", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensureColumn adds a column to a table if it is not already present. Used for
+// additive migrations on volumes provisioned before the column existed.
+func ensureColumn(db *sql.DB, table, column, definition string) error {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("chat sqlite inspect %s: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			cid, notnull, pk int
+			name, ctype      string
+			dfltValue        sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return fmt.Errorf("chat sqlite inspect %s: %w", table, err)
+		}
+		if name == column {
+			return nil // already present
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("chat sqlite inspect %s: %w", table, err)
+	}
+	if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)); err != nil {
+		return fmt.Errorf("chat sqlite add column %s.%s: %w", table, column, err)
 	}
 	return nil
 }
@@ -300,6 +340,10 @@ func (s *Store) ListByUser(ctx context.Context, userID string) ([]Conversation, 
 // on an interaction the user can no longer answer. It returns the ids of the
 // interactions it cancelled (for the caller to deliver a CANCEL response to the
 // agent) and whether the conversation was deleted.
+//
+// The message bodies are left in place locally and the conversation's Langfuse
+// traces are intentionally NOT erased — see the conundrum note in
+// HandleDeleteChatConversation.
 func (s *Store) SoftDelete(ctx context.Context, conversationID, userID string) (cancelled []string, deleted bool, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -363,7 +407,7 @@ func (s *Store) SoftDelete(ctx context.Context, conversationID, userID string) (
 // ListMessages returns the full ordered thread for one conversation.
 func (s *Store) ListMessages(ctx context.Context, conversationID string) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, role, content, seq
+		SELECT id, role, content, seq, attachments
 		FROM messages
 		WHERE conversation_id = ?
 		ORDER BY seq ASC`,
@@ -377,7 +421,7 @@ func (s *Store) ListMessages(ctx context.Context, conversationID string) ([]Mess
 	out := make([]Message, 0, 32)
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Seq); err != nil {
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Seq, &m.Attachments); err != nil {
 			return nil, fmt.Errorf("chatstore list messages scan: %w", err)
 		}
 		out = append(out, m)
@@ -416,7 +460,7 @@ func (s *Store) PageMessages(ctx context.Context, conversationID string, limit, 
 	}
 	// Fetch the newest `limit` rows (optionally strictly older than beforeSeq)
 	// descending, then reverse to ascending for the caller.
-	query := `SELECT id, role, content, seq FROM messages WHERE conversation_id = ?`
+	query := `SELECT id, role, content, seq, attachments FROM messages WHERE conversation_id = ?`
 	args := []any{conversationID}
 	if beforeSeq > 0 {
 		query += ` AND seq < ?`
@@ -432,7 +476,7 @@ func (s *Store) PageMessages(ctx context.Context, conversationID string, limit, 
 	defer rows.Close() //nolint:errcheck
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Seq); err != nil {
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Seq, &m.Attachments); err != nil {
 			return nil, false, 0, "", fmt.Errorf("chatstore page messages scan: %w", err)
 		}
 		msgs = append(msgs, m)
@@ -468,7 +512,7 @@ func (s *Store) PageMessages(ctx context.Context, conversationID string, limit, 
 
 // AppendMessage appends one message to a conversation, assigning the next
 // sequence number. Content is truncated to MaxMessageContentRunes.
-func (s *Store) AppendMessage(ctx context.Context, conversationID, userID, role, content string) (Message, error) {
+func (s *Store) AppendMessage(ctx context.Context, conversationID, userID, role, content, attachmentsJSON string) (Message, error) {
 	// Assign seq and insert atomically in one transaction. A bare
 	// SELECT MAX(seq)+1 followed by a separate INSERT is not atomic even with
 	// MaxOpenConns(1) — another writer can grab the connection between the two
@@ -482,7 +526,7 @@ func (s *Store) AppendMessage(ctx context.Context, conversationID, userID, role,
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful commit
 
-	msg, err := appendMessageTx(ctx, tx, conversationID, userID, role, content)
+	msg, err := appendMessageTx(ctx, tx, conversationID, userID, role, content, attachmentsJSON)
 	if err != nil {
 		return Message{}, err
 	}
@@ -516,7 +560,7 @@ func nextSeqTx(ctx context.Context, tx *sql.Tx, conversationID string) (int, err
 // connection), so the read-then-insert is atomic against concurrent writers —
 // this is what lets UpsertAssistantProgress and FinalizeStopped fold their
 // role-check and append into one tx and not race each other into two rows.
-func appendMessageTx(ctx context.Context, tx *sql.Tx, conversationID, userID, role, content string) (Message, error) {
+func appendMessageTx(ctx context.Context, tx *sql.Tx, conversationID, userID, role, content, attachmentsJSON string) (Message, error) {
 	content = TruncateRunes(content, MaxMessageContentRunes)
 
 	nextSeq, err := nextSeqTx(ctx, tx, conversationID)
@@ -544,11 +588,11 @@ func appendMessageTx(ctx context.Context, tx *sql.Tx, conversationID, userID, ro
 		return Message{}, ErrMessageLimitReached
 	}
 
-	msg := Message{ID: uuid.NewString(), Role: role, Content: content, Seq: nextSeq}
+	msg := Message{ID: uuid.NewString(), Role: role, Content: content, Seq: nextSeq, Attachments: attachmentsJSON}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO messages (id, conversation_id, user_id, role, content, seq, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		msg.ID, conversationID, userID, role, content, nextSeq, time.Now().UnixMilli(),
+		INSERT INTO messages (id, conversation_id, user_id, role, content, seq, created_at, attachments)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		msg.ID, conversationID, userID, role, content, nextSeq, time.Now().UnixMilli(), attachmentsJSON,
 	); err != nil {
 		return Message{}, fmt.Errorf("chatstore append message: %w", err)
 	}
@@ -565,7 +609,7 @@ func appendMessageTx(ctx context.Context, tx *sql.Tx, conversationID, userID, ro
 // connection, so this can't interleave with FinalizeStopped's own tx — that is
 // what prevents a concurrent stop and streamed chunk from both reading
 // lastRole=="user" and each appending a duplicate assistant row.
-func (s *Store) UpsertAssistantProgress(ctx context.Context, conversationID, content string) (string, error) {
+func (s *Store) UpsertAssistantProgress(ctx context.Context, conversationID, content, attachmentsJSON string) (string, error) {
 	content = TruncateRunes(content, MaxMessageContentRunes)
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -607,11 +651,17 @@ func (s *Store) UpsertAssistantProgress(ctx context.Context, conversationID, con
 
 	id := lastID
 	if lastRole == "assistant" {
-		if _, err := tx.ExecContext(ctx, `UPDATE messages SET content = ? WHERE id = ?`, content, lastID); err != nil {
+		// Attachments arrive on the END chunk; a mid-stream text update carries
+		// none, and must not clobber attachments already written on a prior call.
+		if attachmentsJSON != "" {
+			if _, err := tx.ExecContext(ctx, `UPDATE messages SET content = ?, attachments = ? WHERE id = ?`, content, attachmentsJSON, lastID); err != nil {
+				return "", fmt.Errorf("chatstore assistant progress update: %w", err)
+			}
+		} else if _, err := tx.ExecContext(ctx, `UPDATE messages SET content = ? WHERE id = ?`, content, lastID); err != nil {
 			return "", fmt.Errorf("chatstore assistant progress update: %w", err)
 		}
 	} else {
-		msg, appendErr := appendMessageTx(ctx, tx, conversationID, "", "assistant", content)
+		msg, appendErr := appendMessageTx(ctx, tx, conversationID, "", "assistant", content, attachmentsJSON)
 		if appendErr != nil {
 			return "", appendErr
 		}
@@ -648,7 +698,7 @@ func (s *Store) AppendAssistantMessage(ctx context.Context, conversationID, cont
 		return "", fmt.Errorf("chatstore append assistant conv check: %w", err)
 	}
 
-	msg, err := appendMessageTx(ctx, tx, conversationID, "", "assistant", content)
+	msg, err := appendMessageTx(ctx, tx, conversationID, "", "assistant", content, "")
 	if err != nil {
 		return "", err
 	}
@@ -707,7 +757,7 @@ func (s *Store) FinalizeStopped(ctx context.Context, conversationID, userID, par
 
 	switch {
 	case lastRole == "user":
-		if _, err := appendMessageTx(ctx, tx, conversationID, "", "assistant", partial); err != nil {
+		if _, err := appendMessageTx(ctx, tx, conversationID, "", "assistant", partial, ""); err != nil {
 			return false, err
 		}
 	case lastRole == "assistant" && len(partial) > len(lastContent):
@@ -764,7 +814,7 @@ func (s *Store) FinalizeTerminal(ctx context.Context, conversationID, partial st
 	if lastRole != "user" {
 		return false, nil
 	}
-	if _, err := appendMessageTx(ctx, tx, conversationID, "", "assistant", partial); err != nil {
+	if _, err := appendMessageTx(ctx, tx, conversationID, "", "assistant", partial, ""); err != nil {
 		return false, err
 	}
 	if err := touchConversationTx(ctx, tx, conversationID); err != nil {

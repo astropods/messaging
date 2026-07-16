@@ -79,9 +79,9 @@ func (a *WebAdapter) emitDegradedPrompt(ctx context.Context, conversationID stri
 		return false
 	}
 	responseID := uuid.NewString()
-	a.connManager.Broadcast(conversationID, NewChunkEvent(&pb.ContentChunk{Type: pb.ContentChunk_START}, responseID))
-	a.connManager.Broadcast(conversationID, NewChunkEvent(&pb.ContentChunk{Type: pb.ContentChunk_DELTA, Content: msg}, responseID))
-	a.connManager.Broadcast(conversationID, NewChunkEvent(&pb.ContentChunk{Type: pb.ContentChunk_END}, responseID))
+	a.connManager.Broadcast(conversationID, NewChunkEvent(&pb.ContentChunk{Type: pb.ContentChunk_START}, responseID, nil))
+	a.connManager.Broadcast(conversationID, NewChunkEvent(&pb.ContentChunk{Type: pb.ContentChunk_DELTA, Content: msg}, responseID, nil))
+	a.connManager.Broadcast(conversationID, NewChunkEvent(&pb.ContentChunk{Type: pb.ContentChunk_END}, responseID, nil))
 	a.connManager.Broadcast(conversationID, NewFinishEvent(responseID))
 
 	// Append, not upsert: don't overwrite a reply the agent streamed earlier this turn.
@@ -91,17 +91,6 @@ func (a *WebAdapter) emitDegradedPrompt(ctx context.Context, conversationID stri
 		}
 	}
 	return true
-}
-
-func (a *WebAdapter) conversationOwner(ctx context.Context, conversationID string) string {
-	if a.chatStore == nil {
-		return ""
-	}
-	conv, err := a.chatStore.Get(ctx, conversationID)
-	if err != nil || conv == nil {
-		return ""
-	}
-	return conv.UserID
 }
 
 // ownsConversation reports whether sender is the authorized responder. It fails
