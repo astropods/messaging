@@ -1,11 +1,13 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
@@ -404,6 +406,50 @@ func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// streamTurnTerminal reports whether conversationID's latest turn has already
+// finished — the assistant reply is persisted and this sidecar is not actively
+// streaming it. It mirrors the assistant_streaming derivation in
+// HandleGetChatConversation so a subscribe-time replay agrees with what a
+// history GET (and therefore a page refresh) would show.
+//
+// Returns false whenever the state is unknown or the turn may still be live (no
+// chat store, an active local stream, an unreadable store, or the latest
+// message still the user's), so a finish is only ever replayed for a turn that
+// genuinely ended.
+func (h *Handlers) streamTurnTerminal(ctx context.Context, conversationID string) bool {
+	if h.chatStore == nil {
+		return false
+	}
+	// An actively streaming turn delivers its finish over the live broadcast;
+	// replaying one here would end the turn early.
+	if h.turns != nil && h.turns.isStreaming(conversationID) {
+		return false
+	}
+	_, _, _, lastRole, err := h.chatStore.PageMessages(ctx, conversationID, 1, 0)
+	if err != nil {
+		slog.Error("[Web] chat stream terminal-state check failed", "conversation", conversationID, "err", err)
+		return false
+	}
+	// Latest message is the assistant's => the reply landed and the turn is over.
+	// "user" (awaiting the first chunk) or "" (empty thread) => still in flight.
+	return lastRole == "assistant"
+}
+
+// parseLastEventID reads the SSE resume cursor the browser replays on an
+// EventSource reconnect. Returns (0, false) when absent or unparseable, so the
+// caller treats it as a fresh subscribe rather than resuming from a bogus point.
+func parseLastEventID(r *http.Request) (uint64, bool) {
+	raw := r.Header.Get("Last-Event-ID")
+	if raw == "" {
+		return 0, false
+	}
+	seq, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return seq, true
+}
+
 // HandleStream handles GET /api/conversations/{id}/stream (SSE)
 func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -467,8 +513,18 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 		LastEventAt:    time.Now(),
 	}
 
-	// Register connection
-	h.connManager.Add(conn)
+	// Register connection. EventSource replays its Last-Event-ID header on
+	// reconnect; when present, register and atomically snapshot the events missed
+	// since that id so no event is both replayed and delivered live (see
+	// AddWithResume). When absent — a fresh subscribe — register normally and rely
+	// on the terminal-state replay below.
+	lastEventID, resuming := parseLastEventID(r)
+	var missed []SSEEvent
+	if resuming {
+		missed = h.connManager.AddWithResume(conn, lastEventID)
+	} else {
+		h.connManager.Add(conn)
+	}
 	defer h.connManager.Remove(conversationID, connID)
 
 	// Send connected event
@@ -476,7 +532,46 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprint(w, connectedEvent.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
 	flusher.Flush()
 
-	slog.Debug(fmt.Sprintf("[Web] SSE stream started: connection=%q, conversation=%q, user=%q", connID, conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
+	slog.Debug(fmt.Sprintf("[Web] SSE stream started: connection=%q, conversation=%q, user=%q, resume=%v", connID, conversationID, session.UserID, resuming)) //nolint:gosec // G706 false positive: %q escapes control characters
+
+	if resuming {
+		// Replay everything missed while disconnected, in order, before any live
+		// event. Their ids advance the client's Last-Event-ID so a later reconnect
+		// resumes from the right point. If the turn is still live the loop below
+		// then delivers the rest; if it already ended, the replay carried the
+		// finish and the client will close.
+		replayedTerminal := false
+		for _, ev := range missed {
+			_, _ = fmt.Fprint(w, ev.Format()) //nolint:gosec // buffered SSE events are internally constructed
+			if ev.Event == EventFinish || ev.Event == EventError {
+				replayedTerminal = true
+			}
+		}
+		flusher.Flush()
+		if len(missed) > 0 {
+			slog.Debug(fmt.Sprintf("[Web] SSE resumed: connection=%q, conversation=%q, replayed=%d", connID, conversationID, len(missed))) //nolint:gosec // G706 false positive
+		}
+		// Safety net for a cursor that predates the retained buffer (or a buffer
+		// evicted under memory pressure): if the replay didn't carry a terminal
+		// event but the store shows the turn ended, release the client anyway.
+		if !replayedTerminal && h.streamTurnTerminal(ctx, conversationID) {
+			finishEvent := NewFinishEvent("")
+			_, _ = fmt.Fprint(w, finishEvent.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
+			flusher.Flush()
+			return
+		}
+	} else if h.streamTurnTerminal(ctx, conversationID) {
+		// Fresh subscribe to a turn that already finished — a fast reply that
+		// completed inside the send→subscribe window. No live broadcast will
+		// arrive, so replay a terminal finish; the reply is already persisted and
+		// the client reconciles the body from history on finish.
+		finishEvent := NewFinishEvent("")
+		_, _ = fmt.Fprint(w, finishEvent.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
+		flusher.Flush()
+		slog.Debug(fmt.Sprintf("[Web] SSE replayed finish for already-finished turn: connection=%q, conversation=%q", connID, conversationID)) //nolint:gosec // G706 false positive: %q escapes control characters
+		return
+	}
+
 	// Event loop
 	for {
 		select {
