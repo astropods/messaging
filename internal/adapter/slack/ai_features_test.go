@@ -244,6 +244,51 @@ func TestSlackAdapter_HandleAgentResponse_ContentEnd_PostsMessage(t *testing.T) 
 	}
 }
 
+func TestSlackAdapter_HandleAgentResponse_ContentEnd_PostsTraceID(t *testing.T) {
+	a, calls, cleanup := newTestSlackAdapter(t)
+	defer cleanup()
+
+	const (
+		convID      = "C123-1234567890.000001"
+		traceparent = "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01"
+		traceID     = "4bf92f3577b34da6a3ce929d0e0e4736"
+	)
+
+	for _, chunk := range []*pb.ContentChunk{
+		{Type: pb.ContentChunk_START},
+		{Type: pb.ContentChunk_DELTA, Content: "Here is my traced answer"},
+		{Type: pb.ContentChunk_END},
+	} {
+		response := &pb.AgentResponse{
+			ConversationId: convID,
+			Payload:        &pb.AgentResponse_Content{Content: chunk},
+		}
+		if chunk.Type == pb.ContentChunk_DELTA {
+			response.TraceContext = &pb.TraceContext{Traceparent: traceparent}
+		}
+		if err := a.HandleAgentResponse(t.Context(), response); err != nil {
+			t.Fatalf("HandleAgentResponse failed: %v", err)
+		}
+	}
+
+	for _, call := range *calls {
+		if call.Method != "/chat.postMessage" {
+			continue
+		}
+		if footer := firstContextFooter(t, call.Body); !strings.Contains(footer, "Trace ID: "+traceID) {
+			t.Fatalf("first context footer = %q, want trace ID %q", footer, traceID)
+		}
+		a.bufferMu.Lock()
+		_, exists := a.traceBuffers[convID]
+		a.bufferMu.Unlock()
+		if exists {
+			t.Fatal("expected trace buffer to be deleted after END")
+		}
+		return
+	}
+	t.Fatal("expected chat.postMessage call for END chunk")
+}
+
 // When the thread parent has been deleted, Slack would silently promote a
 // threaded reply to a top-level channel message. canPostToThread detects the
 // missing parent (thread_not_found) and the adapter skips the post entirely
@@ -455,8 +500,17 @@ func TestSlackAdapter_HandleAgentResponse_ErrorPostsWarning(t *testing.T) {
 	a, calls, cleanup := newTestSlackAdapter(t)
 	defer cleanup()
 
+	const conversationID = "C123-1234567890.000001"
+	a.bufferMu.Lock()
+	a.contentBuffers[conversationID] = "partial"
+	a.traceBuffers = make(map[string]*pb.TraceContext)
+	a.traceBuffers[conversationID] = &pb.TraceContext{
+		Traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+	}
+	a.bufferMu.Unlock()
+
 	response := &pb.AgentResponse{
-		ConversationId: "C123-1234567890.000001",
+		ConversationId: conversationID,
 		Payload: &pb.AgentResponse_Error{
 			Error: &pb.ErrorResponse{
 				Code:    pb.ErrorResponse_AGENT_ERROR,
@@ -480,6 +534,63 @@ func TestSlackAdapter_HandleAgentResponse_ErrorPostsWarning(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected chat.postMessage call for error response")
+	}
+
+	a.bufferMu.Lock()
+	defer a.bufferMu.Unlock()
+	if _, ok := a.contentBuffers[conversationID]; ok {
+		t.Fatal("expected content buffer to be deleted after agent error")
+	}
+	if _, ok := a.traceBuffers[conversationID]; ok {
+		t.Fatal("expected trace buffer to be deleted after agent error")
+	}
+}
+
+func TestSlackAdapter_HandleContentChunk_ConcurrentConversations(t *testing.T) {
+	a := &SlackAdapter{}
+	traceContext := &pb.TraceContext{
+		Traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+	}
+
+	const (
+		conversations = 64
+		chunks        = 100
+	)
+	var wg sync.WaitGroup
+	for i := 0; i < conversations; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			conversationID := fmt.Sprintf("C123-%d", i)
+			if err := a.handleContentChunk(t.Context(), conversationID, &pb.ContentChunk{Type: pb.ContentChunk_START}, nil); err != nil {
+				t.Errorf("START failed: %v", err)
+				return
+			}
+			for j := 0; j < chunks; j++ {
+				if err := a.handleContentChunk(t.Context(), conversationID, &pb.ContentChunk{Type: pb.ContentChunk_DELTA, Content: "x"}, traceContext); err != nil {
+					t.Errorf("DELTA failed: %v", err)
+					return
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	a.bufferMu.Lock()
+	defer a.bufferMu.Unlock()
+	if len(a.contentBuffers) != conversations {
+		t.Fatalf("content buffer count = %d, want %d", len(a.contentBuffers), conversations)
+	}
+	if len(a.traceBuffers) != conversations {
+		t.Fatalf("trace buffer count = %d, want %d", len(a.traceBuffers), conversations)
+	}
+	for conversationID, content := range a.contentBuffers {
+		if len(content) != chunks {
+			t.Errorf("content length for %s = %d, want %d", conversationID, len(content), chunks)
+		}
+		if got := a.traceBuffers[conversationID]; got == nil || got.Traceparent != traceContext.Traceparent {
+			t.Errorf("trace context for %s = %+v, want %+v", conversationID, got, traceContext)
+		}
 	}
 }
 

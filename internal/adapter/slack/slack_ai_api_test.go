@@ -424,6 +424,64 @@ func TestSlackAIClient_PostMessageWithFeedback_NoDevMode_WithAgentID(t *testing.
 	}
 }
 
+func TestSlackAIClient_PostMessageWithFeedback_TraceAboveAgentID(t *testing.T) {
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "9999.000001"})
+	}))
+	defer server.Close()
+
+	client := &SlackAIClient{
+		botToken:   "xoxb-test-token",
+		agentID:    "agent-xyz-123",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+	traceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+	traceContext := &pb.TraceContext{
+		Traceparent: "00-" + traceID + "-00f067aa0ba902b7-01",
+	}
+	if _, err := client.PostMessageWithFeedback(t.Context(), "C123", "Hello", "1234.000001", traceContext); err != nil {
+		t.Fatalf("PostMessageWithFeedback: %v", err)
+	}
+
+	if got, want := firstContextFooter(t, capturedBody), "Trace ID: "+traceID+"\nAgent ID: agent-xyz-123"; got != want {
+		t.Fatalf("footer = %q, want %q", got, want)
+	}
+}
+
+func TestSlackAIClient_PostMessageWithFeedback_DevMode_TraceAboveEnvironmentAndAgentID(t *testing.T) {
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "9999.000001"})
+	}))
+	defer server.Close()
+
+	client := &SlackAIClient{
+		botToken:   "xoxb-test-token",
+		devMode:    true,
+		agentID:    "agent-xyz-123",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+	traceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+	traceContext := &pb.TraceContext{
+		Traceparent: "00-" + traceID + "-00f067aa0ba902b7-01",
+	}
+	if _, err := client.PostMessageWithFeedback(t.Context(), "C123", "Hello", "1234.000001", traceContext); err != nil {
+		t.Fatalf("PostMessageWithFeedback: %v", err)
+	}
+
+	want := "Trace ID: " + traceID + "\n:test_tube: Sent from dev environment — Agent ID: agent-xyz-123"
+	if got := firstContextFooter(t, capturedBody); got != want {
+		t.Fatalf("footer = %q, want %q", got, want)
+	}
+}
+
 func TestSlackAIClient_PostMessageWithFeedback_NoDevMode(t *testing.T) {
 	var capturedBody map[string]any
 	client, cleanup := newTestAIClient(func(w http.ResponseWriter, r *http.Request) {

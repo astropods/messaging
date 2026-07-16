@@ -26,6 +26,7 @@ func (a *SlackAdapter) HandleAgentResponse(ctx context.Context, response *pb.Age
 	case *pb.AgentResponse_ThreadMetadata:
 		return a.handleThreadMetadata(ctx, payload.ThreadMetadata)
 	case *pb.AgentResponse_Error:
+		a.clearResponseBuffers(response.ConversationId)
 		return a.handleError(ctx, response.ConversationId, payload.Error)
 	default:
 		slog.Warn(fmt.Sprintf("[Slack] Unknown response payload type: %T", payload))
@@ -232,6 +233,15 @@ func firstTraceContext(candidates ...*pb.TraceContext) *pb.TraceContext {
 		}
 	}
 	return nil
+}
+
+// clearResponseBuffers atomically evicts all buffered state for a conversation.
+// Agent errors are terminal even when no END chunk follows.
+func (a *SlackAdapter) clearResponseBuffers(conversationID string) {
+	a.bufferMu.Lock()
+	defer a.bufferMu.Unlock()
+	delete(a.contentBuffers, conversationID)
+	delete(a.traceBuffers, conversationID)
 }
 
 // handleThreadMetadata handles thread metadata updates
