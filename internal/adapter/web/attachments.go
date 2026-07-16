@@ -107,14 +107,12 @@ func resolveResponseAttachments(ctx context.Context, fileStore files.FileStore, 
 		key := f.GetFilename()
 		meta, err := fileStore.ReadMeta(ctx, key)
 		if err != nil {
-			// Store lookup failed (file not flushed yet) — surface a chip from the
-			// agent-declared metadata; it won't be owner-attributed, so it also
-			// won't be downloadable until the agent's file lands + is attributed.
-			ct := f.GetMimeType()
-			if ct == "" {
-				ct = "application/octet-stream"
-			}
-			out = append(out, chatAttachment{Key: key, Name: key, ContentType: ct, Size: f.GetSizeBytes()})
+			// The agent named a file that isn't in the store (never written, a bogus
+			// name, or written after this END chunk). Skip it rather than persist an
+			// optimistic chip: with no stored file we can't attribute it to the
+			// owner, so the chip would 404 forever — the broken-chip case the files
+			// review flagged.
+			slog.Warn("[Web] agent referenced an unknown file; skipping attachment", "key", key)
 			continue
 		}
 		if !meta.Ready() {

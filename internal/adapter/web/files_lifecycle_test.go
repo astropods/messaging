@@ -193,4 +193,10 @@ func TestResolveResponseAttachments_NoForeignOwnershipTransfer(t *testing.T) {
 	if m, _ := fs.ReadMeta(ctx, "agent-out.txt"); m.UploadedBy != "user-b" {
 		t.Errorf("agent file not attributed to conversation owner: got %q", m.UploadedBy)
 	}
+
+	// A file the agent names but that isn't in the store yields no chip: we don't
+	// persist an optimistic chip that could never be attributed (and would 404).
+	if out := resolveResponseAttachments(ctx, fs, []*pb.ResponseAttachment{fileAtt("does-not-exist.txt")}, "user-b"); len(out) != 0 {
+		t.Errorf("unknown agent file surfaced an optimistic chip: %+v", out)
+	}
 }
