@@ -65,15 +65,26 @@ func (h *Handlers) SetAuthorizer(a authz.Authorizer) {
 // Centralising authn+authz here keeps every protected handler a single guard
 // line and makes it impossible to forget the authz check on a new endpoint.
 func (h *Handlers) authenticate(w http.ResponseWriter, r *http.Request) *Session {
+	return h.authenticateWithErrorWriter(w, r, http.Error)
+}
+
+// authenticateWithErrorWriter lets an API surface opt into its own error
+// envelope without changing authentication or authorization semantics for
+// existing adapters.
+func (h *Handlers) authenticateWithErrorWriter(
+	w http.ResponseWriter,
+	r *http.Request,
+	writeError func(http.ResponseWriter, string, int),
+) *Session {
 	ctx := r.Context()
 
 	session, err := h.sessionManager.ValidateRequest(ctx, r)
 	if err != nil {
-		http.Error(w, "Authentication error", http.StatusInternalServerError)
+		writeError(w, "Authentication error", http.StatusInternalServerError)
 		return nil
 	}
 	if session == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeError(w, "Unauthorized", http.StatusUnauthorized)
 		return nil
 	}
 
@@ -86,12 +97,12 @@ func (h *Handlers) authenticate(w http.ResponseWriter, r *http.Request) *Session
 			// Fail closed on authz transport errors — better to return a 503
 			// than to silently drop the check.
 			slog.Warn("[Web] authz check failed", "user_id", session.UserID, "err", err) //nolint:gosec // session.UserID is from a trusted ALB OIDC header
-			http.Error(w, "Authorization unavailable", http.StatusServiceUnavailable)
+			writeError(w, "Authorization unavailable", http.StatusServiceUnavailable)
 			return nil
 		}
 		if !res.Allowed {
 			slog.Warn("[Web] authz denied", "user_id", session.UserID) //nolint:gosec // session.UserID is from a trusted ALB OIDC header
-			http.Error(w, "Forbidden", http.StatusForbidden)
+			writeError(w, "Forbidden", http.StatusForbidden)
 			return nil
 		}
 	}
