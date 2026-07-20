@@ -135,13 +135,17 @@ func TestHandleStream_LiveChunkDuringSettleIsDeliveredNotPreempted(t *testing.T)
 // with a cursor from before the eviction carries a higher id than the reset
 // buffer's max, which would make a naive seq comparison match nothing and suppress
 // the replay — re-stranding the UI. Such a cursor replays the whole retained ring.
-func TestAddWithResume_ReplaysWholeRingWhenCursorAheadOfBuffer(t *testing.T) {
+// A cursor beyond the buffer's max means the sequence was reset by an
+// eviction+recreate, so the retained ring belongs to a different (possibly live)
+// turn. It must be released as a crossed boundary, not replayed, so a foreign
+// turn's deltas are never spliced onto the client's stale reconstruction.
+func TestAddWithResume_CursorAheadOfBufferReleasesClient(t *testing.T) {
 	cm := NewConnectionManager(time.Hour)
 	const convID = "conv-reset"
 
-	// A recreated buffer's sequence starts at 1.
-	cm.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"a"}`}) // seq 1
-	cm.Broadcast(convID, NewFinishEvent(""))                                                  // seq 2
+	// A recreated buffer's sequence starts at 1; this turn is still live (no finish).
+	cm.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"foreign-a"}`}) // seq 1
+	cm.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"foreign-b"}`}) // seq 2
 
 	conn := &SSEConnection{
 		ID:             "c1",
@@ -150,22 +154,16 @@ func TestAddWithResume_ReplaysWholeRingWhenCursorAheadOfBuffer(t *testing.T) {
 		Done:           make(chan struct{}),
 	}
 	// Cursor 50 is far beyond the reset buffer's max (2) — a pre-eviction id.
-	missed, caughtUp, _ := cm.AddWithResume(conn, 50)
+	missed, caughtUp, crossedBoundary := cm.AddWithResume(conn, 50)
 
-	if len(missed) != 2 {
-		t.Fatalf("a cursor ahead of the buffer must replay the whole ring (2 events), got %d", len(missed))
+	if !crossedBoundary {
+		t.Fatalf("a cursor beyond the reset buffer must flag a crossed boundary, not replay a foreign turn")
+	}
+	if len(missed) != 0 {
+		t.Fatalf("a boundary release must replay nothing, got %d events", len(missed))
 	}
 	if caughtUp {
 		t.Fatalf("a stale pre-eviction cursor must not be treated as caught up")
-	}
-	var sawFinish bool
-	for _, e := range missed {
-		if e.Event == EventFinish {
-			sawFinish = true
-		}
-	}
-	if !sawFinish {
-		t.Fatalf("replay must include the terminal finish so the client is released, got %+v", missed)
 	}
 }
 

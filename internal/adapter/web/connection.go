@@ -93,19 +93,12 @@ func (cm *ConnectionManager) AddWithResume(conn *SSEConnection, lastEventID uint
 	if buf == nil {
 		return nil, false, false
 	}
-	// Cursor before the current turn: the client crossed a boundary while away and
-	// the retained events are a different turn — release it instead of replaying them.
-	if lastEventID > 0 && lastEventID < buf.turnStartSeq {
+	// Cursor outside the live segment — before it started (crossed a boundary while
+	// away) or past the max (a stale id from before an eviction+recreate reset the
+	// sequence to 1). Either way the retained ring is a different turn; release the
+	// client to reconcile from history rather than splice a foreign turn's deltas.
+	if lastEventID > 0 && (lastEventID < buf.turnStartSeq || lastEventID > buf.lastSeq) {
 		return nil, false, true
-	}
-	// Cursor past the max: a stale id from before an eviction+recreate (seq restarts
-	// at 1). Replay the whole ring — the client has seen none of it, so no doubling.
-	if lastEventID > buf.lastSeq {
-		missed = make([]SSEEvent, 0, len(buf.events))
-		for _, be := range buf.events {
-			missed = append(missed, be.event)
-		}
-		return missed, false, false
 	}
 	for _, be := range buf.events {
 		if be.seq > lastEventID {

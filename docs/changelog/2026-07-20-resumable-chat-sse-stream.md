@@ -30,9 +30,11 @@ shows it").
   last-seen id on reconnect; the stream replays exactly the events with a higher
   sequence (missed chunks and the terminal `finish`) before resuming live. The
   astro-server messaging proxy forwards the `Last-Event-ID` header (it previously
-  dropped it). A cursor beyond the buffer's current max — a stale id from before
-  an eviction+recreate, which restarts the sequence at 1 — replays the whole
-  retained ring rather than letting a naive seq comparison suppress the replay.
+  dropped it). A cursor that falls outside the live segment — before it (a crossed
+  turn boundary) or beyond the max (a stale id from before an eviction+recreate
+  reset the sequence to 1) — is released with a finish and reconciles from history,
+  since the retained ring is a different turn whose deltas can't be spliced onto the
+  client's reconstruction.
 
 - **Settle instead of guess on a fresh subscribe.** A subscribe with no cursor
   can't resume from a position, and the store snapshot alone is ambiguous: "the
@@ -54,6 +56,17 @@ shows it").
 - **Release on stop.** A client "stop generating" is terminal, so it drops the
   conversation's resume buffer instead of holding its delta ring resident until
   LRU eviction; a late reconnect falls back to the store-derived terminal replay.
+
+# Limitations
+
+The resume buffer is in-memory and bounded per conversation (512 events / 256 KiB)
+and in total (2048 conversations, LRU-evicted). Its pathological ceiling —
+every buffered conversation simultaneously holding a full-size segment — is
+~512 MiB of payload (somewhat higher counting per-event `id:`/`event:` strings and
+slice headers, which the byte cap does not track). Steady-state residency tracks
+actual turn sizes and is far lower, but the caps should be sized against the
+sidecar's memory request; lower `maxBufferedConversations` if that ceiling is a
+meaningful fraction of the limit.
 
 # Migration
 
