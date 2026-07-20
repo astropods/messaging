@@ -167,6 +167,41 @@ func TestAddWithResume_CursorAheadOfBufferReleasesClient(t *testing.T) {
 	}
 }
 
+// A long single turn can overflow the per-conversation cap and evict its own early
+// deltas. A resume whose cursor lands in that evicted hole must be released to
+// reconcile from history, not replayed a gapped delta stream that corrupts the
+// client's appended reconstruction.
+func TestAddWithResume_EvictedMidTurnHoleReleasesClient(t *testing.T) {
+	cm := NewConnectionManager(time.Hour)
+	const convID = "conv-long-turn"
+
+	// One long turn that overflows the count cap, evicting its earliest deltas while
+	// turnStartSeq stays pinned at 1.
+	total := maxBufferedEventsPerConv + 100
+	for i := 0; i < total; i++ {
+		cm.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"x"}`})
+	}
+
+	conn := &SSEConnection{
+		ID:             "c1",
+		ConversationID: convID,
+		EventChan:      make(chan SSEEvent, 8),
+		Done:           make(chan struct{}),
+	}
+	// Cursor 50 was evicted (oldest retained is ~101), so its next expected event is gone.
+	missed, caughtUp, crossedBoundary := cm.AddWithResume(conn, 50)
+
+	if !crossedBoundary {
+		t.Fatalf("a cursor in an evicted mid-turn hole must flag a crossed boundary, not replay a gapped stream")
+	}
+	if len(missed) != 0 {
+		t.Fatalf("a boundary release must replay nothing, got %d events", len(missed))
+	}
+	if caughtUp {
+		t.Fatalf("an evicted cursor must not be treated as caught up")
+	}
+}
+
 // A resume cursor from before the current turn (the client crossed a turn
 // boundary while away) must flag a crossed boundary and replay nothing, so the
 // caller releases it with a finish rather than replaying a foreign live turn.

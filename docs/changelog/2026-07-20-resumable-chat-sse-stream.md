@@ -30,11 +30,11 @@ shows it").
   last-seen id on reconnect; the stream replays exactly the events with a higher
   sequence (missed chunks and the terminal `finish`) before resuming live. The
   astro-server messaging proxy forwards the `Last-Event-ID` header (it previously
-  dropped it). A cursor that falls outside the live segment — before it (a crossed
-  turn boundary) or beyond the max (a stale id from before an eviction+recreate
-  reset the sequence to 1) — is released with a finish and reconciles from history,
-  since the retained ring is a different turn whose deltas can't be spliced onto the
-  client's reconstruction.
+  dropped it). A cursor the buffer can't contiguously replay — before the live
+  segment (a crossed turn boundary), beyond the max (a stale id from before an
+  eviction+recreate reset the sequence to 1), or in a hole the per-conversation cap
+  evicted mid-turn — is released with a finish and reconciles from history, rather
+  than being spliced with a gapped or foreign delta stream.
 
 - **Settle instead of guess on a fresh subscribe.** A subscribe with no cursor
   can't resume from a position, and the store snapshot alone is ambiguous: "the
