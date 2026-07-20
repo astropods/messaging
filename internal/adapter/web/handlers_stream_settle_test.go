@@ -287,6 +287,39 @@ func TestHandleStream_CaughtUpResumeDoesNotDuplicateFinish(t *testing.T) {
 	}
 }
 
+// A synthetic finish carries the conversation's latest id, so a reconnecting
+// client advances its cursor past it instead of replaying the same stale cursor
+// back into the release path (a reconnect loop).
+func TestHandleStream_SyntheticFinishIsTagged(t *testing.T) {
+	h, st := streamHandlersWithStore(t)
+	h.freshSubscribeSettle = settleWindow
+	const (
+		convID = "conv-tagged"
+		user   = "user-1"
+	)
+	ctx := t.Context()
+	if err := st.Upsert(ctx, convID, user, "chat"); err != nil {
+		t.Fatalf("seed conversation: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, convID, user, "user", "hi", ""); err != nil {
+		t.Fatalf("seed user message: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, convID, user, "assistant", "done", ""); err != nil {
+		t.Fatalf("seed assistant reply: %v", err)
+	}
+	h.connManager.Broadcast(convID, NewFinishEvent("")) // seq 1 — sets the latest id
+
+	// Fresh subscribe to the finished turn → the settle synthesizes a finish.
+	body := runStream(t, h, convID, user, nil)
+
+	if !strings.Contains(body, "event: "+EventFinish) {
+		t.Fatalf("expected a synthesized finish, got:\n%s", body)
+	}
+	if !strings.Contains(body, "id: 1") {
+		t.Fatalf("the synthetic finish must carry the latest id so the cursor advances, got:\n%s", body)
+	}
+}
+
 // A client stop is terminal: CloseConversation drops the resume buffer so its
 // delta ring isn't held resident until LRU eviction.
 func TestCloseConversation_ReleasesResumeBuffer(t *testing.T) {

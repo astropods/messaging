@@ -495,9 +495,16 @@ func (h *Handlers) streamTurnTerminal(ctx context.Context, conversationID string
 }
 
 // writeFinish emits a synthetic terminal finish so a client leaves its loading
-// state; the reply is already persisted and reconciled from history on finish.
-func writeFinish(w http.ResponseWriter, flusher http.Flusher) {
-	_, _ = fmt.Fprint(w, NewFinishEvent("").Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
+// state (the reply is persisted and reconciled from history). It is tagged with
+// seq — the conversation's latest buffered id — so a reconnecting EventSource
+// advances its Last-Event-ID past it instead of replaying the same stale cursor
+// and re-entering this release path.
+func writeFinish(w http.ResponseWriter, flusher http.Flusher, seq uint64) {
+	ev := NewFinishEvent("")
+	if seq > 0 {
+		ev.ID = strconv.FormatUint(seq, 10)
+	}
+	_, _ = fmt.Fprint(w, ev.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
 	flusher.Flush()
 }
 
@@ -533,7 +540,7 @@ func (h *Handlers) settleFreshSubscribe(
 			}
 		case <-timer.C:
 			if h.streamTurnTerminal(ctx, conversationID) {
-				writeFinish(w, flusher)
+				writeFinish(w, flusher, h.connManager.LatestSeq(conversationID))
 				return true
 			}
 			return false
@@ -642,7 +649,7 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 			// Cursor predates the current turn — the client missed a turn boundary
 			// while away. Release it with a finish so it reconciles from history and
 			// re-subscribes for any live turn.
-			writeFinish(w, flusher)
+			writeFinish(w, flusher, h.connManager.LatestSeq(conversationID))
 			return
 		}
 		// Replay missed events in order; their ids advance the client's cursor. A
@@ -662,7 +669,7 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 		// store shows the turn ended — release the client. Skipped when caught up so
 		// a terminal-cursor reconnect isn't sent a duplicate finish.
 		if !replayedTerminal && !caughtUp && h.streamTurnTerminal(ctx, conversationID) {
-			writeFinish(w, flusher)
+			writeFinish(w, flusher, h.connManager.LatestSeq(conversationID))
 			return
 		}
 	} else if h.settleFreshSubscribe(ctx, w, flusher, conn, conversationID) {

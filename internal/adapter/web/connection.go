@@ -55,10 +55,9 @@ type SSEConnection struct {
 // events missed while disconnected.
 type ConnectionManager struct {
 	connections map[string]map[string]*SSEConnection // conversationID -> connID -> connection
-	// eventBuffers holds the resume log per conversation. Guarded by mu together
-	// with connections: Broadcast appends+fans out and AddWithResume
-	// registers+snapshots under the same lock, so an event is never both replayed
-	// from the buffer and delivered live to the same connection.
+	// eventBuffers is the per-conversation resume log, guarded by mu with
+	// connections so Broadcast (append+fan-out) and AddWithResume (register+
+	// snapshot) are atomic — an event is never both replayed and delivered live.
 	eventBuffers map[string]*convEventBuffer
 	mu           sync.RWMutex
 	heartbeat    time.Duration
@@ -76,11 +75,10 @@ func NewConnectionManager(heartbeatInterval time.Duration) *ConnectionManager {
 	return cm
 }
 
-// AddWithResume registers a connection and snapshots the events the client missed
-// (seq > lastEventID), atomically with Broadcast so an event is either returned or
-// delivered live, never both. caughtUp: cursor already covers the latest event
-// (skip the fallback, no duplicate finish). crossedBoundary: cursor predates the
-// current turn (release the client with a finish, don't replay a foreign turn).
+// AddWithResume registers a connection and snapshots missed events (seq >
+// lastEventID) atomically with Broadcast, so an event is either returned or
+// delivered live, never both. caughtUp: cursor covers the latest event.
+// crossedBoundary: cursor predates the current turn.
 func (cm *ConnectionManager) AddWithResume(conn *SSEConnection, lastEventID uint64) (missed []SSEEvent, caughtUp, crossedBoundary bool) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
@@ -195,7 +193,8 @@ func (cm *ConnectionManager) bufferEventLocked(conversationID string, event SSEE
 		buf = &convEventBuffer{}
 		cm.eventBuffers[conversationID] = buf
 	}
-	// A new turn's first event opens a fresh segment (lastSeq keeps climbing).
+	// A terminal event segments the turn: the next event starts a fresh segment so
+	// a resume can't replay across a turn boundary. lastSeq keeps climbing.
 	if buf.endedTurn {
 		buf.events = buf.events[:0]
 		buf.bytes = 0
@@ -203,12 +202,11 @@ func (cm *ConnectionManager) bufferEventLocked(conversationID string, event SSEE
 	}
 	buf.lastSeq++
 	if len(buf.events) == 0 {
-		buf.turnStartSeq = buf.lastSeq // first event of the segment
+		buf.turnStartSeq = buf.lastSeq
 	}
 	event.ID = strconv.FormatUint(buf.lastSeq, 10)
 	buf.events = append(buf.events, bufferedEvent{seq: buf.lastSeq, event: event})
 	buf.bytes += len(event.Data)
-	// Drop oldest until within both caps; always keep the newest event.
 	for len(buf.events) > 1 &&
 		(len(buf.events) > maxBufferedEventsPerConv || buf.bytes > maxBufferedBytesPerConv) {
 		buf.bytes -= len(buf.events[0].event.Data)
@@ -234,6 +232,18 @@ func (cm *ConnectionManager) evictOldestBufferLocked() {
 	if oldestID != "" {
 		delete(cm.eventBuffers, oldestID)
 	}
+}
+
+// LatestSeq returns the highest buffered sequence id for a conversation (0 if
+// none). Used to tag a synthetic finish so a reconnecting client's cursor advances
+// past it rather than replaying the same stale id.
+func (cm *ConnectionManager) LatestSeq(conversationID string) uint64 {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	if buf := cm.eventBuffers[conversationID]; buf != nil {
+		return buf.lastSeq
+	}
+	return 0
 }
 
 // GetConnectionCount returns the number of active connections for a conversation
