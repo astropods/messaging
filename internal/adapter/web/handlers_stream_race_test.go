@@ -141,12 +141,12 @@ func TestHandleStream_ReplaysFinishForAlreadyFinishedTurn(t *testing.T) {
 	if err := st.Upsert(ctx, convID, user, "chat"); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, convID, user, "user", "hi"); err != nil {
+	if _, err := st.AppendMessage(ctx, convID, user, "user", "hi", ""); err != nil {
 		t.Fatalf("seed user message: %v", err)
 	}
 	// The turn completed and its reply persisted before this client subscribed —
 	// the finish broadcast (if any) landed on zero connections and was dropped.
-	if _, err := st.AppendMessage(ctx, convID, user, "assistant", "the reply"); err != nil {
+	if _, err := st.AppendMessage(ctx, convID, user, "assistant", "the reply", ""); err != nil {
 		t.Fatalf("seed assistant reply: %v", err)
 	}
 
@@ -173,7 +173,7 @@ func TestHandleStream_NoReplayWhileTurnInFlight(t *testing.T) {
 	if err := st.Upsert(ctx, convID, user, "chat"); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, convID, user, "user", "hi"); err != nil {
+	if _, err := st.AppendMessage(ctx, convID, user, "user", "hi", ""); err != nil {
 		t.Fatalf("seed user message: %v", err)
 	}
 

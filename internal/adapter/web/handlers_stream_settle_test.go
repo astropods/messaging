@@ -37,17 +37,17 @@ func TestHandleStream_StartRace_NoSpuriousFinishWhenUserRowLandsDuringSettle(t *
 		t.Fatalf("seed conversation: %v", err)
 	}
 	// A prior turn completed: latest persisted row is the assistant's reply.
-	if _, err := st.AppendMessage(ctx, convID, user, "user", "hi"); err != nil {
+	if _, err := st.AppendMessage(ctx, convID, user, "user", "hi", ""); err != nil {
 		t.Fatalf("seed user message: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, convID, user, "assistant", "old reply"); err != nil {
+	if _, err := st.AppendMessage(ctx, convID, user, "assistant", "old reply", ""); err != nil {
 		t.Fatalf("seed assistant reply: %v", err)
 	}
 
 	// The new turn's user row lands during the settle — simulating POST /messages
 	// persisting just after the stream subscribed.
 	body := runStream(t, h, convID, user, func() {
-		if _, err := st.AppendMessage(ctx, convID, user, "user", "follow up"); err != nil {
+		if _, err := st.AppendMessage(ctx, convID, user, "user", "follow up", ""); err != nil {
 			t.Errorf("persist follow-up user message: %v", err)
 		}
 	})
@@ -75,11 +75,11 @@ func TestHandleStream_EndRace_ReplaysFinishAfterStreamingClearsDuringSettle(t *t
 	if err := st.Upsert(ctx, convID, user, "chat"); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, convID, user, "user", "hi"); err != nil {
+	if _, err := st.AppendMessage(ctx, convID, user, "user", "hi", ""); err != nil {
 		t.Fatalf("seed user message: %v", err)
 	}
 	// The reply is persisted (latest row is the assistant's)…
-	if _, err := st.AppendMessage(ctx, convID, user, "assistant", "the reply"); err != nil {
+	if _, err := st.AppendMessage(ctx, convID, user, "assistant", "the reply", ""); err != nil {
 		t.Fatalf("seed assistant reply: %v", err)
 	}
 	// …but the turn's streaming flag still lingers (clear() hasn't run yet), so a
@@ -111,10 +111,10 @@ func TestHandleStream_LiveChunkDuringSettleIsDeliveredNotPreempted(t *testing.T)
 	if err := st.Upsert(ctx, convID, user, "chat"); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, convID, user, "user", "hi"); err != nil {
+	if _, err := st.AppendMessage(ctx, convID, user, "user", "hi", ""); err != nil {
 		t.Fatalf("seed user message: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, convID, user, "assistant", "old reply"); err != nil {
+	if _, err := st.AppendMessage(ctx, convID, user, "assistant", "old reply", ""); err != nil {
 		t.Fatalf("seed assistant reply: %v", err)
 	}
 

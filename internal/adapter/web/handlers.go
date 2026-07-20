@@ -13,6 +13,7 @@ import (
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/files"
 	"github.com/astropods/messaging/internal/store/sqlite"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/google/uuid"
@@ -32,6 +33,9 @@ type Handlers struct {
 	// chatStore persists the platform chat UI thread (sidebar + bodies) in
 	// the sidecar-local SQLite database on a shared persistent volume.
 	chatStore *sqlite.Store
+	// fileStore backs the agent files API (upload/download) on the shared
+	// persistent volume. nil disables the feature (no FILES_DIR configured).
+	fileStore files.FileStore
 	// turns tracks per-conversation streaming state so a client stop can drop
 	// the agent's late output and persist the partial. Shared with WebAdapter.
 	turns *turnTracker
@@ -39,6 +43,8 @@ type Handlers struct {
 	// event before the terminal-state fallback (see settleFreshSubscribe). Zero
 	// decides immediately.
 	freshSubscribeSettle time.Duration
+	interactions         store.InteractionStore // shared with WebAdapter
+	degraded             *degradeTracker        // shared with WebAdapter
 }
 
 // NewHandlers creates a new Handlers instance
@@ -127,9 +133,23 @@ type CreateConversationResponse struct {
 	CreatedAt      string `json:"created_at"`
 }
 
+// maxAttachmentsPerMessage bounds how many files one message may reference,
+// keeping a send from fanning out into unbounded metadata reads / storage.
+const maxAttachmentsPerMessage = 16
+
 // SendMessageRequest represents a request to send a message
 type SendMessageRequest struct {
 	Content string `json:"content"`
+	// Attachments references files already uploaded via the files API (by key).
+	// The bytes are not inlined — only the key + display metadata ride the send.
+	Attachments []sendAttachmentInput `json:"attachments,omitempty"`
+}
+
+// sendAttachmentInput is a client-declared attachment reference on a send. Only
+// Key is trusted; the authoritative name/size/content-type are re-read from the
+// file store so a client can't misrepresent a file it doesn't own metadata for.
+type sendAttachmentInput struct {
+	Key string `json:"key"`
 }
 
 // SendMessageResponse represents the response to a message send
@@ -201,9 +221,49 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Content == "" {
-		http.Error(w, "Content is required", http.StatusBadRequest)
+	// A message must carry text or at least one attachment (a file can be sent
+	// with no accompanying prose, matching Claude-style attach-and-send).
+	if req.Content == "" && len(req.Attachments) == 0 {
+		http.Error(w, "Content or attachment is required", http.StatusBadRequest)
 		return
+	}
+
+	// A degraded free-text-tolerant ask: the owner's reply is its RESPOND answer,
+	// not a new turn (a non-owner falls through and leaves it pending).
+	if h.degraded != nil {
+		if interactionID, ok := h.degraded.take(conversationID, session.UserID); ok {
+			h.resolveDegradedRespond(ctx, conversationID, session, interactionID, req.Content)
+			writeJSON(w, http.StatusOK, SendMessageResponse{
+				MessageID: uuid.NewString(),
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+			})
+			return
+		}
+	}
+
+	// Bound the attachment count so a single send can't fan out into thousands
+	// of metadata reads + an oversized message/DB row (the proxy body cap alone
+	// would still allow that many keys).
+	if len(req.Attachments) > maxAttachmentsPerMessage {
+		http.Error(w, "too many attachments", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	// Resolve declared attachments to authoritative metadata from the file store,
+	// scoped to the sender: an unknown key OR a key owned by another user is
+	// rejected (a stale/forged chip, or an attempt to attach someone else's file).
+	var (
+		attachments []chatAttachment
+		protoAtts   []*pb.Attachment
+	)
+	for _, in := range req.Attachments {
+		att, ok := resolveAttachment(ctx, h.fileStore, in.Key, session.UserID)
+		if !ok {
+			http.Error(w, "unknown attachment", http.StatusBadRequest)
+			return
+		}
+		attachments = append(attachments, att)
+		protoAtts = append(protoAtts, toProtoAttachment(att))
 	}
 
 	// Create message
@@ -227,6 +287,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		},
 		Content:        req.Content,
 		ConversationId: conversationID,
+		Attachments:    protoAtts,
 	}
 
 	if h.msgHandler == nil {
@@ -257,7 +318,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		// A failed user-turn write must not run the agent (would persist an
 		// assistant-first / user-less turn).
-		if _, err := h.chatStore.AppendMessage(ctx, conversationID, session.UserID, "user", req.Content); err != nil {
+		if _, err := h.chatStore.AppendMessage(ctx, conversationID, session.UserID, "user", req.Content, marshalAttachments(attachments)); err != nil {
 			// The message cap is terminal, not transient — return 409 with a
 			// machine-readable code so the client keys on it (not the bare status).
 			if errors.Is(err, sqlite.ErrMessageLimitReached) {

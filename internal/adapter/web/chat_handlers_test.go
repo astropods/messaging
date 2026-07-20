@@ -281,7 +281,7 @@ func TestHandleSendMessageAtCapReturns409(t *testing.T) {
 	// Fill to the reserved cap (user turns hold back the final slot for a reply);
 	// the next user send then has no room and must 409.
 	for i := 0; i < sqlite.MaxMessagesPerConversation-1; i++ {
-		if _, err := st.AppendMessage(t.Context(), "conv-1", "user-1", "user", "m"); err != nil {
+		if _, err := st.AppendMessage(t.Context(), "conv-1", "user-1", "user", "m", ""); err != nil {
 			t.Fatalf("seed fill %d: %v", i, err)
 		}
 	}
@@ -399,7 +399,7 @@ func TestHandleCancelOwnedConversation(t *testing.T) {
 	if _, err := st.EnsureForSend(t.Context(), "conv-1", "user-1", "owner"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := st.AppendMessage(t.Context(), "conv-1", "user-1", "user", "q"); err != nil {
+	if _, err := st.AppendMessage(t.Context(), "conv-1", "user-1", "user", "q", ""); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	h.turns.record("conv-1", &pb.ContentChunk{Type: pb.ContentChunk_START, Content: "partial reply"})

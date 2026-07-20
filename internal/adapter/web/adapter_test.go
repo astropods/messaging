@@ -194,7 +194,7 @@ func TestNewChunkEvent(t *testing.T) {
 				PlatformMessageId: "msg-123",
 			}
 
-			event := NewChunkEvent(chunk, "resp-1")
+			event := NewChunkEvent(chunk, "resp-1", nil)
 
 			if event.Event != EventChunk {
 				t.Errorf("expected event type %s, got %s", EventChunk, event.Event)

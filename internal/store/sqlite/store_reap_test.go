@@ -24,7 +24,7 @@ func TestReapDanglingUserTurns(t *testing.T) {
 	}
 	appendUser := func(id string) {
 		t.Helper()
-		if _, err := st.AppendMessage(ctx, id, "owner", "user", "hi"); err != nil {
+		if _, err := st.AppendMessage(ctx, id, "owner", "user", "hi", ""); err != nil {
 			t.Fatalf("append %s: %v", id, err)
 		}
 	}
@@ -35,7 +35,7 @@ func TestReapDanglingUserTurns(t *testing.T) {
 	// b: assistant-last (completed) -> untouched.
 	ensure("b")
 	appendUser("b")
-	if _, err := st.UpsertAssistantProgress(ctx, "b", "reply"); err != nil {
+	if _, err := st.UpsertAssistantProgress(ctx, "b", "reply", ""); err != nil {
 		t.Fatalf("progress b: %v", err)
 	}
 	// c: empty (created, never sent) -> untouched.
@@ -43,7 +43,7 @@ func TestReapDanglingUserTurns(t *testing.T) {
 	// d: soft-deleted, user-last -> untouched (not resurrected).
 	ensure("d")
 	appendUser("d")
-	if _, err := st.SoftDelete(ctx, "d", "owner"); err != nil {
+	if _, _, err := st.SoftDelete(ctx, "d", "owner"); err != nil {
 		t.Fatalf("delete d: %v", err)
 	}
 

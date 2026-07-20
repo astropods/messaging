@@ -12,6 +12,7 @@ import (
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/files"
 	"github.com/astropods/messaging/internal/store/sqlite"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
@@ -31,15 +32,19 @@ type WebAdapter struct {
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
 	chatStore        *sqlite.Store
+	fileStore        files.FileStore
+	interactions     store.InteractionStore
 	server           *http.Server
 	handlers         *Handlers
 	turns            *turnTracker
+	degraded         *degradeTracker
 
 	// Configuration
-	listenAddr        string
-	heartbeatInterval time.Duration
-	allowedOrigins    []string
-	servePlayground   bool
+	listenAddr               string
+	heartbeatInterval        time.Duration
+	allowedOrigins           []string
+	servePlayground          bool
+	supportsDeclarativeForms bool // overrides the capability; off until the switch
 	// freshSubscribeSettle bounds how long a fresh SSE subscribe (no resume
 	// cursor) waits for a live turn event before falling back to a store-derived
 	// terminal replay. It lets HandleStream observe whether a turn is actually
@@ -95,6 +100,20 @@ func WithServePlayground(enabled bool) WebAdapterOption {
 	}
 }
 
+// WithDeclarativeForms sets the SupportsDeclarativeForms capability (off by default).
+func WithDeclarativeForms(enabled bool) WebAdapterOption {
+	return func(a *WebAdapter) {
+		a.supportsDeclarativeForms = enabled
+	}
+}
+
+// WithInteractionStore overrides the interaction store (defaults to in-memory).
+func WithInteractionStore(s store.InteractionStore) WebAdapterOption {
+	return func(a *WebAdapter) {
+		a.interactions = s
+	}
+}
+
 // New creates a new WebAdapter
 func New(opts ...WebAdapterOption) *WebAdapter {
 	a := &WebAdapter{
@@ -123,10 +142,18 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 	// which turns are stopped and what partial text was streamed.
 	a.turns = newTurnTracker()
 
+	a.degraded = newDegradeTracker()
+
+	if a.interactions == nil {
+		a.interactions = store.NewMemoryInteractionStore()
+	}
+
 	// Initialize handlers
 	a.handlers = NewHandlers(a.connManager, a.sessionManager, a.threadStore, a.agentConfigStore)
 	a.handlers.turns = a.turns
 	a.handlers.freshSubscribeSettle = a.freshSubscribeSettle
+	a.handlers.degraded = a.degraded
+	a.handlers.interactions = a.interactions
 
 	slog.Info("[Web] Adapter initialized", "listen", a.listenAddr)
 	return nil
@@ -161,8 +188,21 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/chat/conversations/{id}", a.handlers.HandleGetChatConversation)
 	mux.HandleFunc("PUT /api/chat/conversations/{id}/title", a.handlers.HandleSetChatConversationTitle)
 	mux.HandleFunc("DELETE /api/chat/conversations/{id}", a.handlers.HandleDeleteChatConversation)
+	mux.HandleFunc("POST /api/chat/conversations/{id}/interactions/{interactionId}", a.handlers.HandleInteractionResponse)
 	mux.HandleFunc("GET /api/conversations/{id}/audio", a.handlers.HandleAudioStream)
 	mux.HandleFunc("POST /api/conversations/{id}/audio", a.handlers.HandleAudioUpload)
+
+	// Agent files API (served via astro-server /files/* proxy). Opaque-key
+	// contract: create reserves a key + upload target, content PUT/GET move the
+	// bytes, metadata + delete manage the entry.
+	mux.HandleFunc("GET /api/files", a.handlers.HandleListFiles)
+	mux.HandleFunc("GET /api/files/usage", a.handlers.HandleFilesUsage)
+	mux.HandleFunc("POST /api/files", a.handlers.HandleCreateFile)
+	mux.HandleFunc("GET /api/files/{key}", a.handlers.HandleGetFile)
+	mux.HandleFunc("DELETE /api/files/{key}", a.handlers.HandleDeleteFile)
+	mux.HandleFunc("PUT /api/files/{key}/content", a.handlers.HandlePutFileContent)
+	mux.HandleFunc("GET /api/files/{key}/content", a.handlers.HandleGetFileContent)
+
 	mux.HandleFunc("GET /health", a.handlers.HandleHealth)
 
 	// Playground UI — must be registered last so API routes always take priority
@@ -222,7 +262,9 @@ func (a *WebAdapter) Stop(ctx context.Context) error {
 
 // Capabilities returns the adapter's capabilities
 func (a *WebAdapter) Capabilities() adapter.AdapterCapabilities {
-	return adapter.WebCapabilities()
+	caps := adapter.WebCapabilities()
+	caps.SupportsDeclarativeForms = a.supportsDeclarativeForms
+	return caps
 }
 
 // GetPlatformName returns the platform identifier
@@ -267,6 +309,21 @@ func (a *WebAdapter) SetAudioForwarder(fwd adapter.AudioForwarder) {
 	}
 }
 
+// conversationOwner returns the WorkOS user id that owns a conversation, used to
+// attribute agent-produced files for per-user access control. Empty when the
+// chat store is disabled or the conversation is unknown (in which case the
+// agent's output file stays unattributed and is not user-downloadable).
+func (a *WebAdapter) conversationOwner(ctx context.Context, conversationID string) string {
+	if a.chatStore == nil {
+		return ""
+	}
+	conv, err := a.chatStore.Get(ctx, conversationID)
+	if err != nil || conv == nil {
+		return ""
+	}
+	return conv.UserID
+}
+
 // HandleAgentResponse processes responses from the agent and sends to SSE clients
 func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.AgentResponse) error {
 	conversationID := response.ConversationId
@@ -299,8 +356,13 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 			a.turns.record(conversationID, payload.Content)
 		}
 
+		// Resolve any agent-produced file attachments (present on the END chunk)
+		// to the canonical shape, attributing them to the conversation owner so
+		// per-user file access control applies to the agent's outputs too.
+		agentAttachments := resolveResponseAttachments(ctx, a.fileStore, payload.Content.Attachments, a.conversationOwner(ctx, conversationID))
+
 		// Content chunk
-		event := NewChunkEvent(payload.Content, response.ResponseId)
+		event := NewChunkEvent(payload.Content, response.ResponseId, agentAttachments)
 		a.connManager.Broadcast(conversationID, event)
 
 		// Send finish event on END chunk
@@ -339,7 +401,7 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 						content = buffered
 					}
 				}
-				if _, err := a.chatStore.UpsertAssistantProgress(ctx, conversationID, content); err != nil {
+				if _, err := a.chatStore.UpsertAssistantProgress(ctx, conversationID, content, marshalAttachments(agentAttachments)); err != nil {
 					if errors.Is(err, sqlite.ErrMessageLimitReached) {
 						// Terminal per-conversation state, not a real failure — don't
 						// spam ERROR on every throttled write near the cap.
@@ -396,6 +458,9 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		event := NewErrorEvent(payload.Error)
 		a.connManager.Broadcast(conversationID, event)
 
+	case *pb.AgentResponse_Renderable:
+		a.handleRenderable(ctx, conversationID, payload.Renderable)
+
 	case *pb.AgentResponse_Transcript:
 		// Audio transcript — update user message placeholder
 		slog.Debug("[Web] Transcript received", "conversation", conversationID, "text", payload.Transcript.Text)
@@ -421,8 +486,9 @@ func (a *WebAdapter) HydrateThread(ctx context.Context, conversationID string, t
 
 // StreamContent streams content chunks to SSE clients
 func (a *WebAdapter) StreamContent(ctx context.Context, conversationID string, chunks []*pb.ContentChunk) error {
+	owner := a.conversationOwner(ctx, conversationID)
 	for _, chunk := range chunks {
-		event := NewChunkEvent(chunk, "")
+		event := NewChunkEvent(chunk, "", resolveResponseAttachments(ctx, a.fileStore, chunk.Attachments, owner))
 		a.connManager.Broadcast(conversationID, event)
 
 		// Send finish on END
@@ -456,6 +522,15 @@ func (a *WebAdapter) SetChatStore(s *sqlite.Store) {
 	a.chatStore = s
 	if a.handlers != nil {
 		a.handlers.chatStore = s
+	}
+}
+
+// SetFileStore wires the agent files store. nil disables the files API (e.g.
+// local dev without FILES_DIR).
+func (a *WebAdapter) SetFileStore(s files.FileStore) {
+	a.fileStore = s
+	if a.handlers != nil {
+		a.handlers.fileStore = s
 	}
 }
 

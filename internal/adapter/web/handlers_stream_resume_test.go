@@ -89,10 +89,10 @@ func TestHandleStream_ResumeSafetyNetWhenBufferMissesTerminal(t *testing.T) {
 	if err := st.Upsert(ctx, convID, user, "chat"); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, convID, user, "user", "hi"); err != nil {
+	if _, err := st.AppendMessage(ctx, convID, user, "user", "hi", ""); err != nil {
 		t.Fatalf("seed user message: %v", err)
 	}
-	if _, err := st.AppendMessage(ctx, convID, user, "assistant", "done"); err != nil {
+	if _, err := st.AppendMessage(ctx, convID, user, "assistant", "done", ""); err != nil {
 		t.Fatalf("seed assistant reply: %v", err)
 	}
 

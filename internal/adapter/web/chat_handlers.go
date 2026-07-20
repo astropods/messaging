@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
 // Chat-page contract handlers. These serve the platform chat UI (via the
@@ -23,9 +25,10 @@ const (
 )
 
 type chatMessageResponse struct {
-	ID      string `json:"id"`
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	ID          string           `json:"id"`
+	Role        string           `json:"role"`
+	Content     string           `json:"content"`
+	Attachments []chatAttachment `json:"attachments,omitempty"`
 }
 
 type chatConversationSummary struct {
@@ -141,7 +144,12 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 
 	messages := make([]chatMessageResponse, 0, len(window))
 	for _, m := range window {
-		messages = append(messages, chatMessageResponse{ID: m.ID, Role: m.Role, Content: m.Content})
+		messages = append(messages, chatMessageResponse{
+			ID:          m.ID,
+			Role:        m.Role,
+			Content:     m.Content,
+			Attachments: unmarshalAttachments(m.Attachments),
+		})
 	}
 
 	writeJSON(w, http.StatusOK, getChatConversationResponse{
@@ -225,11 +233,19 @@ func (h *Handlers) HandleDeleteChatConversation(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	deleted, err := h.chatStore.SoftDelete(r.Context(), conversationID, session.UserID)
+	cancelled, deleted, err := h.chatStore.SoftDelete(r.Context(), conversationID, session.UserID)
 	if err != nil {
 		slog.Error("[Web] chat delete conversation failed", "conversation", conversationID, "err", err)
 		http.Error(w, "failed to delete conversation", http.StatusInternalServerError)
 		return
+	}
+	// Deleting cancels the conversation's pending interactions; tell the agent so a
+	// suspended turn resolves instead of hanging.
+	for _, id := range cancelled {
+		h.emitRenderableResponse(r.Context(), conversationID, session.UserID, &pb.RenderableResponse{
+			Id:     id,
+			Action: pb.RenderableAction_RENDERABLE_ACTION_CANCEL,
+		})
 	}
 	if !deleted {
 		http.Error(w, "conversation not found", http.StatusNotFound)
