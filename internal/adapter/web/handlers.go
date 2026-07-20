@@ -35,6 +35,10 @@ type Handlers struct {
 	// turns tracks per-conversation streaming state so a client stop can drop
 	// the agent's late output and persist the partial. Shared with WebAdapter.
 	turns *turnTracker
+	// freshSubscribeSettle bounds how long a fresh subscribe waits for a live turn
+	// event before the terminal-state fallback (see settleFreshSubscribe). Zero
+	// decides immediately.
+	freshSubscribeSettle time.Duration
 }
 
 // NewHandlers creates a new Handlers instance
@@ -436,6 +440,68 @@ func (h *Handlers) streamTurnTerminal(ctx context.Context, conversationID string
 	return lastRole == "assistant"
 }
 
+// settleFreshSubscribe resolves the ambiguity a fresh subscribe (no resume
+// cursor) faces before the terminal-state fallback. The store snapshot alone
+// can't tell a finished turn from a new turn whose POST /messages hasn't
+// persisted its user row yet, and a just-finished turn may have broadcast its
+// finish to zero connections. Rather than guess synchronously — which misfires
+// in two opposite windows: a spurious finish on a follow-up turn that raced
+// ahead of its user-row write, or a missed finish while isStreaming still lingers
+// from the turn that just ended — the connection is already registered, so
+// observe what actually happens next for a bounded window:
+//
+//   - a live content chunk => the turn is live (a new turn's first output, or a
+//     lagging one); return false so the caller's event loop streams it.
+//   - a live finish/error => the turn ended on the wire; deliver it and stop.
+//   - silence for freshSubscribeSettle => consult the store. By now any
+//     concurrent send has had time to persist its user row and any just-
+//     broadcast finish's turn has had time to clear its streaming flag, so a
+//     store-derived terminal replay is unambiguous.
+//
+// Returns true when a terminal finish was delivered (the caller should return),
+// false when the turn is live and the caller should enter its event loop. A zero
+// settle window degrades to an immediate store-derived decision.
+func (h *Handlers) settleFreshSubscribe(
+	ctx context.Context,
+	w http.ResponseWriter,
+	flusher http.Flusher,
+	conn *SSEConnection,
+	conversationID string,
+) bool {
+	timer := time.NewTimer(h.freshSubscribeSettle)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return true
+		case <-conn.Done:
+			return true
+		case event := <-conn.EventChan:
+			_, _ = fmt.Fprint(w, event.Format()) //nolint:gosec // buffered SSE events are internally constructed
+			flusher.Flush()
+			switch event.Event {
+			case EventFinish, EventError:
+				return true
+			case EventHeartbeat:
+				// A heartbeat says nothing about the turn — keep settling.
+				continue
+			default:
+				// A content chunk: the turn is live. Hand back to the event loop.
+				return false
+			}
+		case <-timer.C:
+			if h.streamTurnTerminal(ctx, conversationID) {
+				finishEvent := NewFinishEvent("")
+				_, _ = fmt.Fprint(w, finishEvent.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
+				flusher.Flush()
+				slog.Debug(fmt.Sprintf("[Web] SSE replayed finish for already-finished turn: connection=%q, conversation=%q", conn.ID, conversationID)) //nolint:gosec // G706 false positive: %q escapes control characters
+				return true
+			}
+			return false
+		}
+	}
+}
+
 // parseLastEventID reads the SSE resume cursor the browser replays on an
 // EventSource reconnect. Returns (0, false) when absent or unparseable, so the
 // caller treats it as a fresh subscribe rather than resuming from a bogus point.
@@ -561,15 +627,10 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 			return
 		}
-	} else if h.streamTurnTerminal(ctx, conversationID) {
-		// Fresh subscribe to a turn that already finished — a fast reply that
-		// completed inside the send→subscribe window. No live broadcast will
-		// arrive, so replay a terminal finish; the reply is already persisted and
-		// the client reconciles the body from history on finish.
-		finishEvent := NewFinishEvent("")
-		_, _ = fmt.Fprint(w, finishEvent.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
-		flusher.Flush()
-		slog.Debug(fmt.Sprintf("[Web] SSE replayed finish for already-finished turn: connection=%q, conversation=%q", connID, conversationID)) //nolint:gosec // G706 false positive: %q escapes control characters
+	} else if h.settleFreshSubscribe(ctx, w, flusher, conn, conversationID) {
+		// The turn is unambiguously over — a fast reply that completed inside the
+		// send→subscribe window, or a finish that broadcast to zero connections.
+		// settleFreshSubscribe replayed the terminal finish; nothing more to stream.
 		return
 	}
 

@@ -40,6 +40,12 @@ type WebAdapter struct {
 	heartbeatInterval time.Duration
 	allowedOrigins    []string
 	servePlayground   bool
+	// freshSubscribeSettle bounds how long a fresh SSE subscribe (no resume
+	// cursor) waits for a live turn event before falling back to a store-derived
+	// terminal replay. It lets HandleStream observe whether a turn is actually
+	// live instead of guessing from a store snapshot that is ambiguous during the
+	// send→persist and finish→clear windows.
+	freshSubscribeSettle time.Duration
 }
 
 // WebAdapterOption configures the WebAdapter
@@ -66,6 +72,15 @@ func WithHeartbeatInterval(d time.Duration) WebAdapterOption {
 	}
 }
 
+// WithFreshSubscribeSettle sets how long a fresh SSE subscribe waits for a live
+// turn event before synthesizing a terminal finish from the store. Zero decides
+// immediately (no settle).
+func WithFreshSubscribeSettle(d time.Duration) WebAdapterOption {
+	return func(a *WebAdapter) {
+		a.freshSubscribeSettle = d
+	}
+}
+
 // WithAllowedOrigins sets the allowed CORS origins
 func WithAllowedOrigins(origins []string) WebAdapterOption {
 	return func(a *WebAdapter) {
@@ -83,9 +98,10 @@ func WithServePlayground(enabled bool) WebAdapterOption {
 // New creates a new WebAdapter
 func New(opts ...WebAdapterOption) *WebAdapter {
 	a := &WebAdapter{
-		listenAddr:        ":8080",
-		heartbeatInterval: 30 * time.Second,
-		sessionManager:    &NoopSessionManager{},
+		listenAddr:           ":8080",
+		heartbeatInterval:    30 * time.Second,
+		freshSubscribeSettle: 300 * time.Millisecond,
+		sessionManager:       &NoopSessionManager{},
 	}
 
 	for _, opt := range opts {
@@ -110,6 +126,7 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 	// Initialize handlers
 	a.handlers = NewHandlers(a.connManager, a.sessionManager, a.threadStore, a.agentConfigStore)
 	a.handlers.turns = a.turns
+	a.handlers.freshSubscribeSettle = a.freshSubscribeSettle
 
 	slog.Info("[Web] Adapter initialized", "listen", a.listenAddr)
 	return nil

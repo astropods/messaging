@@ -94,6 +94,21 @@ func (cm *ConnectionManager) AddWithResume(conn *SSEConnection, lastEventID uint
 	if buf == nil {
 		return nil
 	}
+	// A cursor beyond the buffer's current max sequence can't name a position
+	// within this buffer: it predates an eviction+recreate (evictOldestBufferLocked
+	// drops the buffer, and the next broadcast restarts the sequence at 1) or is
+	// otherwise stale. Comparing seqs would then match nothing and suppress replay
+	// of the current turn's events — including its terminal finish, re-stranding the
+	// UI. Replay the whole retained ring instead: these events belong to a turn the
+	// client has not seen (its cursor is from an earlier, evicted one), so there is
+	// no double-delivery, and a retained finish still releases the client.
+	if lastEventID > buf.lastSeq {
+		missed := make([]SSEEvent, 0, len(buf.events))
+		for _, be := range buf.events {
+			missed = append(missed, be.event)
+		}
+		return missed
+	}
 	var missed []SSEEvent
 	for _, be := range buf.events {
 		if be.seq > lastEventID {
@@ -279,6 +294,13 @@ func (cm *ConnectionManager) sendHeartbeats() {
 func (cm *ConnectionManager) CloseConversation(conversationID string) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
+
+	// The turn is terminal here (a client "stop generating"): HandleCancel has
+	// already broadcast the terminal finish, and no further events will follow.
+	// Drop the resume buffer rather than hold its full delta ring resident until
+	// LRU eviction — a late reconnect falls back to the store-derived terminal
+	// replay. Done unconditionally: a stop can arrive with no live connection.
+	delete(cm.eventBuffers, conversationID)
 
 	conns, ok := cm.connections[conversationID]
 	if !ok {
