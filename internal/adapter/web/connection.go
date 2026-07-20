@@ -22,6 +22,11 @@ const (
 	// maxBufferedConversations caps total resume buffers so an idle process can't
 	// accumulate them without bound; the least-recently-updated is evicted first.
 	maxBufferedConversations = 2048
+	// maxBufferedBytesPerConv is a hard ceiling on retained payload bytes per
+	// conversation, dropping oldest first. The count cap alone bounds typical text
+	// turns; this backstops a pathologically large turn (e.g. many attachment refs
+	// on the END chunk) so one conversation can't pin outsized memory.
+	maxBufferedBytesPerConv = 256 * 1024
 )
 
 // bufferedEvent is a broadcast event tagged with its per-conversation sequence
@@ -32,11 +37,18 @@ type bufferedEvent struct {
 }
 
 // convEventBuffer is the resume log for one conversation: a monotonic sequence
-// counter and a bounded, oldest-first ring of recent events.
+// counter and a bounded, oldest-first ring of recent events. Events are segmented
+// by turn — a terminal event marks the segment closed and the next turn's first
+// event starts a fresh one — so a resume only ever replays within the live turn.
 type convEventBuffer struct {
 	lastSeq uint64
 	events  []bufferedEvent
 	updated time.Time
+	// bytes is the sum of retained event payload sizes, for the byte cap.
+	bytes int
+	// endedTurn is set once the last retained event is terminal; the next event
+	// (a new turn's first) drops the finished turn's events before appending.
+	endedTurn bool
 }
 
 // SSEConnection represents an active SSE connection
@@ -75,12 +87,13 @@ func NewConnectionManager(heartbeatInterval time.Duration) *ConnectionManager {
 	return cm
 }
 
-// AddWithResume registers a connection and atomically snapshots the events it
-// missed — those buffered with a sequence greater than lastEventID (0 replays
-// the whole retained buffer). Registration and snapshot share mu with Broadcast,
-// so any event either appears in the returned replay slice (buffered before this
-// call) or is delivered live to conn.EventChan (broadcast after) — never both.
-func (cm *ConnectionManager) AddWithResume(conn *SSEConnection, lastEventID uint64) []SSEEvent {
+// AddWithResume registers a connection and atomically snapshots the events the
+// client missed (sequence greater than lastEventID). Registration and snapshot
+// share mu with Broadcast, so an event is either returned here or delivered live —
+// never both. caughtUp reports that the cursor already covers the latest buffered
+// event, so the caller can skip the terminal-state fallback and not send a
+// duplicate finish.
+func (cm *ConnectionManager) AddWithResume(conn *SSEConnection, lastEventID uint64) (missed []SSEEvent, caughtUp bool) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
@@ -92,30 +105,26 @@ func (cm *ConnectionManager) AddWithResume(conn *SSEConnection, lastEventID uint
 
 	buf := cm.eventBuffers[conn.ConversationID]
 	if buf == nil {
-		return nil
+		return nil, false
 	}
-	// A cursor beyond the buffer's current max sequence can't name a position
-	// within this buffer: it predates an eviction+recreate (evictOldestBufferLocked
-	// drops the buffer, and the next broadcast restarts the sequence at 1) or is
-	// otherwise stale. Comparing seqs would then match nothing and suppress replay
-	// of the current turn's events — including its terminal finish, re-stranding the
-	// UI. Replay the whole retained ring instead: these events belong to a turn the
-	// client has not seen (its cursor is from an earlier, evicted one), so there is
-	// no double-delivery, and a retained finish still releases the client.
+	// A cursor past the buffer's max predates an eviction+recreate (the sequence
+	// restarts at 1) or is stale; a seq comparison would match nothing and suppress
+	// replay of the current turn, including its finish. Replay the whole ring
+	// instead — these events are from a turn the client hasn't seen, so no double
+	// delivery, and a retained finish still releases the client.
 	if lastEventID > buf.lastSeq {
-		missed := make([]SSEEvent, 0, len(buf.events))
+		missed = make([]SSEEvent, 0, len(buf.events))
 		for _, be := range buf.events {
 			missed = append(missed, be.event)
 		}
-		return missed
+		return missed, false
 	}
-	var missed []SSEEvent
 	for _, be := range buf.events {
 		if be.seq > lastEventID {
 			missed = append(missed, be.event)
 		}
 	}
-	return missed
+	return missed, lastEventID == buf.lastSeq
 }
 
 // Start begins the heartbeat goroutine for connection liveness
@@ -189,7 +198,9 @@ func (cm *ConnectionManager) Broadcast(conversationID string, event SSEEvent) {
 
 // bufferEventLocked assigns the event the next monotonic sequence number for the
 // conversation (as its SSE id) and appends it to the bounded resume buffer,
-// returning the id-tagged event to broadcast. Caller must hold mu.
+// returning the id-tagged event to broadcast. It segments by turn (a new turn's
+// first event drops the finished turn) and bounds the buffer by both event count
+// and payload bytes, oldest-first. Caller must hold mu.
 func (cm *ConnectionManager) bufferEventLocked(conversationID string, event SSEEvent) SSEEvent {
 	buf := cm.eventBuffers[conversationID]
 	if buf == nil {
@@ -199,11 +210,26 @@ func (cm *ConnectionManager) bufferEventLocked(conversationID string, event SSEE
 		buf = &convEventBuffer{}
 		cm.eventBuffers[conversationID] = buf
 	}
+	// A new turn's first event opens a fresh segment: drop the previous (finished)
+	// turn so a resume replays only the current turn and stale payloads aren't
+	// pinned. lastSeq keeps climbing so ids stay monotonic across turns.
+	if buf.endedTurn {
+		buf.events = buf.events[:0]
+		buf.bytes = 0
+		buf.endedTurn = false
+	}
 	buf.lastSeq++
 	event.ID = strconv.FormatUint(buf.lastSeq, 10)
 	buf.events = append(buf.events, bufferedEvent{seq: buf.lastSeq, event: event})
-	if len(buf.events) > maxBufferedEventsPerConv {
-		buf.events = buf.events[len(buf.events)-maxBufferedEventsPerConv:]
+	buf.bytes += len(event.Data)
+	// Drop oldest until within both caps; always keep the newest event.
+	for len(buf.events) > 1 &&
+		(len(buf.events) > maxBufferedEventsPerConv || buf.bytes > maxBufferedBytesPerConv) {
+		buf.bytes -= len(buf.events[0].event.Data)
+		buf.events = buf.events[1:]
+	}
+	if event.Event == EventFinish || event.Event == EventError {
+		buf.endedTurn = true
 	}
 	buf.updated = time.Now()
 	return event

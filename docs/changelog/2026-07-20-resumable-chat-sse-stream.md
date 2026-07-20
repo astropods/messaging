@@ -13,11 +13,15 @@ shows it").
 
 - **Monotonic event ids + per-conversation resume buffer.** Every broadcast
   event is tagged with a per-conversation sequence number (emitted as the SSE
-  `id:`) and retained in a bounded, oldest-first ring (per-conversation cap plus
-  an LRU cap on total conversations). The buffer is independent of connection
-  lifetime, so an event survives a window with zero connections. Buffering and
-  fan-out happen under one lock together with register+snapshot, so an event is
-  never both replayed and delivered live.
+  `id:`) and retained in a bounded, oldest-first ring. The ring is **segmented by
+  turn** — a terminal event closes the segment and the next turn's first event
+  starts a fresh one — so a resume only ever replays within the live turn, never a
+  prior finished turn's deltas/finish. It is bounded by both event count and
+  **payload bytes** (so one outsized turn can't pin memory), plus an LRU cap on
+  total conversations, and is released on stop. The buffer is independent of
+  connection lifetime, so an event survives a window with zero connections.
+  Buffering and fan-out happen under one lock together with register+snapshot, so
+  an event is never both replayed and delivered live.
 
 - **Honor `Last-Event-ID` on resubscribe.** A browser `EventSource` replays its
   last-seen id on reconnect; the stream replays exactly the events with a higher

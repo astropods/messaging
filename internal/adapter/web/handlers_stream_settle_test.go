@@ -150,10 +150,13 @@ func TestAddWithResume_ReplaysWholeRingWhenCursorAheadOfBuffer(t *testing.T) {
 		Done:           make(chan struct{}),
 	}
 	// Cursor 50 is far beyond the reset buffer's max (2) — a pre-eviction id.
-	missed := cm.AddWithResume(conn, 50)
+	missed, caughtUp := cm.AddWithResume(conn, 50)
 
 	if len(missed) != 2 {
 		t.Fatalf("a cursor ahead of the buffer must replay the whole ring (2 events), got %d", len(missed))
+	}
+	if caughtUp {
+		t.Fatalf("a stale pre-eviction cursor must not be treated as caught up")
 	}
 	var sawFinish bool
 	for _, e := range missed {
@@ -163,6 +166,95 @@ func TestAddWithResume_ReplaysWholeRingWhenCursorAheadOfBuffer(t *testing.T) {
 	}
 	if !sawFinish {
 		t.Fatalf("replay must include the terminal finish so the client is released, got %+v", missed)
+	}
+}
+
+// Turn segmentation: the buffer isn't shared across turns. A new turn's first
+// event opens a fresh segment, so a resume with a stale cursor from an earlier
+// turn replays only the current turn — never a prior finished turn's deltas or
+// its finish (which would double-render or prematurely close the live turn).
+func TestBuffer_ResumeReplaysOnlyCurrentTurn(t *testing.T) {
+	cm := NewConnectionManager(time.Hour)
+	const convID = "conv-multi-turn"
+
+	cm.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"turn-1"}`}) // seq 1
+	cm.Broadcast(convID, NewFinishEvent(""))                                                       // seq 2 (turn 1 ends)
+	cm.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"turn-2"}`}) // seq 3 (turn 2)
+
+	conn := &SSEConnection{
+		ID:             "c1",
+		ConversationID: convID,
+		EventChan:      make(chan SSEEvent, 8),
+		Done:           make(chan struct{}),
+	}
+	missed, _ := cm.AddWithResume(conn, 1) // stale cursor from mid-turn-1
+
+	var sawTurn2 bool
+	for _, e := range missed {
+		if e.Event == EventFinish {
+			t.Fatalf("resume must not replay a previous turn's finish")
+		}
+		if strings.Contains(e.Data, "turn-1") {
+			t.Fatalf("resume must not replay a previous turn's deltas")
+		}
+		if strings.Contains(e.Data, "turn-2") {
+			sawTurn2 = true
+		}
+	}
+	if !sawTurn2 {
+		t.Fatalf("resume should replay the current turn's delta, got %d events", len(missed))
+	}
+}
+
+// The buffer is bounded by payload bytes, not just event count, so one
+// conversation with an outsized turn can't pin unbounded memory.
+func TestBuffer_ByteCapDropsOldest(t *testing.T) {
+	cm := NewConnectionManager(time.Hour)
+	const convID = "conv-bytes"
+
+	big := strings.Repeat("x", 100*1024) // 100 KiB each; 4 > the 256 KiB cap
+	for i := 0; i < 4; i++ {
+		cm.Broadcast(convID, SSEEvent{Event: EventChunk, Data: big})
+	}
+
+	buf := cm.eventBuffers[convID]
+	if buf == nil {
+		t.Fatalf("expected a resume buffer")
+	}
+	if buf.bytes > maxBufferedBytesPerConv {
+		t.Fatalf("retained bytes %d exceed the cap %d", buf.bytes, maxBufferedBytesPerConv)
+	}
+	if len(buf.events) >= 4 {
+		t.Fatalf("byte cap should have dropped oldest events, still holding %d", len(buf.events))
+	}
+}
+
+// A reconnect whose cursor already covers the latest event (it saw the finish)
+// must not be sent a synthesized duplicate finish.
+func TestHandleStream_CaughtUpResumeDoesNotDuplicateFinish(t *testing.T) {
+	h, st := streamHandlersWithStore(t)
+	h.freshSubscribeSettle = settleWindow
+	const (
+		convID = "conv-dup-finish"
+		user   = "user-1"
+	)
+	ctx := t.Context()
+	if err := st.Upsert(ctx, convID, user, "chat"); err != nil {
+		t.Fatalf("seed conversation: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, convID, user, "user", "hi", ""); err != nil {
+		t.Fatalf("seed user message: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, convID, user, "assistant", "done", ""); err != nil {
+		t.Fatalf("seed assistant reply: %v", err)
+	}
+	h.connManager.Broadcast(convID, NewFinishEvent("")) // seq 1 — the finish the client saw
+
+	// Reconnect with Last-Event-ID == the finish's id (client is caught up).
+	body := runStreamResume(t, h, convID, user, "1", nil)
+
+	if strings.Contains(body, "event: "+EventFinish) {
+		t.Fatalf("a caught-up reconnect must not be sent a duplicate finish, got:\n%s", body)
 	}
 }
 

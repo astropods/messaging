@@ -502,26 +502,13 @@ func (h *Handlers) streamTurnTerminal(ctx context.Context, conversationID string
 }
 
 // settleFreshSubscribe resolves the ambiguity a fresh subscribe (no resume
-// cursor) faces before the terminal-state fallback. The store snapshot alone
-// can't tell a finished turn from a new turn whose POST /messages hasn't
-// persisted its user row yet, and a just-finished turn may have broadcast its
-// finish to zero connections. Rather than guess synchronously — which misfires
-// in two opposite windows: a spurious finish on a follow-up turn that raced
-// ahead of its user-row write, or a missed finish while isStreaming still lingers
-// from the turn that just ended — the connection is already registered, so
-// observe what actually happens next for a bounded window:
-//
-//   - a live content chunk => the turn is live (a new turn's first output, or a
-//     lagging one); return false so the caller's event loop streams it.
-//   - a live finish/error => the turn ended on the wire; deliver it and stop.
-//   - silence for freshSubscribeSettle => consult the store. By now any
-//     concurrent send has had time to persist its user row and any just-
-//     broadcast finish's turn has had time to clear its streaming flag, so a
-//     store-derived terminal replay is unambiguous.
-//
-// Returns true when a terminal finish was delivered (the caller should return),
-// false when the turn is live and the caller should enter its event loop. A zero
-// settle window degrades to an immediate store-derived decision.
+// cursor) faces: the store snapshot alone can't distinguish a finished turn from
+// a new turn whose user row hasn't persisted yet, or from one whose finish
+// already broadcast to zero connections. Rather than guess, observe the wire for
+// freshSubscribeSettle — a live chunk means the turn is live (return false to the
+// event loop), a live finish/error ends it, and only silence falls back to the
+// store-derived terminal replay (by which point a concurrent send has persisted).
+// Returns true when a terminal finish was delivered. A zero window decides at once.
 func (h *Handlers) settleFreshSubscribe(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -648,8 +635,9 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 	// on the terminal-state replay below.
 	lastEventID, resuming := parseLastEventID(r)
 	var missed []SSEEvent
+	var caughtUp bool
 	if resuming {
-		missed = h.connManager.AddWithResume(conn, lastEventID)
+		missed, caughtUp = h.connManager.AddWithResume(conn, lastEventID)
 	} else {
 		h.connManager.Add(conn)
 	}
@@ -682,7 +670,10 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 		// Safety net for a cursor that predates the retained buffer (or a buffer
 		// evicted under memory pressure): if the replay didn't carry a terminal
 		// event but the store shows the turn ended, release the client anyway.
-		if !replayedTerminal && h.streamTurnTerminal(ctx, conversationID) {
+		// Skipped when the client is already caught up to the latest buffered event
+		// (it has any finish), so a reconnect at the terminal cursor isn't sent a
+		// duplicate finish.
+		if !replayedTerminal && !caughtUp && h.streamTurnTerminal(ctx, conversationID) {
 			finishEvent := NewFinishEvent("")
 			_, _ = fmt.Fprint(w, finishEvent.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
 			flusher.Flush()
