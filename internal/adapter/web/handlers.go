@@ -39,9 +39,7 @@ type Handlers struct {
 	// turns tracks per-conversation streaming state so a client stop can drop
 	// the agent's late output and persist the partial. Shared with WebAdapter.
 	turns *turnTracker
-	// freshSubscribeSettle bounds how long a fresh subscribe waits for a live turn
-	// event before the terminal-state fallback (see settleFreshSubscribe). Zero
-	// decides immediately.
+	// freshSubscribeSettle: wait before the terminal fallback (see settleFreshSubscribe).
 	freshSubscribeSettle time.Duration
 	interactions         store.InteractionStore // shared with WebAdapter
 	degraded             *degradeTracker        // shared with WebAdapter
@@ -471,16 +469,11 @@ func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// streamTurnTerminal reports whether conversationID's latest turn has already
-// finished — the assistant reply is persisted and this sidecar is not actively
-// streaming it. It mirrors the assistant_streaming derivation in
-// HandleGetChatConversation so a subscribe-time replay agrees with what a
-// history GET (and therefore a page refresh) would show.
-//
-// Returns false whenever the state is unknown or the turn may still be live (no
-// chat store, an active local stream, an unreadable store, or the latest
-// message still the user's), so a finish is only ever replayed for a turn that
-// genuinely ended.
+// streamTurnTerminal reports whether the latest turn has finished — the assistant
+// reply is persisted and this sidecar isn't streaming it. Mirrors the
+// assistant_streaming derivation in HandleGetChatConversation. Returns false when
+// the state is unknown or the turn may be live, so a finish is only replayed for a
+// genuinely ended turn.
 func (h *Handlers) streamTurnTerminal(ctx context.Context, conversationID string) bool {
 	if h.chatStore == nil {
 		return false
@@ -501,14 +494,17 @@ func (h *Handlers) streamTurnTerminal(ctx context.Context, conversationID string
 	return lastRole == "assistant"
 }
 
-// settleFreshSubscribe resolves the ambiguity a fresh subscribe (no resume
-// cursor) faces: the store snapshot alone can't distinguish a finished turn from
-// a new turn whose user row hasn't persisted yet, or from one whose finish
-// already broadcast to zero connections. Rather than guess, observe the wire for
-// freshSubscribeSettle — a live chunk means the turn is live (return false to the
-// event loop), a live finish/error ends it, and only silence falls back to the
-// store-derived terminal replay (by which point a concurrent send has persisted).
-// Returns true when a terminal finish was delivered. A zero window decides at once.
+// writeFinish emits a synthetic terminal finish so a client leaves its loading
+// state; the reply is already persisted and reconciled from history on finish.
+func writeFinish(w http.ResponseWriter, flusher http.Flusher) {
+	_, _ = fmt.Fprint(w, NewFinishEvent("").Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
+	flusher.Flush()
+}
+
+// settleFreshSubscribe handles a no-cursor subscribe, where the store snapshot is
+// ambiguous mid-race. It observes the wire for freshSubscribeSettle: a live chunk
+// means the turn is live (return false), a finish ends it, and only silence falls
+// back to the store-derived terminal replay. Returns true when a finish was sent.
 func (h *Handlers) settleFreshSubscribe(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -531,18 +527,13 @@ func (h *Handlers) settleFreshSubscribe(
 			case EventFinish, EventError:
 				return true
 			case EventHeartbeat:
-				// A heartbeat says nothing about the turn — keep settling.
-				continue
+				continue // says nothing about the turn; keep settling
 			default:
-				// A content chunk: the turn is live. Hand back to the event loop.
-				return false
+				return false // a content chunk: the turn is live
 			}
 		case <-timer.C:
 			if h.streamTurnTerminal(ctx, conversationID) {
-				finishEvent := NewFinishEvent("")
-				_, _ = fmt.Fprint(w, finishEvent.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
-				flusher.Flush()
-				slog.Debug(fmt.Sprintf("[Web] SSE replayed finish for already-finished turn: connection=%q, conversation=%q", conn.ID, conversationID)) //nolint:gosec // G706 false positive: %q escapes control characters
+				writeFinish(w, flusher)
 				return true
 			}
 			return false
@@ -550,9 +541,8 @@ func (h *Handlers) settleFreshSubscribe(
 	}
 }
 
-// parseLastEventID reads the SSE resume cursor the browser replays on an
-// EventSource reconnect. Returns (0, false) when absent or unparseable, so the
-// caller treats it as a fresh subscribe rather than resuming from a bogus point.
+// parseLastEventID reads the SSE resume cursor the browser replays on reconnect.
+// Returns (0, false) when absent or unparseable — treated as a fresh subscribe.
 func parseLastEventID(r *http.Request) (uint64, bool) {
 	raw := r.Header.Get("Last-Event-ID")
 	if raw == "" {
@@ -628,16 +618,13 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 		LastEventAt:    time.Now(),
 	}
 
-	// Register connection. EventSource replays its Last-Event-ID header on
-	// reconnect; when present, register and atomically snapshot the events missed
-	// since that id so no event is both replayed and delivered live (see
-	// AddWithResume). When absent — a fresh subscribe — register normally and rely
-	// on the terminal-state replay below.
+	// With a Last-Event-ID, register + snapshot missed events atomically (see
+	// AddWithResume); otherwise register a fresh subscribe.
 	lastEventID, resuming := parseLastEventID(r)
 	var missed []SSEEvent
-	var caughtUp bool
+	var caughtUp, crossedBoundary bool
 	if resuming {
-		missed, caughtUp = h.connManager.AddWithResume(conn, lastEventID)
+		missed, caughtUp, crossedBoundary = h.connManager.AddWithResume(conn, lastEventID)
 	} else {
 		h.connManager.Add(conn)
 	}
@@ -651,11 +638,15 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 	slog.Debug(fmt.Sprintf("[Web] SSE stream started: connection=%q, conversation=%q, user=%q, resume=%v", connID, conversationID, session.UserID, resuming)) //nolint:gosec // G706 false positive: %q escapes control characters
 
 	if resuming {
-		// Replay everything missed while disconnected, in order, before any live
-		// event. Their ids advance the client's Last-Event-ID so a later reconnect
-		// resumes from the right point. If the turn is still live the loop below
-		// then delivers the rest; if it already ended, the replay carried the
-		// finish and the client will close.
+		if crossedBoundary {
+			// Cursor predates the current turn — the client missed a turn boundary
+			// while away. Release it with a finish so it reconciles from history and
+			// re-subscribes for any live turn.
+			writeFinish(w, flusher)
+			return
+		}
+		// Replay missed events in order; their ids advance the client's cursor. A
+		// live turn's remaining events then arrive via the loop below.
 		replayedTerminal := false
 		for _, ev := range missed {
 			_, _ = fmt.Fprint(w, ev.Format()) //nolint:gosec // buffered SSE events are internally constructed
@@ -667,22 +658,14 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 		if len(missed) > 0 {
 			slog.Debug(fmt.Sprintf("[Web] SSE resumed: connection=%q, conversation=%q, replayed=%d", connID, conversationID, len(missed))) //nolint:gosec // G706 false positive
 		}
-		// Safety net for a cursor that predates the retained buffer (or a buffer
-		// evicted under memory pressure): if the replay didn't carry a terminal
-		// event but the store shows the turn ended, release the client anyway.
-		// Skipped when the client is already caught up to the latest buffered event
-		// (it has any finish), so a reconnect at the terminal cursor isn't sent a
-		// duplicate finish.
+		// Cursor predated the buffer and the replay carried no terminal, but the
+		// store shows the turn ended — release the client. Skipped when caught up so
+		// a terminal-cursor reconnect isn't sent a duplicate finish.
 		if !replayedTerminal && !caughtUp && h.streamTurnTerminal(ctx, conversationID) {
-			finishEvent := NewFinishEvent("")
-			_, _ = fmt.Fprint(w, finishEvent.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
-			flusher.Flush()
+			writeFinish(w, flusher)
 			return
 		}
 	} else if h.settleFreshSubscribe(ctx, w, flusher, conn, conversationID) {
-		// The turn is unambiguously over — a fast reply that completed inside the
-		// send→subscribe window, or a finish that broadcast to zero connections.
-		// settleFreshSubscribe replayed the terminal finish; nothing more to stream.
 		return
 	}
 

@@ -15,8 +15,11 @@ shows it").
   event is tagged with a per-conversation sequence number (emitted as the SSE
   `id:`) and retained in a bounded, oldest-first ring. The ring is **segmented by
   turn** — a terminal event closes the segment and the next turn's first event
-  starts a fresh one — so a resume only ever replays within the live turn, never a
-  prior finished turn's deltas/finish. It is bounded by both event count and
+  starts a fresh one — so a resume only ever replays within the live turn. A
+  cursor from before the current turn (the client crossed a boundary while away)
+  is released with a terminal finish and reconciles from history, rather than
+  being replayed a foreign turn's deltas or left hanging. It is bounded by both
+  event count and
   **payload bytes** (so one outsized turn can't pin memory), plus an LRU cap on
   total conversations, and is released on stop. The buffer is independent of
   connection lifetime, so an event survives a window with zero connections.

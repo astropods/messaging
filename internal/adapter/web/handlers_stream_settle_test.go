@@ -150,7 +150,7 @@ func TestAddWithResume_ReplaysWholeRingWhenCursorAheadOfBuffer(t *testing.T) {
 		Done:           make(chan struct{}),
 	}
 	// Cursor 50 is far beyond the reset buffer's max (2) — a pre-eviction id.
-	missed, caughtUp := cm.AddWithResume(conn, 50)
+	missed, caughtUp, _ := cm.AddWithResume(conn, 50)
 
 	if len(missed) != 2 {
 		t.Fatalf("a cursor ahead of the buffer must replay the whole ring (2 events), got %d", len(missed))
@@ -169,17 +169,16 @@ func TestAddWithResume_ReplaysWholeRingWhenCursorAheadOfBuffer(t *testing.T) {
 	}
 }
 
-// Turn segmentation: the buffer isn't shared across turns. A new turn's first
-// event opens a fresh segment, so a resume with a stale cursor from an earlier
-// turn replays only the current turn — never a prior finished turn's deltas or
-// its finish (which would double-render or prematurely close the live turn).
-func TestBuffer_ResumeReplaysOnlyCurrentTurn(t *testing.T) {
+// A resume cursor from before the current turn (the client crossed a turn
+// boundary while away) must flag a crossed boundary and replay nothing, so the
+// caller releases it with a finish rather than replaying a foreign live turn.
+func TestBuffer_CrossTurnCursorSignalsBoundary(t *testing.T) {
 	cm := NewConnectionManager(time.Hour)
 	const convID = "conv-multi-turn"
 
 	cm.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"turn-1"}`}) // seq 1
 	cm.Broadcast(convID, NewFinishEvent(""))                                                       // seq 2 (turn 1 ends)
-	cm.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"turn-2"}`}) // seq 3 (turn 2)
+	cm.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"turn-2"}`}) // seq 3 (turn 2 starts)
 
 	conn := &SSEConnection{
 		ID:             "c1",
@@ -187,22 +186,52 @@ func TestBuffer_ResumeReplaysOnlyCurrentTurn(t *testing.T) {
 		EventChan:      make(chan SSEEvent, 8),
 		Done:           make(chan struct{}),
 	}
-	missed, _ := cm.AddWithResume(conn, 1) // stale cursor from mid-turn-1
+	missed, _, crossedBoundary := cm.AddWithResume(conn, 1) // stale cursor from turn 1
 
-	var sawTurn2 bool
-	for _, e := range missed {
-		if e.Event == EventFinish {
-			t.Fatalf("resume must not replay a previous turn's finish")
-		}
-		if strings.Contains(e.Data, "turn-1") {
-			t.Fatalf("resume must not replay a previous turn's deltas")
-		}
-		if strings.Contains(e.Data, "turn-2") {
-			sawTurn2 = true
+	if !crossedBoundary {
+		t.Fatalf("a cursor before the current turn's first seq must flag a crossed boundary")
+	}
+	if len(missed) != 0 {
+		t.Fatalf("a crossed-boundary resume must not replay the live turn's deltas, got %d", len(missed))
+	}
+}
+
+// Regression for the segmentation-introduced hang: a client reconnecting with a
+// cursor from a prior turn while a new turn is live must be released with a finish,
+// not left hanging with the live turn's deltas appended to its stale reconstruction.
+func TestHandleStream_CrossTurnResumeReleasesClient(t *testing.T) {
+	h, st := streamHandlersWithStore(t)
+	h.freshSubscribeSettle = settleWindow
+	const (
+		convID = "conv-cross-turn"
+		user   = "user-1"
+	)
+	ctx := t.Context()
+	if err := st.Upsert(ctx, convID, user, "chat"); err != nil {
+		t.Fatalf("seed conversation: %v", err)
+	}
+	// Turn 1 done; turn 2 in progress (latest row is the user's => streamTurnTerminal
+	// stays false, so the old safety net would be suppressed and the client hang).
+	for _, m := range []struct{ role, content string }{
+		{"user", "hi1"}, {"assistant", "reply1"}, {"user", "hi2"},
+	} {
+		if _, err := st.AppendMessage(ctx, convID, user, m.role, m.content, ""); err != nil {
+			t.Fatalf("seed %s: %v", m.role, err)
 		}
 	}
-	if !sawTurn2 {
-		t.Fatalf("resume should replay the current turn's delta, got %d events", len(missed))
+	// Turn 1 (chunk, finish) then turn 2's chunk — segmentation opens a new segment
+	// at seq 3, so turn 1's finish is no longer retained.
+	h.connManager.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"turn-1"}`}) // seq 1
+	h.connManager.Broadcast(convID, NewFinishEvent(""))                                                       // seq 2
+	h.connManager.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"turn-2"}`}) // seq 3
+
+	body := runStreamResume(t, h, convID, user, "1", nil) // reconnect with a turn-1 cursor
+
+	if !strings.Contains(body, "event: "+EventFinish) {
+		t.Fatalf("a cross-turn reconnect must be released with a finish, got:\n%s", body)
+	}
+	if strings.Contains(body, "turn-2") {
+		t.Fatalf("a cross-turn reconnect must not replay the foreign live turn's deltas, got:\n%s", body)
 	}
 }
 

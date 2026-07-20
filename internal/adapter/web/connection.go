@@ -12,21 +12,11 @@ import (
 )
 
 const (
-	// maxBufferedEventsPerConv bounds the per-conversation resume buffer. A turn
-	// is a few hundred delta chunks at most; keeping the newest this-many lets a
-	// client that reconnects within a turn replay everything it missed. Older
-	// events fall out — a reconnect whose Last-Event-ID predates the window gets
-	// the buffer's tail (still includes the terminal finish, the only event whose
-	// loss strands the UI).
+	// Per-conversation resume buffer bounds (newest kept, oldest dropped).
 	maxBufferedEventsPerConv = 512
-	// maxBufferedConversations caps total resume buffers so an idle process can't
-	// accumulate them without bound; the least-recently-updated is evicted first.
+	maxBufferedBytesPerConv  = 256 * 1024
+	// maxBufferedConversations caps total buffers; least-recently-updated evicted first.
 	maxBufferedConversations = 2048
-	// maxBufferedBytesPerConv is a hard ceiling on retained payload bytes per
-	// conversation, dropping oldest first. The count cap alone bounds typical text
-	// turns; this backstops a pathologically large turn (e.g. many attachment refs
-	// on the END chunk) so one conversation can't pin outsized memory.
-	maxBufferedBytesPerConv = 256 * 1024
 )
 
 // bufferedEvent is a broadcast event tagged with its per-conversation sequence
@@ -36,19 +26,18 @@ type bufferedEvent struct {
 	event SSEEvent
 }
 
-// convEventBuffer is the resume log for one conversation: a monotonic sequence
-// counter and a bounded, oldest-first ring of recent events. Events are segmented
-// by turn — a terminal event marks the segment closed and the next turn's first
-// event starts a fresh one — so a resume only ever replays within the live turn.
+// convEventBuffer is one conversation's resume log: a monotonic counter and a
+// bounded ring, segmented by turn so a resume only ever replays the live turn.
 type convEventBuffer struct {
 	lastSeq uint64
 	events  []bufferedEvent
 	updated time.Time
-	// bytes is the sum of retained event payload sizes, for the byte cap.
-	bytes int
-	// endedTurn is set once the last retained event is terminal; the next event
-	// (a new turn's first) drops the finished turn's events before appending.
+	bytes   int // retained payload bytes, for the byte cap
+	// endedTurn: last retained event was terminal; the next event drops the segment.
 	endedTurn bool
+	// turnStartSeq: seq of the current segment's first event. A cursor below it
+	// predates the live turn (the client crossed a boundary) and gets a finish.
+	turnStartSeq uint64
 }
 
 // SSEConnection represents an active SSE connection
@@ -87,13 +76,12 @@ func NewConnectionManager(heartbeatInterval time.Duration) *ConnectionManager {
 	return cm
 }
 
-// AddWithResume registers a connection and atomically snapshots the events the
-// client missed (sequence greater than lastEventID). Registration and snapshot
-// share mu with Broadcast, so an event is either returned here or delivered live —
-// never both. caughtUp reports that the cursor already covers the latest buffered
-// event, so the caller can skip the terminal-state fallback and not send a
-// duplicate finish.
-func (cm *ConnectionManager) AddWithResume(conn *SSEConnection, lastEventID uint64) (missed []SSEEvent, caughtUp bool) {
+// AddWithResume registers a connection and snapshots the events the client missed
+// (seq > lastEventID), atomically with Broadcast so an event is either returned or
+// delivered live, never both. caughtUp: cursor already covers the latest event
+// (skip the fallback, no duplicate finish). crossedBoundary: cursor predates the
+// current turn (release the client with a finish, don't replay a foreign turn).
+func (cm *ConnectionManager) AddWithResume(conn *SSEConnection, lastEventID uint64) (missed []SSEEvent, caughtUp, crossedBoundary bool) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
@@ -105,26 +93,28 @@ func (cm *ConnectionManager) AddWithResume(conn *SSEConnection, lastEventID uint
 
 	buf := cm.eventBuffers[conn.ConversationID]
 	if buf == nil {
-		return nil, false
+		return nil, false, false
 	}
-	// A cursor past the buffer's max predates an eviction+recreate (the sequence
-	// restarts at 1) or is stale; a seq comparison would match nothing and suppress
-	// replay of the current turn, including its finish. Replay the whole ring
-	// instead — these events are from a turn the client hasn't seen, so no double
-	// delivery, and a retained finish still releases the client.
+	// Cursor before the current turn: the client crossed a boundary while away and
+	// the retained events are a different turn — release it instead of replaying them.
+	if lastEventID > 0 && lastEventID < buf.turnStartSeq {
+		return nil, false, true
+	}
+	// Cursor past the max: a stale id from before an eviction+recreate (seq restarts
+	// at 1). Replay the whole ring — the client has seen none of it, so no doubling.
 	if lastEventID > buf.lastSeq {
 		missed = make([]SSEEvent, 0, len(buf.events))
 		for _, be := range buf.events {
 			missed = append(missed, be.event)
 		}
-		return missed, false
+		return missed, false, false
 	}
 	for _, be := range buf.events {
 		if be.seq > lastEventID {
 			missed = append(missed, be.event)
 		}
 	}
-	return missed, lastEventID == buf.lastSeq
+	return missed, lastEventID == buf.lastSeq, false
 }
 
 // Start begins the heartbeat goroutine for connection liveness
@@ -169,11 +159,9 @@ func (cm *ConnectionManager) Remove(conversationID, connID string) {
 	}
 }
 
-// Broadcast tags an event with the next per-conversation sequence id, retains it
-// in the resume buffer, then sends it to all connections for the conversation.
-// The id lets a reconnecting client replay from its Last-Event-ID; buffering lets
-// an event survive a window with zero connections (the finish broadcast during a
-// reconnect gap that previously stranded the UI).
+// Broadcast tags an event with the next sequence id, retains it in the resume
+// buffer, then fans it out to the conversation's connections. Buffering lets an
+// event survive a window with zero connections (the lost-finish that stranded the UI).
 func (cm *ConnectionManager) Broadcast(conversationID string, event SSEEvent) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
@@ -196,11 +184,8 @@ func (cm *ConnectionManager) Broadcast(conversationID string, event SSEEvent) {
 	}
 }
 
-// bufferEventLocked assigns the event the next monotonic sequence number for the
-// conversation (as its SSE id) and appends it to the bounded resume buffer,
-// returning the id-tagged event to broadcast. It segments by turn (a new turn's
-// first event drops the finished turn) and bounds the buffer by both event count
-// and payload bytes, oldest-first. Caller must hold mu.
+// bufferEventLocked tags the event with the next sequence id and appends it to the
+// buffer, segmenting by turn and bounding by count and bytes. Caller must hold mu.
 func (cm *ConnectionManager) bufferEventLocked(conversationID string, event SSEEvent) SSEEvent {
 	buf := cm.eventBuffers[conversationID]
 	if buf == nil {
@@ -210,15 +195,16 @@ func (cm *ConnectionManager) bufferEventLocked(conversationID string, event SSEE
 		buf = &convEventBuffer{}
 		cm.eventBuffers[conversationID] = buf
 	}
-	// A new turn's first event opens a fresh segment: drop the previous (finished)
-	// turn so a resume replays only the current turn and stale payloads aren't
-	// pinned. lastSeq keeps climbing so ids stay monotonic across turns.
+	// A new turn's first event opens a fresh segment (lastSeq keeps climbing).
 	if buf.endedTurn {
 		buf.events = buf.events[:0]
 		buf.bytes = 0
 		buf.endedTurn = false
 	}
 	buf.lastSeq++
+	if len(buf.events) == 0 {
+		buf.turnStartSeq = buf.lastSeq // first event of the segment
+	}
 	event.ID = strconv.FormatUint(buf.lastSeq, 10)
 	buf.events = append(buf.events, bufferedEvent{seq: buf.lastSeq, event: event})
 	buf.bytes += len(event.Data)
@@ -321,11 +307,8 @@ func (cm *ConnectionManager) CloseConversation(conversationID string) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// The turn is terminal here (a client "stop generating"): HandleCancel has
-	// already broadcast the terminal finish, and no further events will follow.
-	// Drop the resume buffer rather than hold its full delta ring resident until
-	// LRU eviction — a late reconnect falls back to the store-derived terminal
-	// replay. Done unconditionally: a stop can arrive with no live connection.
+	// Stop is terminal — drop the resume buffer (a late reconnect falls back to the
+	// store-derived finish). Unconditional: a stop can arrive with no live connection.
 	delete(cm.eventBuffers, conversationID)
 
 	conns, ok := cm.connections[conversationID]

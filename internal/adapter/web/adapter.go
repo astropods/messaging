@@ -45,11 +45,8 @@ type WebAdapter struct {
 	allowedOrigins           []string
 	servePlayground          bool
 	supportsDeclarativeForms bool // overrides the capability; off until the switch
-	// freshSubscribeSettle bounds how long a fresh SSE subscribe (no resume
-	// cursor) waits for a live turn event before falling back to a store-derived
-	// terminal replay. It lets HandleStream observe whether a turn is actually
-	// live instead of guessing from a store snapshot that is ambiguous during the
-	// send→persist and finish→clear windows.
+	// freshSubscribeSettle: how long a no-cursor subscribe observes the wire before
+	// the store-derived terminal fallback (see settleFreshSubscribe).
 	freshSubscribeSettle time.Duration
 }
 
