@@ -1,6 +1,7 @@
 package web
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -199,6 +200,46 @@ func TestAddWithResume_EvictedMidTurnHoleReleasesClient(t *testing.T) {
 	}
 	if caughtUp {
 		t.Fatalf("an evicted cursor must not be treated as caught up")
+	}
+}
+
+// After a buffer is LRU-evicted and later recreated, its sequence must not reset
+// low enough for a stale cursor to alias the new turn's deltas. The seqFloor
+// high-water mark keeps numbering monotonic across eviction so the boundary guard
+// releases the stale cursor instead of splicing a foreign turn onto it.
+func TestAddWithResume_SeqSurvivesEvictionSoStaleCursorReleases(t *testing.T) {
+	cm := NewConnectionManager(time.Hour)
+	const convID = "conv-evicted"
+
+	// Seed the conversation and make it strictly the oldest buffer so churn evicts it.
+	cm.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"a"}`}) // seq 1
+	cm.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"b"}`}) // seq 2 (cursor lands here)
+	time.Sleep(2 * time.Millisecond)
+
+	// Churn past the conversation cap so the seeded buffer is LRU-evicted.
+	for i := 0; i < maxBufferedConversations; i++ {
+		cm.Broadcast("filler-"+strconv.Itoa(i), SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"f"}`})
+	}
+
+	// A new, unrelated turn on the same conversation recreates the buffer and,
+	// being long, climbs past the old cursor (2) — the aliasing window.
+	for i := 0; i < 5; i++ {
+		cm.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"new"}`})
+	}
+
+	conn := &SSEConnection{
+		ID:             "c1",
+		ConversationID: convID,
+		EventChan:      make(chan SSEEvent, 8),
+		Done:           make(chan struct{}),
+	}
+	missed, _, crossedBoundary := cm.AddWithResume(conn, 2) // stale cursor from the evicted turn
+
+	if !crossedBoundary {
+		t.Fatalf("a stale cursor from an evicted+recreated buffer must flag a crossed boundary")
+	}
+	if len(missed) != 0 {
+		t.Fatalf("a boundary release must replay nothing, got %d foreign events", len(missed))
 	}
 }
 

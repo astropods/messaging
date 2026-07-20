@@ -59,9 +59,13 @@ type ConnectionManager struct {
 	// connections so Broadcast (append+fan-out) and AddWithResume (register+
 	// snapshot) are atomic — an event is never both replayed and delivered live.
 	eventBuffers map[string]*convEventBuffer
-	mu           sync.RWMutex
-	heartbeat    time.Duration
-	stopChan     chan struct{}
+	// seqFloor is the high-water mark of every dropped buffer's lastSeq. A recreated
+	// buffer resumes numbering above it, keeping per-conversation seqs monotonic
+	// across eviction so a stale cursor never aliases a foreign turn's deltas.
+	seqFloor  uint64
+	mu        sync.RWMutex
+	heartbeat time.Duration
+	stopChan  chan struct{}
 }
 
 // NewConnectionManager creates a new connection manager
@@ -185,7 +189,7 @@ func (cm *ConnectionManager) bufferEventLocked(conversationID string, event SSEE
 		if len(cm.eventBuffers) >= maxBufferedConversations {
 			cm.evictOldestBufferLocked()
 		}
-		buf = &convEventBuffer{}
+		buf = &convEventBuffer{lastSeq: cm.seqFloor}
 		cm.eventBuffers[conversationID] = buf
 	}
 	// A terminal event segments the turn: the next event starts a fresh segment so
@@ -225,8 +229,21 @@ func (cm *ConnectionManager) evictOldestBufferLocked() {
 		}
 	}
 	if oldestID != "" {
-		delete(cm.eventBuffers, oldestID)
+		cm.dropBufferLocked(oldestID)
 	}
+}
+
+// dropBufferLocked removes a conversation's buffer, carrying its lastSeq into
+// seqFloor so a later recreate keeps the sequence monotonic. Caller must hold mu.
+func (cm *ConnectionManager) dropBufferLocked(conversationID string) {
+	buf := cm.eventBuffers[conversationID]
+	if buf == nil {
+		return
+	}
+	if buf.lastSeq > cm.seqFloor {
+		cm.seqFloor = buf.lastSeq
+	}
+	delete(cm.eventBuffers, conversationID)
 }
 
 // LatestSeq returns the highest buffered sequence id for a conversation (0 if
@@ -314,7 +331,7 @@ func (cm *ConnectionManager) CloseConversation(conversationID string) {
 
 	// Stop is terminal — drop the resume buffer (a late reconnect falls back to the
 	// store-derived finish). Unconditional: a stop can arrive with no live connection.
-	delete(cm.eventBuffers, conversationID)
+	cm.dropBufferLocked(conversationID)
 
 	conns, ok := cm.connections[conversationID]
 	if !ok {

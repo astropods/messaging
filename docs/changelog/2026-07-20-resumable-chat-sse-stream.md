@@ -21,7 +21,10 @@ shows it").
   being replayed a foreign turn's deltas or left hanging. It is bounded by both
   event count and
   **payload bytes** (so one outsized turn can't pin memory), plus an LRU cap on
-  total conversations, and is released on stop. The buffer is independent of
+  total conversations, and is released on stop. Sequence numbers are **monotonic
+  across eviction** — a recreated buffer resumes above a high-water mark rather than
+  restarting at 1 — so a stale cursor from an evicted turn can never numerically
+  alias a later turn's deltas. The buffer is independent of
   connection lifetime, so an event survives a window with zero connections.
   Buffering and fan-out happen under one lock together with register+snapshot, so
   an event is never both replayed and delivered live.
@@ -31,10 +34,9 @@ shows it").
   sequence (missed chunks and the terminal `finish`) before resuming live. The
   astro-server messaging proxy forwards the `Last-Event-ID` header (it previously
   dropped it). A cursor the buffer can't contiguously replay — before the live
-  segment (a crossed turn boundary), beyond the max (a stale id from before an
-  eviction+recreate reset the sequence to 1), or in a hole the per-conversation cap
-  evicted mid-turn — is released with a finish and reconciles from history, rather
-  than being spliced with a gapped or foreign delta stream.
+  segment (a crossed turn boundary), beyond the max, or in a hole the
+  per-conversation cap evicted mid-turn — is released with a finish and reconciles
+  from history, rather than being spliced with a gapped or foreign delta stream.
 
 - **Settle instead of guess on a fresh subscribe.** A subscribe with no cursor
   can't resume from a position, and the store snapshot alone is ambiguous: "the
