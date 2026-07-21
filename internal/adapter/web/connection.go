@@ -97,11 +97,11 @@ func (cm *ConnectionManager) AddWithResume(conn *SSEConnection, lastEventID uint
 	if buf == nil {
 		return nil, false, false
 	}
-	// Cursor the buffer can't contiguously replay — before the segment (crossed a
-	// boundary), past the max (an eviction+recreate reset the sequence to 1), or in a
-	// hole the cap evicted mid-turn (next expected seq predates the oldest retained).
-	// Release it to reconcile from history rather than deliver a gapped or foreign
-	// delta stream.
+	// Cursor the buffer can't contiguously replay — before the segment (a crossed turn
+	// boundary; an in-process eviction+recreate lands here too, since seqFloor numbers
+	// the recreated turn above the stale cursor), past the max (a pre-restart cursor: a
+	// sidecar restart lost the buffer and seqFloor, restarting numbering at 1), or in a
+	// hole the cap evicted mid-turn. Release it to reconcile from history.
 	if lastEventID > 0 && (lastEventID < buf.turnStartSeq || lastEventID > buf.lastSeq ||
 		(len(buf.events) > 0 && lastEventID+1 < buf.events[0].seq)) {
 		return nil, false, true

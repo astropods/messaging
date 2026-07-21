@@ -161,20 +161,16 @@ func TestHandleStream_LiveChunkDuringSettleIsDeliveredNotPreempted(t *testing.T)
 	}
 }
 
-// Eviction hardening: after maxBufferedConversations evicts a buffer, the next
-// broadcast recreates it with the sequence restarting at 1. A client reconnecting
-// with a cursor from before the eviction carries a higher id than the reset
-// buffer's max, which would make a naive seq comparison match nothing and suppress
-// the replay — re-stranding the UI. Such a cursor replays the whole retained ring.
-// A cursor beyond the buffer's max means the sequence was reset by an
-// eviction+recreate, so the retained ring belongs to a different (possibly live)
-// turn. It must be released as a crossed boundary, not replayed, so a foreign
-// turn's deltas are never spliced onto the client's stale reconstruction.
+// A cursor beyond the buffer's max is a pre-restart cursor: a sidecar restart lost
+// the in-memory buffer and seqFloor, so numbering began again from 1 while the
+// client still carries a higher pre-restart id. (An in-process eviction+recreate
+// can't cause this — seqFloor numbers the recreated turn above the old cursor, so
+// that case is caught by the turnStartSeq branch.) Release it as a crossed boundary.
 func TestAddWithResume_CursorAheadOfBufferReleasesClient(t *testing.T) {
 	cm := NewConnectionManager(time.Hour)
 	const convID = "conv-reset"
 
-	// A recreated buffer's sequence starts at 1; this turn is still live (no finish).
+	// A post-restart buffer numbers from 1; this turn is still live (no finish).
 	cm.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"foreign-a"}`}) // seq 1
 	cm.Broadcast(convID, SSEEvent{Event: EventChunk, Data: `{"type":"chunk","content":"foreign-b"}`}) // seq 2
 
@@ -184,17 +180,17 @@ func TestAddWithResume_CursorAheadOfBufferReleasesClient(t *testing.T) {
 		EventChan:      make(chan SSEEvent, 8),
 		Done:           make(chan struct{}),
 	}
-	// Cursor 50 is far beyond the reset buffer's max (2) — a pre-eviction id.
+	// Cursor 50 is far beyond the post-restart buffer's max (2) — a pre-restart id.
 	missed, caughtUp, crossedBoundary := cm.AddWithResume(conn, 50)
 
 	if !crossedBoundary {
-		t.Fatalf("a cursor beyond the reset buffer must flag a crossed boundary, not replay a foreign turn")
+		t.Fatalf("a cursor beyond the post-restart buffer's max must flag a crossed boundary, not replay a foreign turn")
 	}
 	if len(missed) != 0 {
 		t.Fatalf("a boundary release must replay nothing, got %d events", len(missed))
 	}
 	if caughtUp {
-		t.Fatalf("a stale pre-eviction cursor must not be treated as caught up")
+		t.Fatalf("a stale pre-restart cursor must not be treated as caught up")
 	}
 }
 
