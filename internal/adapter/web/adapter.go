@@ -45,6 +45,9 @@ type WebAdapter struct {
 	allowedOrigins           []string
 	servePlayground          bool
 	supportsDeclarativeForms bool // overrides the capability; off until the switch
+	// freshSubscribeSettle: how long a no-cursor subscribe observes the wire before
+	// the store-derived terminal fallback (see settleFreshSubscribe).
+	freshSubscribeSettle time.Duration
 }
 
 // WebAdapterOption configures the WebAdapter
@@ -68,6 +71,15 @@ func WithSessionManager(sm SessionManager) WebAdapterOption {
 func WithHeartbeatInterval(d time.Duration) WebAdapterOption {
 	return func(a *WebAdapter) {
 		a.heartbeatInterval = d
+	}
+}
+
+// WithFreshSubscribeSettle sets how long a fresh SSE subscribe waits for a live
+// turn event before synthesizing a terminal finish from the store. Zero decides
+// immediately (no settle).
+func WithFreshSubscribeSettle(d time.Duration) WebAdapterOption {
+	return func(a *WebAdapter) {
+		a.freshSubscribeSettle = d
 	}
 }
 
@@ -102,9 +114,10 @@ func WithInteractionStore(s store.InteractionStore) WebAdapterOption {
 // New creates a new WebAdapter
 func New(opts ...WebAdapterOption) *WebAdapter {
 	a := &WebAdapter{
-		listenAddr:        ":8080",
-		heartbeatInterval: 30 * time.Second,
-		sessionManager:    &NoopSessionManager{},
+		listenAddr:           ":8080",
+		heartbeatInterval:    30 * time.Second,
+		freshSubscribeSettle: 300 * time.Millisecond,
+		sessionManager:       &NoopSessionManager{},
 	}
 
 	for _, opt := range opts {
@@ -135,6 +148,7 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 	// Initialize handlers
 	a.handlers = NewHandlers(a.connManager, a.sessionManager, a.threadStore, a.agentConfigStore)
 	a.handlers.turns = a.turns
+	a.handlers.freshSubscribeSettle = a.freshSubscribeSettle
 	a.handlers.degraded = a.degraded
 	a.handlers.interactions = a.interactions
 
