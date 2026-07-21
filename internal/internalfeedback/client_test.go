@@ -1,4 +1,4 @@
-package feedbacklog
+package internalfeedback
 
 import (
 	"context"

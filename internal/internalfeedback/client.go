@@ -1,4 +1,4 @@
-package feedbacklog
+package internalfeedback
 
 import (
 	"bytes"
@@ -55,10 +55,10 @@ type user struct {
 func NewFromToken(token string) (*Client, error) {
 	claims, err := authz.DecodeToken(token)
 	if err != nil {
-		return nil, fmt.Errorf("feedback log: decode token: %w", err)
+		return nil, fmt.Errorf("internal feedback: decode token: %w", err)
 	}
 	if strings.TrimSpace(claims.Issuer) == "" {
-		return nil, errors.New("feedback log: token missing iss claim")
+		return nil, errors.New("internal feedback: token missing iss claim")
 	}
 	return &Client{
 		httpClient: &http.Client{Timeout: defaultTimeout},
@@ -69,7 +69,7 @@ func NewFromToken(token string) (*Client, error) {
 
 func (c *Client) Record(ctx context.Context, fb *pb.PlatformFeedback) error {
 	if fb == nil {
-		return errors.New("feedback log: nil feedback")
+		return errors.New("internal feedback: nil feedback")
 	}
 	reqBody, ok := buildRequest(fb)
 	if !ok {
@@ -77,12 +77,12 @@ func (c *Client) Record(ctx context.Context, fb *pb.PlatformFeedback) error {
 	}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return fmt.Errorf("feedback log: marshal request: %w", err)
+		return fmt.Errorf("internal feedback: marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.serverURL+"/api/v1/deployments/feedback/scores", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("feedback log: build request: %w", err)
+		return fmt.Errorf("internal feedback: build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/json")
@@ -90,16 +90,16 @@ func (c *Client) Record(ctx context.Context, fb *pb.PlatformFeedback) error {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("feedback log: request: %w", err)
+		return fmt.Errorf("internal feedback: request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("feedback log: read response: %w", err)
+		return fmt.Errorf("internal feedback: read response: %w", err)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("feedback log: server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return fmt.Errorf("internal feedback: server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return nil
 }

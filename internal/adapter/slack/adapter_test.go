@@ -1266,9 +1266,9 @@ func TestHandleFeedbackButton_ThumbsUpForwardedToHandler(t *testing.T) {
 	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
 
 	fbHandler := &captureFeedbackHandler{}
-	feedbackLogHandler := &captureFeedbackHandler{}
+	internalFeedbackHandler := &captureFeedbackHandler{}
 	a.feedbackHandler = fbHandler.handle
-	a.feedbackLogHandler = feedbackLogHandler.handle
+	a.internalFeedbackHandler = internalFeedbackHandler.handle
 
 	cb := &slacklib.InteractionCallback{
 		User:      slacklib.User{ID: "U999", Name: "alice"},
@@ -1312,9 +1312,9 @@ func TestHandleFeedbackButton_ThumbsUpForwardedToHandler(t *testing.T) {
 	if fb.TraceContext == nil || fb.TraceContext.Traceparent == "" {
 		t.Fatalf("expected forwarded trace context, got %+v", fb.TraceContext)
 	}
-	feedbackLogHandler.waitForCount(t, 1)
-	if feedbackLogHandler.last().TraceContext.Traceparent != fb.TraceContext.Traceparent {
-		t.Errorf("feedback log traceparent: got %q want %q", feedbackLogHandler.last().TraceContext.Traceparent, fb.TraceContext.Traceparent)
+	internalFeedbackHandler.waitForCount(t, 1)
+	if internalFeedbackHandler.last().TraceContext.Traceparent != fb.TraceContext.Traceparent {
+		t.Errorf("internal feedback traceparent: got %q want %q", internalFeedbackHandler.last().TraceContext.Traceparent, fb.TraceContext.Traceparent)
 	}
 }
 
@@ -1385,9 +1385,9 @@ func TestHandleViewSubmission_TextForwarded(t *testing.T) {
 	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
 
 	fbHandler := &captureFeedbackHandler{}
-	feedbackLogHandler := &captureFeedbackHandler{}
+	internalFeedbackHandler := &captureFeedbackHandler{}
 	a.feedbackHandler = fbHandler.handle
-	a.feedbackLogHandler = feedbackLogHandler.handle
+	a.internalFeedbackHandler = internalFeedbackHandler.handle
 
 	meta, _ := json.Marshal(map[string]string{
 		"channel_id":      "C123",
@@ -1437,7 +1437,7 @@ func TestHandleViewSubmission_TextForwarded(t *testing.T) {
 	if fb.TraceContext == nil || fb.TraceContext.Traceparent == "" {
 		t.Fatalf("expected text feedback trace context, got %+v", fb.TraceContext)
 	}
-	feedbackLogHandler.waitForCount(t, 1)
+	internalFeedbackHandler.waitForCount(t, 1)
 }
 
 func TestHandleViewSubmission_EmptySubmissionNotForwarded(t *testing.T) {

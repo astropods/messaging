@@ -26,16 +26,16 @@ import (
 
 // SlackAdapter implements the adapter.Adapter interface for Slack
 type SlackAdapter struct {
-	client             *slack.Client
-	socketClient       *socketmode.Client
-	config             adapter.Config
-	msgHandler         adapter.MessageHandler
-	feedbackHandler    adapter.FeedbackHandler
-	feedbackLogHandler adapter.FeedbackLogHandler
-	authz              authz.Authorizer // nil = skip authz (dev convenience)
-	rateLimiter        *RateLimiter
-	stopChan           chan struct{}
-	aiClient           *SlackAIClient
+	client                  *slack.Client
+	socketClient            *socketmode.Client
+	config                  adapter.Config
+	msgHandler              adapter.MessageHandler
+	feedbackHandler         adapter.FeedbackHandler
+	internalFeedbackHandler adapter.InternalFeedbackHandler
+	authz                   authz.Authorizer // nil = skip authz (dev convenience)
+	rateLimiter             *RateLimiter
+	stopChan                chan struct{}
+	aiClient                *SlackAIClient
 
 	// contentBuffers accumulates DELTA chunks per conversation so the adapter
 	// can send a single complete message to Slack on END.
@@ -67,8 +67,8 @@ func (a *SlackAdapter) SetAuthorizer(az authz.Authorizer) {
 	a.authz = az
 }
 
-func (a *SlackAdapter) SetFeedbackLogHandler(handler adapter.FeedbackLogHandler) {
-	a.feedbackLogHandler = handler
+func (a *SlackAdapter) SetInternalFeedbackHandler(handler adapter.InternalFeedbackHandler) {
+	a.internalFeedbackHandler = handler
 }
 
 // errAuthzDenied / errAuthzUnavailable are sentinel errors returned by
@@ -582,7 +582,7 @@ func (a *SlackAdapter) handleFeedbackButton(ctx context.Context, callback *slack
 		},
 	}
 	a.forwardFeedback(ctx, fb)
-	a.forwardFeedbackLog(ctx, fb)
+	a.forwardFeedbackInternally(ctx, fb)
 }
 
 // Block / action / callback identifiers for the feedback UI. Centralised so
@@ -748,7 +748,7 @@ func (a *SlackAdapter) handleViewSubmission(ctx context.Context, req *socketmode
 		},
 	}
 	a.forwardFeedback(ctx, fb)
-	a.forwardFeedbackLog(ctx, fb)
+	a.forwardFeedbackInternally(ctx, fb)
 }
 
 // ackViewSubmission sends the socket-mode ack for a view_submission. payload
@@ -817,19 +817,19 @@ func (a *SlackAdapter) forwardFeedback(ctx context.Context, fb *pb.PlatformFeedb
 	}
 }
 
-func (a *SlackAdapter) forwardFeedbackLog(ctx context.Context, fb *pb.PlatformFeedback) {
-	handler := a.feedbackLogHandler
+func (a *SlackAdapter) forwardFeedbackInternally(ctx context.Context, fb *pb.PlatformFeedback) {
+	handler := a.internalFeedbackHandler
 	if handler == nil {
 		return
 	}
 	if fb.GetTraceContext() == nil {
-		slog.Debug("[Slack] Feedback log skipped: missing trace context")
+		slog.Debug("[Slack] Internal feedback forwarding skipped: missing trace context")
 		return
 	}
 	feedback := proto.Clone(fb).(*pb.PlatformFeedback)
 	go func() {
 		if err := handler(ctx, feedback); err != nil {
-			slog.Error("[Slack] Feedback log forward failed", "err", err)
+			slog.Error("[Slack] Internal feedback forward failed", "err", err)
 		}
 	}()
 }
