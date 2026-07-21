@@ -16,7 +16,7 @@ import (
 
 const (
 	slackAPIBaseURL               = "https://slack.com/api"
-	slackTraceMetadataEventType   = "astropods_trace_context"
+	slackReplyMetadataEventType   = "astropods_reply_posted"
 	slackTraceMetadataTraceparent = "traceparent"
 	slackTraceMetadataTracestate  = "tracestate"
 )
@@ -219,7 +219,7 @@ func slackTraceMetadata(traceContext *pb.TraceContext) map[string]interface{} {
 		payload[slackTraceMetadataTracestate] = traceContext.Tracestate
 	}
 	return map[string]interface{}{
-		"event_type":    slackTraceMetadataEventType,
+		"event_type":    slackReplyMetadataEventType,
 		"event_payload": payload,
 	}
 }

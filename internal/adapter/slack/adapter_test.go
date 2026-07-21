@@ -1277,7 +1277,7 @@ func TestHandleFeedbackButton_ThumbsUpForwardedToHandler(t *testing.T) {
 	}
 	cb.Message.Timestamp = "1700000000.000002"
 	cb.Message.Metadata = slacklib.SlackMetadata{
-		EventType: slackTraceMetadataEventType,
+		EventType: slackReplyMetadataEventType,
 		EventPayload: map[string]any{
 			slackTraceMetadataTraceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
 		},

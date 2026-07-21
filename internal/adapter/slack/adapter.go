@@ -782,7 +782,7 @@ func conversationIDFromCallback(callback *slack.InteractionCallback) string {
 }
 
 func traceContextFromSlackMessage(msg slack.Message) *pb.TraceContext {
-	if msg.Metadata.EventType != slackTraceMetadataEventType {
+	if msg.Metadata.EventType != slackReplyMetadataEventType {
 		return nil
 	}
 	payload := msg.Metadata.EventPayload

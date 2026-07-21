@@ -269,7 +269,7 @@ func TestSlackAIClient_PostMessageWithFeedback_Success(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected metadata in payload, got %v", capturedBody["metadata"])
 	}
-	if metadata["event_type"] != slackTraceMetadataEventType {
+	if metadata["event_type"] != slackReplyMetadataEventType {
 		t.Errorf("metadata event_type: got %v", metadata["event_type"])
 	}
 	payload, ok := metadata["event_payload"].(map[string]any)
