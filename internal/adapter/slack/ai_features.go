@@ -113,6 +113,7 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 	switch content.Type {
 	case pb.ContentChunk_START:
 		// Reset buffer for this conversation
+		a.bufferMu.Lock()
 		if a.contentBuffers == nil {
 			a.contentBuffers = make(map[string]string)
 		}
@@ -125,10 +126,12 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 		} else {
 			delete(a.traceBuffers, conversationID)
 		}
+		a.bufferMu.Unlock()
 		return nil
 
 	case pb.ContentChunk_DELTA:
 		// Accumulate content
+		a.bufferMu.Lock()
 		if traceContext := firstTraceContext(responseTrace); traceContext != nil {
 			if a.traceBuffers == nil {
 				a.traceBuffers = make(map[string]*pb.TraceContext)
@@ -136,14 +139,18 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 			a.traceBuffers[conversationID] = traceContext
 		}
 		a.contentBuffers[conversationID] += content.Content
+		a.bufferMu.Unlock()
 		return nil
 
 	case pb.ContentChunk_END:
-		// Flush the buffered content as a single Slack message
+		// Snapshot and clear the buffers while locked, then release the lock
+		// before parsing, rate limiting, or making Slack API calls.
+		a.bufferMu.Lock()
 		fullContent := a.contentBuffers[conversationID]
 		traceContext := firstTraceContext(responseTrace, a.traceBuffers[conversationID])
 		delete(a.contentBuffers, conversationID)
 		delete(a.traceBuffers, conversationID)
+		a.bufferMu.Unlock()
 
 		if fullContent == "" {
 			slog.Debug(fmt.Sprintf("[Slack] Skipping empty message for %s", conversationID))

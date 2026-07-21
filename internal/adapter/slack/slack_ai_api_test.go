@@ -302,7 +302,7 @@ func TestSlackAIClient_PostMessageWithFeedback_DevMode(t *testing.T) {
 		baseURL:    server.URL,
 	}
 
-	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001")
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -383,7 +383,7 @@ func TestSlackAIClient_PostMessageWithFeedback_DevMode_WithAgentID(t *testing.T)
 		baseURL:    server.URL,
 	}
 
-	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001")
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -410,7 +410,7 @@ func TestSlackAIClient_PostMessageWithFeedback_NoDevMode_WithAgentID(t *testing.
 		baseURL:    server.URL,
 	}
 
-	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001")
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -433,7 +433,7 @@ func TestSlackAIClient_PostMessageWithFeedback_NoDevMode(t *testing.T) {
 	})
 	defer cleanup()
 
-	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001")
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestSlackAIClient_PostMessageWithFeedback_NoThreadID(t *testing.T) {
 	})
 	defer cleanup()
 
-	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "")
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -483,7 +483,7 @@ func TestSlackAIClient_PostMessageWithFeedback_APIError(t *testing.T) {
 	})
 	defer cleanup()
 
-	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001")
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001", nil)
 	if err == nil {
 		t.Fatal("expected error for API error response")
 	}

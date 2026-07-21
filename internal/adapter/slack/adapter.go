@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
@@ -39,6 +40,7 @@ type SlackAdapter struct {
 
 	// contentBuffers accumulates DELTA chunks per conversation so the adapter
 	// can send a single complete message to Slack on END.
+	bufferMu       sync.Mutex
 	contentBuffers map[string]string
 	traceBuffers   map[string]*pb.TraceContext
 

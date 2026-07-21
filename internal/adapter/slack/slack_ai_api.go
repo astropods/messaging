@@ -145,13 +145,9 @@ const maxMarkdownBlockChars = 10000
 // code block — and each chunk is posted as its own message in the thread, so we
 // stay under Slack's per-block and per-message size limits. The footer and
 // feedback widgets ride on the last message. Returns the first message's ts.
-func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, content, threadID string, traceContextOpt ...*pb.TraceContext) (string, error) {
+func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, content, threadID string, traceContext *pb.TraceContext) (string, error) {
 	chunks := chunkMarkdown(content, maxMarkdownBlockChars)
 	trailing := c.feedbackTrailingBlocks()
-	var traceContext *pb.TraceContext
-	if len(traceContextOpt) > 0 {
-		traceContext = traceContextOpt[0]
-	}
 
 	var firstTS string
 	for i, chunk := range chunks {

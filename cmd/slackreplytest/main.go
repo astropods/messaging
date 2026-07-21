@@ -79,7 +79,7 @@ func main() {
 		ts, err = postMarkdownBlock(token, *channel, *thread, content)
 	} else {
 		client := slack.NewSlackAIClient(token, *dev, *agentID)
-		ts, err = client.PostMessageWithFeedback(context.Background(), *channel, content, *thread)
+		ts, err = client.PostMessageWithFeedback(context.Background(), *channel, content, *thread, nil)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "post failed: %v\n", err)

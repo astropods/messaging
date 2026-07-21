@@ -2,6 +2,7 @@ package slack
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -107,6 +108,111 @@ func newTestSlackAdapter(t *testing.T) (*SlackAdapter, *[]slackCall, func()) {
 }
 
 // --- Tests for HandleAgentResponse ---
+
+func TestSlackAdapter_HandleAgentResponse_ConcurrentContentBuffers(t *testing.T) {
+	const conversationCount = 64
+
+	a := &SlackAdapter{}
+	start := make(chan struct{})
+	errs := make(chan error, conversationCount)
+	var wg sync.WaitGroup
+
+	for i := 0; i < conversationCount; i++ {
+		conversationID := fmt.Sprintf("C%03d-1234567890.000001", i)
+		content := fmt.Sprintf("response-%03d", i)
+		traceparent := fmt.Sprintf("trace-%03d", i)
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			responses := []*pb.AgentResponse{
+				{
+					ConversationId: conversationID,
+					TraceContext:   &pb.TraceContext{Traceparent: traceparent},
+					Payload:        &pb.AgentResponse_Content{Content: &pb.ContentChunk{Type: pb.ContentChunk_START}},
+				},
+				{
+					ConversationId: conversationID,
+					Payload: &pb.AgentResponse_Content{Content: &pb.ContentChunk{
+						Type:    pb.ContentChunk_DELTA,
+						Content: content,
+					}},
+				},
+			}
+			for _, response := range responses {
+				if err := a.HandleAgentResponse(t.Context(), response); err != nil {
+					errs <- fmt.Errorf("%s: %w", conversationID, err)
+					return
+				}
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+
+	a.bufferMu.Lock()
+	for i := 0; i < conversationCount; i++ {
+		conversationID := fmt.Sprintf("C%03d-1234567890.000001", i)
+		wantContent := fmt.Sprintf("response-%03d", i)
+		wantTraceparent := fmt.Sprintf("trace-%03d", i)
+		if got := a.contentBuffers[conversationID]; got != wantContent {
+			t.Errorf("content for %s: got %q, want %q", conversationID, got, wantContent)
+		}
+		traceContext := a.traceBuffers[conversationID]
+		if traceContext == nil || traceContext.Traceparent != wantTraceparent {
+			t.Errorf("trace for %s: got %+v, want %q", conversationID, traceContext, wantTraceparent)
+		}
+	}
+	a.bufferMu.Unlock()
+
+	// Reset each buffer to empty so concurrent END chunks exercise the read and
+	// delete path without making Slack API calls.
+	for i := 0; i < conversationCount; i++ {
+		conversationID := fmt.Sprintf("C%03d-1234567890.000001", i)
+		if err := a.HandleAgentResponse(t.Context(), &pb.AgentResponse{
+			ConversationId: conversationID,
+			Payload:        &pb.AgentResponse_Content{Content: &pb.ContentChunk{Type: pb.ContentChunk_START}},
+		}); err != nil {
+			t.Fatalf("reset %s: %v", conversationID, err)
+		}
+	}
+
+	start = make(chan struct{})
+	errs = make(chan error, conversationCount)
+	for i := 0; i < conversationCount; i++ {
+		conversationID := fmt.Sprintf("C%03d-1234567890.000001", i)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if err := a.HandleAgentResponse(t.Context(), &pb.AgentResponse{
+				ConversationId: conversationID,
+				Payload:        &pb.AgentResponse_Content{Content: &pb.ContentChunk{Type: pb.ContentChunk_END}},
+			}); err != nil {
+				errs <- fmt.Errorf("%s: %w", conversationID, err)
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+
+	a.bufferMu.Lock()
+	defer a.bufferMu.Unlock()
+	if len(a.contentBuffers) != 0 || len(a.traceBuffers) != 0 {
+		t.Fatalf("expected buffers to be empty, got content=%d trace=%d", len(a.contentBuffers), len(a.traceBuffers))
+	}
+}
 
 func TestSlackAdapter_HandleAgentResponse_ContentEnd_PostsMessage(t *testing.T) {
 	a, calls, cleanup := newTestSlackAdapter(t)
