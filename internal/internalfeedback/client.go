@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -73,6 +74,8 @@ func (c *Client) Record(ctx context.Context, fb *pb.PlatformFeedback) error {
 	}
 	reqBody, ok := buildRequest(fb)
 	if !ok {
+		slog.Debug("internal feedback: skipped (missing trace context, response id, user, or unsupported feedback)",
+			"conversation", fb.GetConversationId(), "response_id", fb.GetResponseId())
 		return nil
 	}
 	body, err := json.Marshal(reqBody)
@@ -101,6 +104,8 @@ func (c *Client) Record(ctx context.Context, fb *pb.PlatformFeedback) error {
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("internal feedback: server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
+	slog.Debug("internal feedback: score recorded", "status", resp.StatusCode,
+		"conversation", fb.GetConversationId(), "response_id", fb.GetResponseId(), "kind", reqBody.Feedback.Kind)
 	return nil
 }
 
