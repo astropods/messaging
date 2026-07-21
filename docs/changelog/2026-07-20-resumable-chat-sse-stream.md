@@ -74,4 +74,7 @@ meaningful fraction of the limit.
 
 None. No config, API, or schema changes; the SSE wire format is unchanged apart
 from now always carrying an `id:` field. Pairs with the astro monorepo change
-that forwards `Last-Event-ID` through the messaging proxy.
+that forwards `Last-Event-ID` through the messaging proxy. The paired client
+closes its `EventSource` on a terminal finish and re-subscribes fresh (reconciling
+from history), so a released client never rides the browser's automatic reconnect
+back into a live turn mid-stream.

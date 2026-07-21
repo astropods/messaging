@@ -1,6 +1,7 @@
 package web
 
 import (
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -94,6 +95,35 @@ func TestHandleStream_EndRace_ReplaysFinishAfterStreamingClearsDuringSettle(t *t
 
 	if !strings.Contains(body, "event: "+EventFinish) {
 		t.Fatalf("a finished turn whose streaming flag cleared during the settle must be replayed a finish, got:\n%s", body)
+	}
+}
+
+// A cancel broadcasts a terminal finish and then closes conn.Done in the same
+// call. select picks a ready case at random, so a fresh subscriber still in its
+// settle window can have Done win over the enqueued finish; the Done branch must
+// drain EventChan first so the finish is flushed rather than dropped.
+func TestSettleFreshSubscribe_DrainsFinishWhenDoneWins(t *testing.T) {
+	h, _ := streamHandlersWithStore(t)
+	h.freshSubscribeSettle = time.Hour // only Done/EventChan drive the return, not the timer
+
+	// Repeat: without the drain the finish is dropped whenever Done wins (~half the
+	// time), which the loop makes reliably observable.
+	for i := 0; i < 200; i++ {
+		conn := &SSEConnection{
+			ID:             "c1",
+			ConversationID: "conv-cancel",
+			EventChan:      make(chan SSEEvent, 4),
+			Done:           make(chan struct{}),
+		}
+		conn.EventChan <- NewFinishEvent("") // terminal enqueued by the cancel's broadcast
+		close(conn.Done)                     // …then Done closed in the same call
+
+		rec := httptest.NewRecorder()
+		h.settleFreshSubscribe(t.Context(), rec, rec, conn, "conv-cancel")
+
+		if !strings.Contains(rec.Body.String(), "event: "+EventFinish) {
+			t.Fatalf("iter %d: settle dropped the enqueued finish when Done won the select", i)
+		}
 	}
 }
 

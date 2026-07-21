@@ -526,7 +526,18 @@ func (h *Handlers) settleFreshSubscribe(
 		case <-ctx.Done():
 			return true
 		case <-conn.Done:
-			return true
+			// Drain enqueued events before returning: a cancel broadcasts finish then
+			// closes Done, and select is random, so Done can win over the finish. Mirror
+			// the event loop's drain so the terminal isn't dropped.
+			for {
+				select {
+				case event := <-conn.EventChan:
+					_, _ = fmt.Fprint(w, event.Format()) //nolint:gosec // buffered SSE events are internally constructed
+					flusher.Flush()
+				default:
+					return true
+				}
+			}
 		case event := <-conn.EventChan:
 			_, _ = fmt.Fprint(w, event.Format()) //nolint:gosec // buffered SSE events are internally constructed
 			flusher.Flush()
