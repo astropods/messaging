@@ -35,3 +35,10 @@ Opt-in: an agent that consumes file uploads must set `supportsFiles: true` in th
 config it declares (via the SDK / adapter-core) and redeploy, otherwise the web
 client hides the upload button. Agents that don't handle files need no change.
 Additive field on the `agent/config` response; older clients ignore it.
+
+Shipping this requires publishing both SDK artifacts, not just the sidecar image:
+an agent can only declare `supports_files` if its bundled SDK proto carries the
+field. The TypeScript (`@astropods/messaging`) and Python (`astropods-messaging`)
+packages are both bumped to `0.1.2` and their generated stubs regenerated from the
+updated `config.proto`; publish both (npm + PyPI) alongside the sidecar image.
+Existing agents pick up the field only on a fresh build/redeploy against the new SDK.
