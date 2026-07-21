@@ -832,9 +832,17 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 		Type        string     `json:"type"`
 		Graph       *toolGraph `json:"graph,omitempty"`
 	}
+	type capabilitiesResp struct {
+		// Files reports whether uploads are usable: the sidecar has a file store
+		// wired AND the agent declared it consumes attachments. The client hides
+		// the composer's upload affordance when false, so an agent that never wires
+		// up the files API doesn't advertise an upload that would be ignored.
+		Files bool `json:"files"`
+	}
 	type agentConfigResp struct {
-		SystemPrompt string       `json:"systemPrompt"`
-		Tools        []toolConfig `json:"tools"`
+		SystemPrompt string           `json:"systemPrompt"`
+		Tools        []toolConfig     `json:"tools"`
+		Capabilities capabilitiesResp `json:"capabilities"`
 	}
 
 	tools := make([]toolConfig, 0, len(config.Tools))
@@ -864,6 +872,7 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	resp := agentConfigResp{
 		SystemPrompt: config.SystemPrompt,
 		Tools:        tools,
+		Capabilities: capabilitiesResp{Files: h.fileStore != nil && config.GetSupportsFiles()},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
