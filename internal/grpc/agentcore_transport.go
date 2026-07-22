@@ -79,7 +79,7 @@ func (h *httpInvoker) Invoke(ctx context.Context, sessionID string, payload []by
 		return nil, fmt.Errorf("invoke runtime: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("invoke runtime: status %d", resp.StatusCode)
 	}
 	return resp.Body, nil
@@ -147,7 +147,7 @@ func (t *AgentCoreTransport) HandleIncomingMessage(ctx context.Context, msg *pb.
 		metrics.MessagesDropped.WithLabelValues(msg.Platform, "invoke_error").Inc()
 		return fmt.Errorf("invoke runtime: %w", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	metrics.MessagesForwarded.WithLabelValues(msg.Platform).Inc()
 	if err := t.streamSSE(ctx, stream, msg); err != nil {
