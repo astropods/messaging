@@ -84,8 +84,11 @@ func TestRuntimeSessionID_ContractLength(t *testing.T) {
 }
 
 func TestRuntimeSessionID_DeterministicAnd1to1(t *testing.T) {
-	// Same conversation ⇒ same session (INV2: keeps the microVM warm).
-	if runtimeSessionID("conv-42") != runtimeSessionID("conv-42") {
+	// Same conversation ⇒ same session (INV2: keeps the microVM warm). Bind to
+	// vars so the comparison isn't flagged as SA4000 (identical expressions).
+	first := runtimeSessionID("conv-42")
+	second := runtimeSessionID("conv-42")
+	if first != second {
 		t.Error("not deterministic for the same conversation id")
 	}
 	// Different conversations ⇒ different sessions.
