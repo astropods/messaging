@@ -39,6 +39,9 @@ type Config struct {
 	// Files (deployment-local file upload/download on the shared volume)
 	Files FilesConfig
 
+	// AgentCore invoke-per-turn transport (opt-in; empty = default gRPC dial-in)
+	AgentCore AgentCoreConfig
+
 	// Logging
 	LogLevel string
 }
@@ -53,6 +56,46 @@ type FilesConfig struct {
 	// Backend selects the storage implementation: "fs" (default) uses Dir; "s3"
 	// is reserved for a future presigned-object implementation.
 	Backend string
+}
+
+// AgentCoreConfig configures the invoke-per-turn transport used when the agent
+// runs on AWS Bedrock AgentCore Runtime instead of dialing in over gRPC.
+//
+// Enabled iff Transport == "agentcore". The default (empty) keeps the existing
+// behavior byte-for-byte: adapters route to the gRPC agent stream.
+type AgentCoreConfig struct {
+	// Transport selects the agent transport: "" | "grpc" (default, dial-in) or
+	// "agentcore" (messaging invokes the runtime per turn). From AGENT_TRANSPORT.
+	Transport string
+	// DeployTarget picks the invoke backend: "aws" ⇒ SigV4-signed
+	// InvokeAgentRuntime against Arn; anything else (incl. "local", "") ⇒ plain
+	// unsigned HTTP POST to Endpoint. From ASTRO_DEPLOY_TARGET.
+	DeployTarget string
+	// Endpoint is the local runtime base URL (e.g. http://localhost:8080); its
+	// POST /invocations is called per turn. Used when DeployTarget != "aws".
+	// From AGENT_RUNTIME_ENDPOINT.
+	Endpoint string
+	// Arn is the deployed AgentCore runtime ARN. Produced by `wrapper deploy`
+	// (CreateAgentRuntime) and injected here; messaging never guesses it. Used
+	// when DeployTarget == "aws". From AGENT_RUNTIME_ARN.
+	Arn string
+	// Region is the AWS region for the data-plane call; empty ⇒ SDK config
+	// chain (AWS_REGION / profile). From AWS_REGION.
+	Region string
+	// Qualifier optionally targets a specific runtime endpoint/version; empty ⇒
+	// default endpoint. From AGENT_RUNTIME_QUALIFIER.
+	Qualifier string
+}
+
+// AgentCoreEnabled reports whether the invoke-per-turn transport is selected.
+func (c *Config) AgentCoreEnabled() bool {
+	return strings.EqualFold(c.AgentCore.Transport, "agentcore")
+}
+
+// AgentCoreOnAWS reports whether the signed InvokeAgentRuntime backend is
+// selected (vs. the local unsigned HTTP backend).
+func (c *Config) AgentCoreOnAWS() bool {
+	return strings.EqualFold(c.AgentCore.DeployTarget, "aws")
 }
 
 // ChatConfig holds deployment-local chat persistence configuration.
@@ -265,6 +308,16 @@ func Load() (*Config, error) {
 	cfg.Files = FilesConfig{
 		Dir:     getEnv("FILES_DIR", ""),
 		Backend: getEnv("FILES_BACKEND", "fs"),
+	}
+
+	// AgentCore invoke-per-turn transport (opt-in). Unset ⇒ default gRPC dial-in.
+	cfg.AgentCore = AgentCoreConfig{
+		Transport:    strings.TrimSpace(os.Getenv("AGENT_TRANSPORT")),
+		DeployTarget: strings.TrimSpace(os.Getenv("ASTRO_DEPLOY_TARGET")),
+		Endpoint:     strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ENDPOINT")),
+		Arn:          strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ARN")),
+		Region:       strings.TrimSpace(os.Getenv("AWS_REGION")),
+		Qualifier:    strings.TrimSpace(os.Getenv("AGENT_RUNTIME_QUALIFIER")),
 	}
 
 	return cfg, nil
