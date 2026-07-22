@@ -23,9 +23,14 @@ const (
 
 // Agent configuration declared at startup
 type AgentConfig struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SystemPrompt  string                 `protobuf:"bytes,1,opt,name=system_prompt,json=systemPrompt,proto3" json:"system_prompt,omitempty"`
-	Tools         []*AgentToolConfig     `protobuf:"bytes,2,rep,name=tools,proto3" json:"tools,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	SystemPrompt string                 `protobuf:"bytes,1,opt,name=system_prompt,json=systemPrompt,proto3" json:"system_prompt,omitempty"`
+	Tools        []*AgentToolConfig     `protobuf:"bytes,2,rep,name=tools,proto3" json:"tools,omitempty"`
+	// Agent consumes file attachments. The web client hides the composer's
+	// upload affordance unless this is set, so an agent that never wires up the
+	// files API doesn't advertise an upload that would be silently ignored.
+	// Opt-in: an unset value (older agents) reads as false.
+	SupportsFiles bool `protobuf:"varint,3,opt,name=supports_files,json=supportsFiles,proto3" json:"supports_files,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -72,6 +77,13 @@ func (x *AgentConfig) GetTools() []*AgentToolConfig {
 		return x.Tools
 	}
 	return nil
+}
+
+func (x *AgentConfig) GetSupportsFiles() bool {
+	if x != nil {
+		return x.SupportsFiles
+	}
+	return false
 }
 
 // Tool configuration for any agent
@@ -328,10 +340,11 @@ var File_astro_messaging_v1_config_proto protoreflect.FileDescriptor
 
 const file_astro_messaging_v1_config_proto_rawDesc = "" +
 	"\n" +
-	"\x1fastro/messaging/v1/config.proto\x12\x12astro.messaging.v1\"m\n" +
+	"\x1fastro/messaging/v1/config.proto\x12\x12astro.messaging.v1\"\x94\x01\n" +
 	"\vAgentConfig\x12#\n" +
 	"\rsystem_prompt\x18\x01 \x01(\tR\fsystemPrompt\x129\n" +
-	"\x05tools\x18\x02 \x03(\v2#.astro.messaging.v1.AgentToolConfigR\x05tools\"\xab\x01\n" +
+	"\x05tools\x18\x02 \x03(\v2#.astro.messaging.v1.AgentToolConfigR\x05tools\x12%\n" +
+	"\x0esupports_files\x18\x03 \x01(\bR\rsupportsFiles\"\xab\x01\n" +
 	"\x0fAgentToolConfig\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
