@@ -42,6 +42,13 @@ type Adapter interface {
 	HydrateThread(ctx context.Context, conversationID string, store *store.ThreadHistoryStore) error
 }
 
+// AgentDisconnectHandler is implemented by adapters that stream turns and must
+// finalize them when the agent's gRPC stream ends, so clients get a terminal
+// event instead of hanging. Optional (Slack, etc. don't implement it).
+type AgentDisconnectHandler interface {
+	HandleAgentDisconnect(ctx context.Context)
+}
+
 // MessageHandler is called when a message is received from the platform.
 // It should forward the message to the gRPC server which sends it to the agent.
 type MessageHandler func(ctx context.Context, msg *pb.Message) error
@@ -77,12 +84,12 @@ type AudioForwarder interface {
 
 // Config holds adapter configuration
 type Config struct {
-	BotToken            string
-	AppToken            string // For Slack Socket Mode
-	SocketMode          bool
-	WebhookURL          string
-	AutoThread          bool
-	DevMode             bool // When true, messages include a "sent from dev" context
+	BotToken   string
+	AppToken   string // For Slack Socket Mode
+	SocketMode bool
+	WebhookURL string
+	AutoThread bool
+	DevMode    bool // When true, messages include a "sent from dev" context
 	// AgentID is the value of ASTRO_AGENT_ID at startup. When non-empty it is
 	// rendered in the Slack message footer so users know which agent replied.
 	AgentID             string

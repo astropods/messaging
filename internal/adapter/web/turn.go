@@ -17,11 +17,13 @@ import (
 const maxTrackedStops = 4096
 
 // turnState is the per-conversation streaming state for one in-flight turn: the
-// partial assistant text seen so far and the last time it was progressively
-// persisted (used to throttle mid-stream chat-store writes).
+// partial assistant text seen so far, the last time it was progressively
+// persisted (used to throttle mid-stream chat-store writes), and the idle
+// watchdog that reaps the turn if the agent goes silent.
 type turnState struct {
 	partial     strings.Builder
 	lastPersist time.Time
+	idleTimer   *time.Timer
 }
 
 // turnTracker records per-conversation streaming turn state so the web adapter
@@ -44,9 +46,11 @@ type turnState struct {
 // after the new turn's START can still slip through; fully halting generation
 // requires agent/SDK cooperation.)
 type turnTracker struct {
-	mu      sync.Mutex
-	turns   map[string]*turnState
-	stopped map[string]bool
+	mu          sync.Mutex
+	turns       map[string]*turnState
+	stopped     map[string]bool
+	idleTimeout time.Duration
+	onIdle      func(conversationID string)
 }
 
 func newTurnTracker() *turnTracker {
@@ -54,6 +58,96 @@ func newTurnTracker() *turnTracker {
 		turns:   make(map[string]*turnState),
 		stopped: make(map[string]bool),
 	}
+}
+
+// setIdleReaper enables the idle watchdog: a tracked turn with no activity for
+// timeout invokes onIdle. Zero timeout leaves it disabled.
+func (t *turnTracker) setIdleReaper(timeout time.Duration, onIdle func(conversationID string)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.idleTimeout = timeout
+	t.onIdle = onIdle
+}
+
+// armIdleLocked (re)starts a turn's idle watchdog. Caller holds mu.
+func (t *turnTracker) armIdleLocked(conversationID string, st *turnState) {
+	if t.idleTimeout <= 0 || t.onIdle == nil {
+		return
+	}
+	onIdle := t.onIdle
+	if st.idleTimer == nil {
+		st.idleTimer = time.AfterFunc(t.idleTimeout, func() { onIdle(conversationID) })
+		return
+	}
+	st.idleTimer.Reset(t.idleTimeout)
+}
+
+func stopIdleLocked(st *turnState) {
+	if st != nil && st.idleTimer != nil {
+		st.idleTimer.Stop()
+	}
+}
+
+// startTurn marks a turn in flight when the user's message is forwarded, arming
+// the idle watchdog so an agent that hangs before its first chunk is still reaped.
+func (t *turnTracker) startTurn(conversationID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	st := t.turns[conversationID]
+	if st == nil {
+		if len(t.turns) >= maxTrackedStops {
+			for k, old := range t.turns {
+				stopIdleLocked(old)
+				delete(t.turns, k)
+				break
+			}
+		}
+		st = &turnState{}
+		t.turns[conversationID] = st
+	}
+	t.armIdleLocked(conversationID, st)
+}
+
+// touch resets the idle watchdog on any agent activity for a tracked, non-stopped
+// turn. No-op otherwise.
+func (t *turnTracker) touch(conversationID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.stopped[conversationID] {
+		return
+	}
+	if st := t.turns[conversationID]; st != nil {
+		t.armIdleLocked(conversationID, st)
+	}
+}
+
+// failActive atomically ends a tracked turn for abnormal termination (idle
+// timeout or agent disconnect), returning the buffered partial. ok=false when no
+// turn is active or it was user-stopped, so a terminal event fires exactly once.
+func (t *turnTracker) failActive(conversationID string) (partial string, ok bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	st := t.turns[conversationID]
+	if st == nil || t.stopped[conversationID] {
+		return "", false
+	}
+	stopIdleLocked(st)
+	partial = st.partial.String()
+	delete(t.turns, conversationID)
+	return partial, true
+}
+
+// activeConversations lists conversations with a turn in flight (not stopped).
+func (t *turnTracker) activeConversations() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	ids := make([]string, 0, len(t.turns))
+	for id := range t.turns {
+		if !t.stopped[id] {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // record folds a streamed content chunk into the partial buffer, mirroring the
@@ -72,7 +166,8 @@ func (t *turnTracker) record(conversationID string, chunk *pb.ContentChunk) {
 		// (e.g. the agent crashes mid-stream) leaves its state resident, so cap
 		// the map so those can't leak without bound over a long-lived process.
 		if len(t.turns) >= maxTrackedStops {
-			for k := range t.turns {
+			for k, old := range t.turns {
+				stopIdleLocked(old)
 				delete(t.turns, k)
 				break
 			}
@@ -84,6 +179,7 @@ func (t *turnTracker) record(conversationID string, chunk *pb.ContentChunk) {
 		st.partial.Reset()
 	}
 	st.partial.WriteString(chunk.Content)
+	t.armIdleLocked(conversationID, st)
 }
 
 // content returns the text buffered for a conversation's in-flight turn — the
@@ -146,6 +242,7 @@ func (t *turnTracker) stop(conversationID string) string {
 	}
 	t.stopped[conversationID] = true
 	if st := t.turns[conversationID]; st != nil {
+		stopIdleLocked(st)
 		return st.partial.String()
 	}
 	return ""
@@ -172,6 +269,9 @@ func (t *turnTracker) gateContent(conversationID string, isStart bool) (drop boo
 func (t *turnTracker) clear(conversationID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if st := t.turns[conversationID]; st != nil {
+		stopIdleLocked(st)
+	}
 	delete(t.turns, conversationID)
 	delete(t.stopped, conversationID)
 }

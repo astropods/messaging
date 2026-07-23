@@ -166,6 +166,10 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 		delete(s.streams, conversationID)
 		s.streamsMu.Unlock()
 		slog.Debug("[gRPC] Unregistered agent stream", "conversation", conversationID)
+		// Stream ended (disconnect/crash/dead peer): finalize any in-flight turns
+		// so clients get a terminal event. No-op when nothing is in flight. One
+		// shared stream per agent, so its end means every in-flight turn is dead.
+		s.notifyAgentDisconnect()
 	}()
 
 	// Handle incoming requests from agent
@@ -539,6 +543,21 @@ func (s *Server) routeAgentResponse(ctx context.Context, response *pb.AgentRespo
 	}
 
 	return nil
+}
+
+// notifyAgentDisconnect finalizes in-flight turns after the agent stream ends.
+// Adapters that stream turns implement adapter.AgentDisconnectHandler; others
+// (e.g. Slack) are skipped. Uses a fresh context because the stream's context is
+// already cancelled by the time this runs.
+func (s *Server) notifyAgentDisconnect() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for name, adpt := range s.adapters {
+		if h, ok := adpt.(adapter.AgentDisconnectHandler); ok {
+			slog.Debug("[gRPC] Finalizing in-flight turns after agent disconnect", "adapter", name)
+			h.HandleAgentDisconnect(context.Background())
+		}
+	}
 }
 
 // agentResponseType returns a label string for the payload type of an AgentResponse.

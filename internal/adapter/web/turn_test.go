@@ -201,3 +201,70 @@ func TestTurnTrackerDueForPersist(t *testing.T) {
 		t.Fatal("dueForPersist must be false for an untracked conversation")
 	}
 }
+
+// The idle reaper fires when a started turn produces no activity within the
+// window, and activity (touch/record) resets it.
+func TestTurnTrackerIdleReaper(t *testing.T) {
+	fired := make(chan string, 1)
+	tr := newTurnTracker()
+	tr.setIdleReaper(60*time.Millisecond, func(conv string) { fired <- conv })
+
+	tr.startTurn("c")
+	// Keep it alive with activity below the window.
+	for i := 0; i < 5; i++ {
+		time.Sleep(20 * time.Millisecond)
+		tr.touch("c")
+	}
+	select {
+	case <-fired:
+		t.Fatal("reaper fired while activity kept resetting it")
+	default:
+	}
+
+	// Go quiet: the reaper must fire.
+	select {
+	case conv := <-fired:
+		if conv != "c" {
+			t.Fatalf("reaper fired for %q, want %q", conv, "c")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("reaper did not fire after the idle window elapsed")
+	}
+}
+
+// clear() stops the idle timer so a completed turn is never reaped.
+func TestTurnTrackerIdleReaperStoppedByClear(t *testing.T) {
+	fired := make(chan string, 1)
+	tr := newTurnTracker()
+	tr.setIdleReaper(40*time.Millisecond, func(conv string) { fired <- conv })
+
+	tr.startTurn("c")
+	tr.clear("c")
+	select {
+	case <-fired:
+		t.Fatal("reaper fired after clear")
+	case <-time.After(120 * time.Millisecond):
+	}
+}
+
+// failActive returns the buffered partial once, then reports no active turn; a
+// user-stopped turn is never claimed (the stop path already finalized it).
+func TestTurnTrackerFailActive(t *testing.T) {
+	tr := newTurnTracker()
+	tr.record("c", contentChunk(pb.ContentChunk_START, "half "))
+	tr.record("c", contentChunk(pb.ContentChunk_DELTA, "done"))
+
+	partial, ok := tr.failActive("c")
+	if !ok || partial != "half done" {
+		t.Fatalf("failActive = (%q, %v), want (%q, true)", partial, ok, "half done")
+	}
+	if _, ok := tr.failActive("c"); ok {
+		t.Fatal("second failActive must report no active turn")
+	}
+
+	tr.record("c2", contentChunk(pb.ContentChunk_START, "x"))
+	tr.stop("c2")
+	if _, ok := tr.failActive("c2"); ok {
+		t.Fatal("failActive must not claim a user-stopped turn")
+	}
+}

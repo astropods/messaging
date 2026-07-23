@@ -346,6 +346,12 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Turn is forwarded and in flight; arm the idle watchdog so an agent that
+	// never produces output is still reaped.
+	if h.turns != nil {
+		h.turns.startTurn(conversationID)
+	}
+
 	// Add to thread store
 	if h.threadStore != nil {
 		h.threadStore.AddMessage(conversationID, &pb.ThreadMessage{

@@ -23,6 +23,11 @@ import (
 // text regardless of this throttle.
 const chatPersistThrottle = 250 * time.Millisecond
 
+// defaultTurnIdleTimeout reaps a turn whose agent has produced no output for this
+// long. Generous so a long quiet tool call isn't mistaken for a hang; any agent
+// activity resets it.
+const defaultTurnIdleTimeout = 3 * time.Minute
+
 // WebAdapter implements adapter.Adapter for web browser clients via HTTP + SSE
 type WebAdapter struct {
 	config           adapter.Config
@@ -42,6 +47,7 @@ type WebAdapter struct {
 	// Configuration
 	listenAddr               string
 	heartbeatInterval        time.Duration
+	turnIdleTimeout          time.Duration
 	allowedOrigins           []string
 	servePlayground          bool
 	supportsDeclarativeForms bool // overrides the capability; off until the switch
@@ -68,6 +74,13 @@ func WithSessionManager(sm SessionManager) WebAdapterOption {
 func WithHeartbeatInterval(d time.Duration) WebAdapterOption {
 	return func(a *WebAdapter) {
 		a.heartbeatInterval = d
+	}
+}
+
+// WithTurnIdleTimeout overrides the idle-turn reap window. Zero disables it.
+func WithTurnIdleTimeout(d time.Duration) WebAdapterOption {
+	return func(a *WebAdapter) {
+		a.turnIdleTimeout = d
 	}
 }
 
@@ -104,6 +117,7 @@ func New(opts ...WebAdapterOption) *WebAdapter {
 	a := &WebAdapter{
 		listenAddr:        ":8080",
 		heartbeatInterval: 30 * time.Second,
+		turnIdleTimeout:   defaultTurnIdleTimeout,
 		sessionManager:    &NoopSessionManager{},
 	}
 
@@ -125,6 +139,7 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 	// (HandleCancel) and the agent response loop (HandleAgentResponse) agree on
 	// which turns are stopped and what partial text was streamed.
 	a.turns = newTurnTracker()
+	a.turns.setIdleReaper(a.turnIdleTimeout, a.reapIdleTurn)
 
 	a.degraded = newDegradeTracker()
 
@@ -307,11 +322,61 @@ func (a *WebAdapter) conversationOwner(ctx context.Context, conversationID strin
 	return conv.UserID
 }
 
+// reapIdleTurn is the turn tracker's idle callback: the turn produced no agent
+// activity within the idle window, so finalize it as stalled.
+func (a *WebAdapter) reapIdleTurn(conversationID string) {
+	slog.Warn("[Web] turn idle timeout; finalizing stalled turn", "conversation", conversationID)
+	a.failTurn(context.Background(), conversationID, "The agent stopped responding. You can try sending again.")
+}
+
+// HandleAgentDisconnect finalizes every in-flight turn when the agent stream ends
+// (implements adapter.AgentDisconnectHandler).
+func (a *WebAdapter) HandleAgentDisconnect(ctx context.Context) {
+	if a.turns == nil {
+		return
+	}
+	for _, conversationID := range a.turns.activeConversations() {
+		a.failTurn(ctx, conversationID, "The agent disconnected. You can try sending again.")
+	}
+}
+
+// failTurn abnormally terminates an in-flight turn: finalize the store row (so it
+// stops deriving assistant_streaming), broadcast a retryable error, and close the
+// conversation's SSE connections. failActive claims the turn atomically, so this
+// is a no-op once the turn has ended and the terminal event fires exactly once.
+func (a *WebAdapter) failTurn(ctx context.Context, conversationID, message string) {
+	if a.turns == nil {
+		return
+	}
+	partial, ok := a.turns.failActive(conversationID)
+	if !ok {
+		return
+	}
+	if a.chatStore != nil {
+		if _, err := a.chatStore.FinalizeTerminal(ctx, conversationID, partial); err != nil {
+			if errors.Is(err, sqlite.ErrMessageLimitReached) {
+				slog.Debug("[Web] chat at message limit; stalled turn not finalized", "conversation", conversationID)
+			} else {
+				slog.Error("[Web] chat finalize stalled turn failed", "conversation", conversationID, "err", err)
+			}
+		}
+	}
+	if a.connManager != nil {
+		a.connManager.Broadcast(conversationID, NewErrorEventFromMessage("AGENT_UNAVAILABLE", message, true))
+		a.connManager.CloseConversation(conversationID)
+	}
+}
+
 // HandleAgentResponse processes responses from the agent and sends to SSE clients
 func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.AgentResponse) error {
 	conversationID := response.ConversationId
 	if conversationID == "" {
 		return fmt.Errorf("missing conversation ID in response")
+	}
+
+	// Any agent response is liveness; reset the idle watchdog.
+	if a.turns != nil {
+		a.turns.touch(conversationID)
 	}
 
 	// Convert response to SSE events based on payload type
