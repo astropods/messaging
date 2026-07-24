@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -43,13 +44,14 @@ type listChatConversationsResponse struct {
 }
 
 type getChatConversationResponse struct {
-	ConversationID     string                `json:"conversation_id"`
-	Title              string                `json:"title"`
-	UpdatedAt          time.Time             `json:"updated_at"`
-	Messages           []chatMessageResponse `json:"messages"`
-	AssistantStreaming bool                  `json:"assistant_streaming"`
-	HasMore            bool                  `json:"has_more,omitempty"`
-	OldestSeq          int                   `json:"oldest_seq,omitempty"`
+	ConversationID      string                 `json:"conversation_id"`
+	Title               string                 `json:"title"`
+	UpdatedAt           time.Time              `json:"updated_at"`
+	Messages            []chatMessageResponse  `json:"messages"`
+	AssistantStreaming  bool                   `json:"assistant_streaming"`
+	HasMore             bool                   `json:"has_more,omitempty"`
+	OldestSeq           int                    `json:"oldest_seq,omitempty"`
+	PendingInteractions []InteractionEventData `json:"pending_interactions,omitempty"`
 }
 
 type setChatTitleInput struct {
@@ -153,14 +155,40 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, http.StatusOK, getChatConversationResponse{
-		ConversationID:     conversationID,
-		Title:              conv.Title,
-		UpdatedAt:          conv.UpdatedAt,
-		Messages:           messages,
-		AssistantStreaming: assistantStreaming,
-		HasMore:            hasMore,
-		OldestSeq:          oldestSeq,
+		ConversationID:      conversationID,
+		Title:               conv.Title,
+		UpdatedAt:           conv.UpdatedAt,
+		Messages:            messages,
+		AssistantStreaming:  assistantStreaming,
+		HasMore:             hasMore,
+		OldestSeq:           oldestSeq,
+		PendingInteractions: h.pendingInteractions(r.Context(), conversationID),
 	})
+}
+
+// pendingInteractions returns the conversation's still-open blocking interactions
+// (the FIFO queue) in the client shape, so a reloaded client re-renders open forms
+// and re-enters waiting-for-input. A malformed stored Renderable is skipped rather
+// than failing the whole fetch. Empty when no interaction store is wired.
+func (h *Handlers) pendingInteractions(ctx context.Context, conversationID string) []InteractionEventData {
+	if h.interactions == nil {
+		return nil
+	}
+	pending, err := h.interactions.PendingInteractions(ctx, conversationID)
+	if err != nil {
+		slog.Error("[Web] chat pending interactions failed", "conversation", conversationID, "err", err)
+		return nil
+	}
+	out := make([]InteractionEventData, 0, len(pending))
+	for _, it := range pending {
+		data, err := interactionEventData(it.Renderable)
+		if err != nil {
+			slog.Error("[Web] skipping malformed pending interaction", "conversation", conversationID, "err", err)
+			continue
+		}
+		out = append(out, data)
+	}
+	return out
 }
 
 // HandleSetChatConversationTitle handles PUT /api/chat/conversations/{id}/title.

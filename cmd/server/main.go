@@ -348,6 +348,11 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 		if chatStore != nil {
 			webOpts = append(webOpts, web.WithInteractionStore(chatStore))
 		}
+		// Interactive rendering capability lever (the eventual switch): off unless
+		// WEB_DECLARATIVE_FORMS=true. While off, Renderables degrade per the contract.
+		if os.Getenv("WEB_DECLARATIVE_FORMS") == "true" {
+			webOpts = append(webOpts, web.WithDeclarativeForms(true))
+		}
 		webAdapter := web.New(webOpts...)
 		if err := webAdapter.Initialize(ctx, adapter.Config{}); err != nil {
 			slog.Error("Error initializing Web adapter", "err", err)
