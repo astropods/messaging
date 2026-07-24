@@ -285,6 +285,13 @@ export interface AgentToolConfig {
 export interface AgentConfig {
   systemPrompt: string;
   tools: AgentToolConfig[];
+  /**
+   * Set true when the agent consumes file attachments. The web client hides the
+   * composer's upload affordance unless this is set, so an agent that never wires
+   * up the files API doesn't advertise an upload that would be silently ignored.
+   * Opt-in: omitting it reads as false.
+   */
+  supportsFiles?: boolean;
 }
 
 // --- Audio types ---

@@ -51,6 +51,11 @@ type MessageHandler func(ctx context.Context, msg *pb.Message) error
 // forwards the event to the gRPC server which sends it to the agent.
 type FeedbackHandler func(ctx context.Context, fb *pb.PlatformFeedback) error
 
+// InternalFeedbackHandler is called for platform feedback that includes trace
+// context and needs to be forwarded for internal use. It is separate from
+// FeedbackHandler so agent callbacks keep their existing delivery path.
+type InternalFeedbackHandler func(ctx context.Context, fb *pb.PlatformFeedback) error
+
 // AudioForwarder streams audio data to the agent via the gRPC bidirectional stream.
 //
 // This interface decouples the WebSocket audio ingestion (web adapter) from the
