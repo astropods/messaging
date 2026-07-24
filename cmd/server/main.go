@@ -315,7 +315,6 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 		webOpts := []web.WebAdapterOption{
 			web.WithListenAddr(cfg.Web.ListenAddr),
 			web.WithAllowedOrigins(cfg.Web.AllowedOrigins),
-			web.WithServePlayground(cfg.Web.ServePlayground),
 		}
 		switch {
 		case cfg.Web.AuthTestUserID != "":
