@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/astropods/messaging/internal/traceutil"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
@@ -147,7 +148,11 @@ const maxMarkdownBlockChars = 10000
 // feedback widgets ride on the last message. Returns the first message's ts.
 func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, content, threadID string, traceContext *pb.TraceContext) (string, error) {
 	chunks := chunkMarkdown(content, maxMarkdownBlockChars)
-	trailing := c.feedbackTrailingBlocks()
+	traceID := ""
+	if traceContext != nil {
+		traceID = traceutil.IDFromTraceparent(traceContext.Traceparent)
+	}
+	trailing := c.feedbackTrailingBlocks(traceID)
 
 	var firstTS string
 	for i, chunk := range chunks {
@@ -240,10 +245,10 @@ func markdownBlock(text string) map[string]interface{} {
 // Both flow through handleBlockActions and end up calling forwardFeedback, so
 // the agent developer sees a single on_feedback callback regardless of path.
 // These blocks ride on the last message of a fanned-out reply.
-func (c *SlackAIClient) feedbackTrailingBlocks() []map[string]interface{} {
+func (c *SlackAIClient) feedbackTrailingBlocks(traceID string) []map[string]interface{} {
 	blocks := make([]map[string]interface{}, 0, 3)
 
-	if footer := buildFooterText(c.devMode, c.agentID); footer != "" {
+	if footer := buildFooterText(c.devMode, c.agentID, traceID); footer != "" {
 		blocks = append(blocks, map[string]interface{}{
 			"type": "context",
 			"elements": []map[string]interface{}{
@@ -300,21 +305,23 @@ func (c *SlackAIClient) feedbackTrailingBlocks() []map[string]interface{} {
 }
 
 // buildFooterText returns the context-block footer text for a Slack message,
-// or "" if no footer should be rendered. In dev mode the message is flagged
-// explicitly; outside dev mode the footer only appears when agentID is
-// set so agents identify themselves to the user.
-func buildFooterText(devMode bool, agentID string) string {
+// or "" if no footer should be rendered. Trace ID is listed first for quick
+// debugging lookup; in dev mode the environment marker stays ahead of Agent ID.
+func buildFooterText(devMode bool, agentID, traceID string) string {
+	lines := make([]string, 0, 2)
+	if traceID != "" {
+		lines = append(lines, fmt.Sprintf("Trace ID: %s", traceID))
+	}
 	if devMode {
 		footer := ":test_tube: Sent from dev environment"
 		if agentID != "" {
 			footer += fmt.Sprintf(" — Agent ID: %s", agentID)
 		}
-		return footer
+		lines = append(lines, footer)
+	} else if agentID != "" {
+		lines = append(lines, fmt.Sprintf("Agent ID: %s", agentID))
 	}
-	if agentID != "" {
-		return fmt.Sprintf("Agent ID: %s", agentID)
-	}
-	return ""
+	return strings.Join(lines, "\n")
 }
 
 // chunkMarkdown splits a Markdown reply into pieces of at most maxChars,
