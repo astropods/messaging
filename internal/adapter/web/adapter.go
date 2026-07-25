@@ -37,14 +37,12 @@ type WebAdapter struct {
 	server           *http.Server
 	handlers         *Handlers
 	turns            *turnTracker
-	degraded         *degradeTracker
 
 	// Configuration
-	listenAddr               string
-	heartbeatInterval        time.Duration
-	allowedOrigins           []string
-	servePlayground          bool
-	supportsDeclarativeForms bool // overrides the capability; off until the switch
+	listenAddr        string
+	heartbeatInterval time.Duration
+	allowedOrigins    []string
+	servePlayground   bool
 	// freshSubscribeSettle: how long a no-cursor subscribe observes the wire before
 	// the store-derived terminal fallback (see settleFreshSubscribe).
 	freshSubscribeSettle time.Duration
@@ -97,13 +95,6 @@ func WithServePlayground(enabled bool) WebAdapterOption {
 	}
 }
 
-// WithDeclarativeForms sets the SupportsDeclarativeForms capability (off by default).
-func WithDeclarativeForms(enabled bool) WebAdapterOption {
-	return func(a *WebAdapter) {
-		a.supportsDeclarativeForms = enabled
-	}
-}
-
 // WithInteractionStore overrides the interaction store (defaults to in-memory).
 func WithInteractionStore(s store.InteractionStore) WebAdapterOption {
 	return func(a *WebAdapter) {
@@ -139,8 +130,6 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 	// which turns are stopped and what partial text was streamed.
 	a.turns = newTurnTracker()
 
-	a.degraded = newDegradeTracker()
-
 	if a.interactions == nil {
 		a.interactions = store.NewMemoryInteractionStore()
 	}
@@ -149,7 +138,6 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 	a.handlers = NewHandlers(a.connManager, a.sessionManager, a.threadStore, a.agentConfigStore)
 	a.handlers.turns = a.turns
 	a.handlers.freshSubscribeSettle = a.freshSubscribeSettle
-	a.handlers.degraded = a.degraded
 	a.handlers.interactions = a.interactions
 
 	slog.Info("[Web] Adapter initialized", "listen", a.listenAddr)
@@ -259,9 +247,7 @@ func (a *WebAdapter) Stop(ctx context.Context) error {
 
 // Capabilities returns the adapter's capabilities
 func (a *WebAdapter) Capabilities() adapter.AdapterCapabilities {
-	caps := adapter.WebCapabilities()
-	caps.SupportsDeclarativeForms = a.supportsDeclarativeForms
-	return caps
+	return adapter.WebCapabilities()
 }
 
 // GetPlatformName returns the platform identifier

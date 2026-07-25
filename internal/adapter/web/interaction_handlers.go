@@ -170,27 +170,6 @@ func (h *Handlers) emitRenderableResponse(ctx context.Context, conversationID, u
 	}
 }
 
-// resolveDegradedRespond delivers a user message as the RESPOND answer to a
-// degraded free-text-tolerant interaction (forms off) instead of starting a new
-// turn. It does not persist the interaction, so — unlike the response endpoint —
-// there is no cross-restart durability or exactly-once guarantee.
-func (h *Handlers) resolveDegradedRespond(ctx context.Context, conversationID string, session *Session, interactionID, text string) {
-	// Persist the reply only if the conversation still exists, so a since-deleted
-	// one isn't given an orphan row (or resurrected via EnsureForSend).
-	if h.chatStore != nil {
-		if conv, err := h.chatStore.Get(ctx, conversationID); err == nil && conv != nil {
-			if _, err := h.chatStore.AppendMessage(ctx, conversationID, session.UserID, "user", text, ""); err != nil {
-				slog.Error("[Web] chat persist degraded respond failed", "conversation", conversationID, "err", err)
-			}
-		}
-	}
-	h.emitRenderableResponse(ctx, conversationID, session.UserID, &pb.RenderableResponse{
-		Id:     interactionID,
-		Action: pb.RenderableAction_RENDERABLE_ACTION_RESPOND,
-		Text:   text,
-	})
-}
-
 func parseResponseAction(s string) (pb.RenderableAction, bool) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "submit":
