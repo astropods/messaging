@@ -3,9 +3,9 @@ package slack
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 
+	"github.com/astropods/messaging/internal/logctx"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/slack-go/slack"
 )
@@ -29,7 +29,7 @@ func (a *SlackAdapter) HandleAgentResponse(ctx context.Context, response *pb.Age
 		a.clearResponseBuffers(response.ConversationId)
 		return a.handleError(ctx, response.ConversationId, payload.Error)
 	default:
-		slog.Warn(fmt.Sprintf("[Slack] Unknown response payload type: %T", payload))
+		logctx.FromContext(ctx).Warn(fmt.Sprintf("[Slack] Unknown response payload type: %T", payload))
 		return nil
 	}
 }
@@ -63,7 +63,7 @@ func (a *SlackAdapter) setSlackStatus(ctx context.Context, conversationID string
 		return fmt.Errorf("failed to set Slack status: %w", err)
 	}
 
-	slog.Debug(fmt.Sprintf("[Slack] Set status for %s: %s %s", conversationID, emoji, statusMessage))
+	logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Set status for %s: %s %s", conversationID, emoji, statusMessage))
 	return nil
 }
 
@@ -98,7 +98,7 @@ func (a *SlackAdapter) setSlackPrompts(ctx context.Context, conversationID strin
 		return fmt.Errorf("failed to set Slack prompts: %w", err)
 	}
 
-	slog.Debug(fmt.Sprintf("[Slack] Set %d suggested prompts for %s", len(prompts.Prompts), conversationID))
+	logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Set %d suggested prompts for %s", len(prompts.Prompts), conversationID))
 	return nil
 }
 
@@ -154,7 +154,7 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 		a.bufferMu.Unlock()
 
 		if fullContent == "" {
-			slog.Debug(fmt.Sprintf("[Slack] Skipping empty message for %s", conversationID))
+			logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Skipping empty message for %s", conversationID))
 			return nil
 		}
 
@@ -176,13 +176,13 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 			return fmt.Errorf("failed to send message: %w", err)
 		}
 
-		slog.Debug(fmt.Sprintf("[Slack] Sent content to %s (%d chars)", conversationID, len(fullContent)))
+		logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Sent content to %s (%d chars)", conversationID, len(fullContent)))
 
 		// Post any card attachments that came with the END chunk.
 		for _, att := range content.Attachments {
 			if card := att.GetCard(); card != nil {
 				if cardErr := a.handleCardAttachment(ctx, channelID, threadTS, card); cardErr != nil {
-					slog.Error(fmt.Sprintf("[Slack] Error posting card attachment to %s: %v", conversationID, cardErr))
+					logctx.FromContext(ctx).Error(fmt.Sprintf("[Slack] Error posting card attachment to %s: %v", conversationID, cardErr))
 				}
 			}
 		}
@@ -214,11 +214,11 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 			return fmt.Errorf("failed to send message: %w", err)
 		}
 
-		slog.Debug(fmt.Sprintf("[Slack] Sent replace content to %s (%d chars)", conversationID, len(content.Content)))
+		logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Sent replace content to %s (%d chars)", conversationID, len(content.Content)))
 		return nil
 
 	default:
-		slog.Warn(fmt.Sprintf("[Slack] Unknown content chunk type: %v", content.Type))
+		logctx.FromContext(ctx).Warn(fmt.Sprintf("[Slack] Unknown content chunk type: %v", content.Type))
 		return nil
 	}
 }
@@ -251,7 +251,7 @@ func (a *SlackAdapter) handleThreadMetadata(ctx context.Context, metadata *pb.Th
 	}
 
 	// Store thread metadata in local store if needed
-	slog.Debug(fmt.Sprintf("[Slack] Thread metadata update: %s (title: %s)", metadata.ThreadId, metadata.Title))
+	logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Thread metadata update: %s (title: %s)", metadata.ThreadId, metadata.Title))
 
 	// For Slack, thread metadata is mostly informational
 	// We could update channel topic or similar, but for now we just log it
@@ -293,7 +293,7 @@ func (a *SlackAdapter) handleError(ctx context.Context, conversationID string, e
 		return fmt.Errorf("failed to send error message: %w", err)
 	}
 
-	slog.Debug(fmt.Sprintf("[Slack] Sent error message to %s: %s", conversationID, errorResponse.Message))
+	logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Sent error message to %s: %s", conversationID, errorResponse.Message))
 	return nil
 }
 
@@ -317,7 +317,7 @@ func (a *SlackAdapter) handleCardAttachment(ctx context.Context, channelID, thre
 		return fmt.Errorf("failed to post card: %w", err)
 	}
 
-	slog.Debug(fmt.Sprintf("[Slack] Posted card attachment to %s/%s", channelID, threadTS))
+	logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Posted card attachment to %s/%s", channelID, threadTS))
 	return nil
 }
 
@@ -376,10 +376,10 @@ func (a *SlackAdapter) canPostToThread(ctx context.Context, channelID, threadTS 
 		// gone, so skip rather than let Slack post in-channel. Any other error
 		// is treated as transient — don't drop a legitimate reply over a blip.
 		if msg := err.Error(); strings.Contains(msg, "thread_not_found") || strings.Contains(msg, "message_not_found") {
-			slog.Warn(fmt.Sprintf("[Slack] Thread parent %s/%s is gone (%s); skipping reply to avoid posting in channel", channelID, threadTS, msg))
+			logctx.FromContext(ctx).Warn(fmt.Sprintf("[Slack] Thread parent %s/%s is gone (%s); skipping reply to avoid posting in channel", channelID, threadTS, msg))
 			return false
 		}
-		slog.Warn(fmt.Sprintf("[Slack] Could not verify thread parent %s/%s, posting anyway: %v", channelID, threadTS, err))
+		logctx.FromContext(ctx).Warn(fmt.Sprintf("[Slack] Could not verify thread parent %s/%s, posting anyway: %v", channelID, threadTS, err))
 		return true
 	}
 
@@ -389,7 +389,7 @@ func (a *SlackAdapter) canPostToThread(ctx context.Context, channelID, threadTS 
 		}
 	}
 
-	slog.Warn(fmt.Sprintf("[Slack] Thread parent %s/%s no longer exists; skipping reply to avoid posting in channel", channelID, threadTS))
+	logctx.FromContext(ctx).Warn(fmt.Sprintf("[Slack] Thread parent %s/%s no longer exists; skipping reply to avoid posting in channel", channelID, threadTS))
 	return false
 }
 
