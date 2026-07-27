@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/astropods/messaging/internal/logctx"
 	"github.com/astropods/messaging/internal/traceutil"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
@@ -147,6 +147,10 @@ const maxMarkdownBlockChars = 10000
 // stay under Slack's per-block and per-message size limits. The footer and
 // feedback widgets ride on the last message. Returns the first message's ts.
 func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, content, threadID string, traceContext *pb.TraceContext) (string, error) {
+	if traceContext != nil {
+		ctx = logctx.WithTraceparent(ctx, traceContext.Traceparent)
+	}
+	log := logctx.FromContext(ctx)
 	chunks := chunkMarkdown(content, maxMarkdownBlockChars)
 	traceID := ""
 	if traceContext != nil {
@@ -183,7 +187,7 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 			}
 		}
 
-		slog.Debug("[SlackAI] Posting message", "channel", channelID, "part", i+1, "parts", len(chunks))
+		log.Debug("[SlackAI] Posting message", "channel", channelID, "part", i+1, "parts", len(chunks))
 
 		var result struct {
 			OK        bool   `json:"ok"`
@@ -192,11 +196,11 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 		}
 
 		if err := c.postJSON(ctx, "chat.postMessage", payload, &result); err != nil {
-			slog.Error("[SlackAI] Error posting message", "err", err, "part", i+1)
+			log.Error("[SlackAI] Error posting message", "err", err, "part", i+1)
 			return firstTS, err
 		}
 		if !result.OK {
-			slog.Error("[SlackAI] Slack API returned error", "error", result.Error, "part", i+1)
+			log.Error("[SlackAI] Slack API returned error", "error", result.Error, "part", i+1)
 			return firstTS, fmt.Errorf("slack API error: %s", result.Error)
 		}
 
@@ -205,7 +209,7 @@ func (c *SlackAIClient) PostMessageWithFeedback(ctx context.Context, channelID, 
 		}
 	}
 
-	slog.Debug("[SlackAI] Message posted successfully", "timestamp", firstTS, "parts", len(chunks))
+	log.Debug("[SlackAI] Message posted successfully", "timestamp", firstTS, "parts", len(chunks))
 	return firstTS, nil
 }
 

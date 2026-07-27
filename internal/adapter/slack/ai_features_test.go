@@ -1,8 +1,10 @@
 package slack
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -248,6 +250,11 @@ func TestSlackAdapter_HandleAgentResponse_ContentEnd_PostsTraceID(t *testing.T) 
 	a, calls, cleanup := newTestSlackAdapter(t)
 	defer cleanup()
 
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
 	const (
 		convID      = "C123-1234567890.000001"
 		traceparent = "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01"
@@ -271,10 +278,12 @@ func TestSlackAdapter_HandleAgentResponse_ContentEnd_PostsTraceID(t *testing.T) 
 		}
 	}
 
+	posted := false
 	for _, call := range *calls {
 		if call.Method != "/chat.postMessage" {
 			continue
 		}
+		posted = true
 		if footer := firstContextFooter(t, call.Body); !strings.Contains(footer, "Trace ID: "+traceID) {
 			t.Fatalf("first context footer = %q, want trace ID %q", footer, traceID)
 		}
@@ -284,9 +293,33 @@ func TestSlackAdapter_HandleAgentResponse_ContentEnd_PostsTraceID(t *testing.T) 
 		if exists {
 			t.Fatal("expected trace buffer to be deleted after END")
 		}
-		return
+		break
 	}
-	t.Fatal("expected chat.postMessage call for END chunk")
+	if !posted {
+		t.Fatal("expected chat.postMessage call for END chunk")
+	}
+
+	wantMessages := map[string]bool{
+		"[SlackAI] Message posted successfully": false,
+		"[Slack] Sent content":                  false,
+	}
+	for _, line := range bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n")) {
+		var record map[string]any
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatalf("decode log record: %v", err)
+		}
+		message, _ := record["msg"].(string)
+		for prefix := range wantMessages {
+			if strings.HasPrefix(message, prefix) && record["trace_id"] == traceID {
+				wantMessages[prefix] = true
+			}
+		}
+	}
+	for message, found := range wantMessages {
+		if !found {
+			t.Errorf("expected %q log with trace_id %q; logs:\n%s", message, traceID, logs.String())
+		}
+	}
 }
 
 // When the thread parent has been deleted, Slack would silently promote a

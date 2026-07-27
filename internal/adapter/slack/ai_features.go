@@ -15,6 +15,9 @@ func (a *SlackAdapter) HandleAgentResponse(ctx context.Context, response *pb.Age
 	if response == nil {
 		return fmt.Errorf("nil response")
 	}
+	if response.TraceContext != nil {
+		ctx = logctx.WithTraceparent(ctx, response.TraceContext.Traceparent)
+	}
 
 	switch payload := response.Payload.(type) {
 	case *pb.AgentResponse_Status:
@@ -152,6 +155,10 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 		delete(a.contentBuffers, conversationID)
 		delete(a.traceBuffers, conversationID)
 		a.bufferMu.Unlock()
+
+		if traceContext != nil {
+			ctx = logctx.WithTraceparent(ctx, traceContext.Traceparent)
+		}
 
 		if fullContent == "" {
 			logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Skipping empty message for %s", conversationID))

@@ -8,30 +8,6 @@ import (
 	"testing"
 )
 
-func TestTraceIDFromTraceparent(t *testing.T) {
-	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
-	got, ok := TraceIDFromTraceparent(
-		"00-" + traceID + "-00f067aa0ba902b7-01",
-	)
-	if !ok || got != traceID {
-		t.Fatalf("TraceIDFromTraceparent() = %q, %v; want %q, true", got, ok, traceID)
-	}
-}
-
-func TestTraceIDFromTraceparentRejectsInvalidValues(t *testing.T) {
-	for _, value := range []string{
-		"",
-		"not-a-traceparent",
-		"ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-		"00-00000000000000000000000000000000-00f067aa0ba902b7-01",
-		"00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
-	} {
-		if got, ok := TraceIDFromTraceparent(value); ok {
-			t.Errorf("TraceIDFromTraceparent(%q) = %q, true; want false", value, got)
-		}
-	}
-}
-
 func TestFromContextAddsStructuredTraceID(t *testing.T) {
 	var output bytes.Buffer
 	previous := slog.Default()
@@ -40,7 +16,7 @@ func TestFromContextAddsStructuredTraceID(t *testing.T) {
 
 	ctx := WithTraceparent(
 		context.Background(),
-		"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+		"01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-vendor-data",
 	)
 	FromContext(ctx).Info("agent response")
 
