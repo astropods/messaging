@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/logctx"
 	"github.com/astropods/messaging/internal/metrics"
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
@@ -198,7 +199,17 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 
 		case *pb.ConversationRequest_Feedback:
 			// Agent acknowledging feedback
-			slog.Debug("[gRPC] Agent feedback", "conversation", payload.Feedback.ConversationId)
+			feedbackCtx := streamCtx
+			if payload.Feedback.TraceContext != nil {
+				feedbackCtx = logctx.WithTraceparent(
+					feedbackCtx,
+					payload.Feedback.TraceContext.Traceparent,
+				)
+			}
+			logctx.FromContext(feedbackCtx).Debug(
+				"[gRPC] Agent feedback",
+				"conversation", payload.Feedback.ConversationId,
+			)
 
 		case *pb.ConversationRequest_AgentConfig:
 			// Agent sending/updating its config
@@ -210,9 +221,17 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 		case *pb.ConversationRequest_AgentResponse:
 			// Agent sending a typed response (ContentChunk, StatusUpdate, etc.)
 			response := payload.AgentResponse
-			slog.Debug("[gRPC] Agent response", "conversation", response.ConversationId)
-			if err := s.routeAgentResponse(streamCtx, response); err != nil {
-				slog.Error("[gRPC] Error routing agent response", "err", err)
+			responseCtx := streamCtx
+			if response.TraceContext != nil {
+				responseCtx = logctx.WithTraceparent(
+					responseCtx,
+					response.TraceContext.Traceparent,
+				)
+			}
+			responseLog := logctx.FromContext(responseCtx)
+			responseLog.Debug("[gRPC] Agent response", "conversation", response.ConversationId)
+			if err := s.routeAgentResponse(responseCtx, response); err != nil {
+				responseLog.Error("[gRPC] Error routing agent response", "err", err)
 			}
 
 		default:
@@ -373,6 +392,10 @@ func (s *Server) HandleIncomingFeedback(ctx context.Context, fb *pb.PlatformFeed
 	if fb == nil {
 		return fmt.Errorf("nil feedback")
 	}
+	if fb.TraceContext != nil {
+		ctx = logctx.WithTraceparent(ctx, fb.TraceContext.Traceparent)
+	}
+	log := logctx.FromContext(ctx)
 
 	kind := feedbackKind(fb)
 	metrics.FeedbackReceived.WithLabelValues(kind).Inc()
@@ -381,7 +404,7 @@ func (s *Server) HandleIncomingFeedback(ctx context.Context, fb *pb.PlatformFeed
 	// from a platform UI element that wasn't tagged with the originating
 	// conversation). Warn loudly rather than silently dropping as "no agent".
 	if fb.ConversationId == "" {
-		slog.Warn("[gRPC] Feedback dropped: empty conversation_id", "kind", kind)
+		log.Warn("[gRPC] Feedback dropped: empty conversation_id", "kind", kind)
 		metrics.FeedbackDropped.WithLabelValues("empty_conversation_id").Inc()
 		return adapter.ErrNoAgentStream
 	}
@@ -403,7 +426,7 @@ func (s *Server) HandleIncomingFeedback(ctx context.Context, fb *pb.PlatformFeed
 		return fmt.Errorf("failed to send feedback to agent: %w", err)
 	}
 
-	slog.Debug("[gRPC] Feedback forwarded to agent", "conversation", fb.ConversationId, "kind", kind)
+	log.Debug("[gRPC] Feedback forwarded to agent", "conversation", fb.ConversationId, "kind", kind)
 	return nil
 }
 
@@ -505,6 +528,7 @@ func (s *Server) findStreamForConversation(conversationID string) *conversationS
 // routeAgentResponse routes typed AgentResponse payloads back to the appropriate platform adapter
 func (s *Server) routeAgentResponse(ctx context.Context, response *pb.AgentResponse) error {
 	conversationID := response.ConversationId
+	log := logctx.FromContext(ctx)
 
 	responseType := agentResponseType(response)
 	metrics.AgentResponses.WithLabelValues(responseType).Inc()
@@ -527,13 +551,13 @@ func (s *Server) routeAgentResponse(ctx context.Context, response *pb.AgentRespo
 	}
 
 	// Conversation not in cache — broadcast to all adapters
-	slog.Debug("[gRPC] Conversation not in cache, broadcasting to all adapters", "conversation", conversationID)
+	log.Debug("[gRPC] Conversation not in cache, broadcasting to all adapters", "conversation", conversationID)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for name, adpt := range s.adapters {
 		if err := adpt.HandleAgentResponse(ctx, response); err != nil {
-			slog.Error("[gRPC] Error routing agent response", "adapter", name, "err", err)
+			log.Error("[gRPC] Error routing agent response", "adapter", name, "err", err)
 			metrics.RoutingErrors.WithLabelValues(name).Inc()
 		}
 	}
