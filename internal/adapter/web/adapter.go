@@ -43,7 +43,6 @@ type WebAdapter struct {
 	listenAddr               string
 	heartbeatInterval        time.Duration
 	allowedOrigins           []string
-	servePlayground          bool
 	supportsDeclarativeForms bool // overrides the capability; off until the switch
 	// freshSubscribeSettle: how long a no-cursor subscribe observes the wire before
 	// the store-derived terminal fallback (see settleFreshSubscribe).
@@ -87,13 +86,6 @@ func WithFreshSubscribeSettle(d time.Duration) WebAdapterOption {
 func WithAllowedOrigins(origins []string) WebAdapterOption {
 	return func(a *WebAdapter) {
 		a.allowedOrigins = origins
-	}
-}
-
-// WithServePlayground enables serving the embedded playground UI
-func WithServePlayground(enabled bool) WebAdapterOption {
-	return func(a *WebAdapter) {
-		a.servePlayground = enabled
 	}
 }
 
@@ -201,11 +193,6 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/files/{key}/content", a.handlers.HandleGetFileContent)
 
 	mux.HandleFunc("GET /health", a.handlers.HandleHealth)
-
-	// Playground UI — must be registered last so API routes always take priority
-	if a.servePlayground {
-		registerPlaygroundRoutes(mux)
-	}
 
 	// Wrap with CORS middleware
 	handler := a.corsMiddleware(mux)

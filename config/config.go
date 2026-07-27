@@ -124,10 +124,9 @@ type SlackConfig struct {
 
 // WebConfig holds web adapter configuration
 type WebConfig struct {
-	Enabled         bool
-	ListenAddr      string
-	AllowedOrigins  []string
-	ServePlayground bool
+	Enabled        bool
+	ListenAddr     string
+	AllowedOrigins []string
 	// AuthTestUserID, when set, makes the web adapter treat every request as
 	// coming from this user. Used in local-mode deployments where no ingress
 	// is in front of messaging to inject the OIDC identity header.
@@ -225,11 +224,10 @@ func Load() (*Config, error) {
 
 	// Web configuration
 	cfg.Web = WebConfig{
-		Enabled:         getEnvBool("WEB_ENABLED", false),
-		ListenAddr:      getEnv("WEB_LISTEN_ADDR", ":8080"),
-		AllowedOrigins:  getEnvList("WEB_ALLOWED_ORIGINS", []string{"*"}),
-		ServePlayground: getEnvBool("WEB_SERVE_PLAYGROUND", false),
-		AuthTestUserID:  getEnv("WEB_AUTHN_TEST_USER_ID", ""),
+		Enabled:        getEnvBool("WEB_ENABLED", false),
+		ListenAddr:     getEnv("WEB_LISTEN_ADDR", ":8080"),
+		AllowedOrigins: getEnvList("WEB_ALLOWED_ORIGINS", []string{"*"}),
+		AuthTestUserID: getEnv("WEB_AUTHN_TEST_USER_ID", ""),
 	}
 
 	// Metrics configuration
