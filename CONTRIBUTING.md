@@ -74,9 +74,3 @@ go run tools/test-serialization/main.go deserialize
 - Add a changelog at `docs/changelog/YYYY-MM-DD-<slug>.md` with **Summary /
   Design / Migration** sections for non-trivial changes.
 - CI (`.github/workflows/ci.yml`) runs on PRs and pushes to `main`.
-
-## Versioning
-
-There is no `VERSION` file. The release workflow stamps the build version from
-the short commit SHA; SDK versions are set in `sdk/node/package.json` and
-`sdk/python/pyproject.toml`.
