@@ -323,10 +323,9 @@ func NewInteractionEvent(r *pb.Renderable) (SSEEvent, error) {
 	return SSEEvent{Event: EventInteraction, Data: string(jsonData)}, nil
 }
 
-// interactionEventData builds the client-facing interaction shape from a
-// Renderable (schema/value re-embedded as JSON objects, actions lowercased),
-// erroring on malformed JSON. Shared by the SSE event and the conversation-fetch
-// pending queue.
+// interactionEventData builds the client interaction shape from a Renderable
+// (schema/value as JSON objects, actions lowercased); errors on malformed JSON.
+// Shared by the SSE event and the conversation-fetch pending queue.
 func interactionEventData(r *pb.Renderable) (InteractionEventData, error) {
 	schema := json.RawMessage(r.GetDataSchemaJson())
 	if !json.Valid(schema) {

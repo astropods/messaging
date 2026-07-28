@@ -166,10 +166,9 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// pendingInteractions returns the conversation's still-open blocking interactions
-// (the FIFO queue) in the client shape, so a reloaded client re-renders open forms
-// and re-enters waiting-for-input. A malformed stored Renderable is skipped rather
-// than failing the whole fetch. Empty when no interaction store is wired.
+// pendingInteractions returns the conversation's still-open interactions in the
+// client shape; a malformed stored Renderable is skipped, and it's empty when no
+// interaction store is wired.
 func (h *Handlers) pendingInteractions(ctx context.Context, conversationID string) []InteractionEventData {
 	if h.interactions == nil {
 		return nil
