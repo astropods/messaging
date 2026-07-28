@@ -8,7 +8,7 @@ import (
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
-// SSE Event types matching playground pattern
+// SSE Event types consumed by the web chat client
 const (
 	EventConnected      = "connected"
 	EventChunk          = "chunk"

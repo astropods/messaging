@@ -796,7 +796,7 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build JSON response matching the playground's AgentConfig type
+	// Build JSON response matching the web client's AgentConfig type
 	type toolGraphNode struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`

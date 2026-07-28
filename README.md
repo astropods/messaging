@@ -7,7 +7,6 @@ Go messaging service that connects AI agents to messaging platforms via gRPC bid
 - **gRPC bidirectional streaming** — real-time message flow between agents and platforms
 - **Slack adapter** — Socket Mode, AI status indicators, suggested prompts, rate limiting, observe-channel mode
 - **Web adapter** — HTTP/SSE for browser-based clients
-- **Playground UI** — bundled browser-based chat interface, served from `/` when enabled
 - **Thread history** — tracks edits and deletions in memory
 - **Storage** — Redis or in-memory conversation store
 - **Chat persistence** — deployment web-chat history in a deployment-local SQLite store, durable on the agent's shared disk (see `CHAT_DB_PATH`)
@@ -22,7 +21,7 @@ messaging/
 ├── internal/
 │   ├── adapter/                 # Platform adapter interface
 │   │   ├── slack/               # Slack Socket Mode adapter
-│   │   └── web/                 # HTTP/SSE adapter + embedded playground UI
+│   │   └── web/                 # HTTP/SSE adapter
 │   ├── grpc/                    # gRPC server
 │   ├── store/                   # Redis + in-memory stores
 │   └── version/                 # Build-time version info
@@ -30,7 +29,6 @@ messaging/
 │   ├── client/                  # Go client SDK
 │   ├── gen/astro/messaging/v1/  # Generated protobuf types
 │   └── types/                   # Shared Go types
-├── playground/                  # Playground UI submodule (astropods/playground)
 ├── proto/                       # Protobuf source definitions
 ├── sdk/node/                    # TypeScript SDK (published to npm)
 │   └── src/
@@ -64,8 +62,6 @@ The server starts:
 ### Run with Docker
 
 ```bash
-# Initialise the playground submodule, then build
-git submodule update --init
 docker build -t astro-messaging .
 
 docker run \
@@ -75,20 +71,8 @@ docker run \
   astro-messaging
 ```
 
-### Run with the playground UI
-
-The playground is bundled into the Docker image. Enable it at runtime — no separate container needed:
-
-```bash
-docker run \
-  -e WEB_ENABLED=true \
-  -e WEB_SERVE_PLAYGROUND=true \
-  -e STORAGE_TYPE=memory \
-  -p 8080:8080 -p 9090:9090 \
-  astro-messaging
-```
-
-Open `http://localhost:8080` to access the playground. The UI and API share the same origin so no CORS or proxy configuration is required.
+The web adapter serves the HTTP/SSE API only; the chat UI is provided by the
+astro-client SPA, which talks to this API over the same-origin `/chat/*` proxy.
 
 ## Configuration
 
@@ -120,7 +104,6 @@ GRPC_MAX_STREAMS=100
 WEB_ENABLED=false
 WEB_LISTEN_ADDR=:8080
 WEB_ALLOWED_ORIGINS=*
-WEB_SERVE_PLAYGROUND=false    # serve the bundled playground UI from /
 
 # Storage: "memory" (default) or "redis"
 STORAGE_TYPE=memory
@@ -286,30 +269,6 @@ SDK source lives in `sdk/python/`. Published to PyPI as `astropods-messaging`.
 
 ## Development
 
-### Playground submodule
-
-The playground UI lives in a separate repo and is referenced as a git submodule at `playground/`. Initialise it before building:
-
-```bash
-git submodule update --init
-```
-
-To build the playground assets locally and embed them in a Go binary (for testing without Docker):
-
-```bash
-cd playground && bun install && bun run build && cd ..
-# dist/ is now at internal/adapter/web/dist/ — go build picks it up
-cp -r playground/dist internal/adapter/web/dist
-WEB_ENABLED=true WEB_SERVE_PLAYGROUND=true go run cmd/server/main.go
-```
-
-To update to the latest playground:
-
-```bash
-git submodule update --remote playground
-git commit -m "chore: bump playground submodule"
-```
-
 ### Go tests
 
 ```bash
@@ -358,7 +317,7 @@ To release a new version:
 
 ### Docker (`astropods/messaging`)
 
-The Docker image is built and published to Docker Hub via `.github/workflows/build.yml`. It uses a 3-stage build: Bun compiles the playground UI, Go embeds the output and builds the binary, and a slim Debian image ships the final binary. CI checks out submodules recursively so the playground source is available during the build.
+The Docker image is built and published to Docker Hub via `.github/workflows/build.yml`. It uses a 2-stage build: Go builds the static binary, and a slim Debian image ships it.
 
 Images are built for `linux/amd64` and `linux/arm64` in parallel and merged into a single manifest.
 
