@@ -15,24 +15,31 @@ contract is protobuf under `proto/astro/messaging/v1/`.
 - `sdk/python/` — Python SDK (`astropods-messaging`)
 - `playground/` — UI, a git submodule embedded into the server binary
 
+You only need this repo to build, test, and contribute. (The `playground` UI is a
+separate submodule repo, needed only for the embedded web UI / Docker image, see
+below.)
+
 ## Prerequisites
 
 - Go 1.25+
-- Bun (TypeScript SDK + playground build)
-- Python 3.10+ (Python SDK)
 - `protoc` with `protoc-gen-go` and `protoc-gen-go-grpc` on `PATH` (proto codegen)
-- SSH access for the `playground` submodule
-- Optional: Docker, Redis (`STORAGE_TYPE=redis`), Verdaccio for local SDK publish
+- Bun — only for the TypeScript SDK and the playground build
+- Python 3.10+ — only for the Python SDK
+- Optional: SSH access to the `playground` submodule (embedded web UI / Docker),
+  Docker, Redis (`STORAGE_TYPE=redis`), Verdaccio for local SDK publish
 - To run the server: a Slack app in Socket Mode (`SLACK_BOT_TOKEN`,
   `SLACK_APP_TOKEN`). Configuration is entirely env-var driven (see `README.md`).
 
 ## Build & run
 
+`go build` and the tests work with just this repo. The playground steps are only
+needed for the embedded web UI (and the Docker image does them for you):
+
 ```sh
 go build -v ./...
 go run cmd/server/main.go
 
-# embed the playground UI for a full local build:
+# optional: embed the playground UI (needs playground submodule access)
 git submodule update --init
 cd playground && bun install && bun run build && cd ..
 cp -r playground/dist internal/adapter/web/dist
@@ -45,7 +52,7 @@ docker build -t astro-messaging .        # multi-stage: builds playground + Go
 Edit `.proto` files, then regenerate and commit the output:
 
 ```sh
-./scripts/generate-proto.sh              # Go stubs -> pkg/gen (or: moon run messaging:proto-gen)
+./scripts/generate-proto.sh              # Go stubs -> pkg/gen
 bash sdk/python/scripts/gen_proto.sh     # Python stubs (grpcio-tools)
 ```
 
