@@ -324,12 +324,17 @@ func NewInteractionEvent(r *pb.Renderable) (SSEEvent, error) {
 }
 
 // interactionEventData builds the client interaction shape from a Renderable
-// (schema/value as JSON objects, actions lowercased); errors on malformed JSON.
-// Shared by the SSE event and the conversation-fetch pending queue.
+// (schema/value as JSON objects, actions lowercased); errors on invalid JSON or a
+// schema that won't compile. Shared by the SSE event and the conversation-fetch
+// pending queue, so both validate identically.
 func interactionEventData(r *pb.Renderable) (InteractionEventData, error) {
 	schema := json.RawMessage(r.GetDataSchemaJson())
 	if !json.Valid(schema) {
 		return InteractionEventData{}, fmt.Errorf("renderable %q: invalid data_schema_json", r.GetId())
+	}
+	// Reject a schema that won't compile (e.g. a hostile external $ref) before the client sees it.
+	if _, err := compileSchema(r.GetDataSchemaJson()); err != nil {
+		return InteractionEventData{}, fmt.Errorf("renderable %q: %w", r.GetId(), err)
 	}
 
 	var value json.RawMessage

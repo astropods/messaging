@@ -154,6 +154,12 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 		})
 	}
 
+	// Pending interactions are newest-state; only the newest page carries them
+	// (a backscroll page has no reason to re-surface an open form).
+	pending := []InteractionEventData(nil)
+	if beforeSeq == 0 {
+		pending = h.pendingInteractions(r.Context(), conversationID)
+	}
 	writeJSON(w, http.StatusOK, getChatConversationResponse{
 		ConversationID:      conversationID,
 		Title:               conv.Title,
@@ -162,7 +168,7 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 		AssistantStreaming:  assistantStreaming,
 		HasMore:             hasMore,
 		OldestSeq:           oldestSeq,
-		PendingInteractions: h.pendingInteractions(r.Context(), conversationID),
+		PendingInteractions: pending,
 	})
 }
 

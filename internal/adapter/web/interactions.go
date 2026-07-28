@@ -21,13 +21,6 @@ func (a *WebAdapter) emitRenderable(ctx context.Context, conversationID string, 
 		return
 	}
 
-	// Reject a schema that doesn't compile (including a hostile external $ref) at
-	// the source, so it never lands in the store or reaches the client.
-	if _, err := compileSchema(r.GetDataSchemaJson()); err != nil {
-		slog.Error("[Web] dropping renderable with invalid schema", "conversation", conversationID, "err", err)
-		return
-	}
-
 	if a.interactions != nil {
 		if _, err := a.interactions.AppendInteraction(ctx, conversationID, a.conversationOwner(ctx, conversationID), r); err != nil {
 			slog.Error("[Web] persist interaction failed", "conversation", conversationID, "err", err)

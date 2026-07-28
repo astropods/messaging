@@ -79,6 +79,52 @@ func TestHandleGetChatConversation_PendingInteractions(t *testing.T) {
 	}
 }
 
+// A backscroll (before_seq) fetch omits pending_interactions — the pending queue
+// belongs to the newest page, not an older window.
+func TestHandleGetChatConversation_PendingOmittedOnPagination(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+	h.interactions = st
+	ctx := t.Context()
+
+	if err := st.Upsert(ctx, "conv-1", "user-1", "title"); err != nil {
+		t.Fatalf("seed conversation: %v", err)
+	}
+	if _, err := st.AppendInteraction(ctx, "conv-1", "user-1", &pb.Renderable{
+		Id:             "i1",
+		Kind:           pb.RenderKind_RENDER_KIND_FORM,
+		Message:        "pick one",
+		DataSchemaJson: `{"type":"object","properties":{"x":{"type":"string"}}}`,
+		AllowedActions: []pb.RenderableAction{
+			pb.RenderableAction_RENDERABLE_ACTION_SUBMIT,
+			pb.RenderableAction_RENDERABLE_ACTION_CANCEL,
+		},
+	}); err != nil {
+		t.Fatalf("append i1: %v", err)
+	}
+
+	// Newest page (no before_seq) carries the pending interaction.
+	if newest := getConversation(t, h, "user-1", "conv-1"); len(newest.PendingInteractions) != 1 {
+		t.Fatalf("newest page: got %d pending, want 1", len(newest.PendingInteractions))
+	}
+
+	// A before_seq (older) page omits it.
+	req := httptest.NewRequest(http.MethodGet, "/api/chat/conversations/conv-1?before_seq=1", nil)
+	req.Header.Set("X-User-ID", "user-1")
+	req.SetPathValue("id", "conv-1")
+	w := httptest.NewRecorder()
+	h.HandleGetChatConversation(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("paginated fetch: want 200, got %d body=%q", w.Code, w.Body.String())
+	}
+	var resp getChatConversationResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.PendingInteractions != nil {
+		t.Errorf("paginated fetch must omit pending_interactions, got %v", resp.PendingInteractions)
+	}
+}
+
 // With no interaction store wired, the fetch omits pending_interactions entirely.
 func TestHandleGetChatConversation_NoInteractionStore(t *testing.T) {
 	h, st := newChatTitleHandlers(t)
