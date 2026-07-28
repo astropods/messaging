@@ -312,15 +312,35 @@ type InteractionEventData struct {
 // NewInteractionEvent builds an interaction SSE event, erroring on invalid
 // data_schema_json or value_json so a malformed Renderable is never emitted.
 func NewInteractionEvent(r *pb.Renderable) (SSEEvent, error) {
+	data, err := interactionEventData(r)
+	if err != nil {
+		return SSEEvent{}, err
+	}
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return SSEEvent{}, fmt.Errorf("renderable %q: marshal interaction event: %w", r.GetId(), err)
+	}
+	return SSEEvent{Event: EventInteraction, Data: string(jsonData)}, nil
+}
+
+// interactionEventData builds the client interaction shape from a Renderable
+// (schema/value as JSON objects, actions lowercased); errors on invalid JSON or a
+// schema that won't compile. Shared by the SSE event and the conversation-fetch
+// pending queue, so both validate identically.
+func interactionEventData(r *pb.Renderable) (InteractionEventData, error) {
 	schema := json.RawMessage(r.GetDataSchemaJson())
 	if !json.Valid(schema) {
-		return SSEEvent{}, fmt.Errorf("renderable %q: invalid data_schema_json", r.GetId())
+		return InteractionEventData{}, fmt.Errorf("renderable %q: invalid data_schema_json", r.GetId())
+	}
+	// Reject a schema that won't compile (e.g. a hostile external $ref) before the client sees it.
+	if _, err := compileSchema(r.GetDataSchemaJson()); err != nil {
+		return InteractionEventData{}, fmt.Errorf("renderable %q: %w", r.GetId(), err)
 	}
 
 	var value json.RawMessage
 	if v := r.GetValueJson(); v != "" {
 		if !json.Valid([]byte(v)) {
-			return SSEEvent{}, fmt.Errorf("renderable %q: invalid value_json", r.GetId())
+			return InteractionEventData{}, fmt.Errorf("renderable %q: invalid value_json", r.GetId())
 		}
 		value = json.RawMessage(v)
 	}
@@ -332,7 +352,7 @@ func NewInteractionEvent(r *pb.Renderable) (SSEEvent, error) {
 		}
 	}
 
-	data := InteractionEventData{
+	return InteractionEventData{
 		Type:       "interaction",
 		ID:         r.GetId(),
 		Kind:       renderKindWireName(r.GetKind()),
@@ -341,12 +361,7 @@ func NewInteractionEvent(r *pb.Renderable) (SSEEvent, error) {
 		Value:      value,
 		Actions:    actions,
 		Intent:     r.GetIntent(),
-	}
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return SSEEvent{}, fmt.Errorf("renderable %q: marshal interaction event: %w", r.GetId(), err)
-	}
-	return SSEEvent{Event: EventInteraction, Data: string(jsonData)}, nil
+	}, nil
 }
 
 // NewPromptsEvent creates a suggested prompts SSE event from a protobuf SuggestedPrompts
