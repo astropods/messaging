@@ -71,8 +71,9 @@ docker run \
   astro-messaging
 ```
 
-The web adapter serves the HTTP/SSE API only; the chat UI is provided by the
-astro-client SPA, which talks to this API over the same-origin `/chat/*` proxy.
+The web adapter serves the HTTP/SSE API only; the chat UI is served by the `ast`
+CLI, which embeds the prebuilt chat SPA and talks to this API over the
+same-origin `/chat/*` proxy.
 
 ## Configuration
 
