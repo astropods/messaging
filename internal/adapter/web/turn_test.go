@@ -323,3 +323,30 @@ func TestTurnTracker_FreshTurnReapableDespiteStopGate(t *testing.T) {
 		t.Fatal("stop gate should still drop trailing output until a START")
 	}
 }
+
+// A stale END from a stopped turn's generation must not wipe a freshly-resent
+// turn's tracking. clearStoppedTurn preserves the fresh (non-userStopped) turn so
+// its watchdog and disconnect finalization still work if it then hangs.
+func TestTurnTracker_GatedEndKeepsFreshResentTurn(t *testing.T) {
+	tr := newTurnTracker()
+	// Turn 1 is user-stopped; the agent hasn't sent its END yet, so the gate lingers.
+	tr.record("c", contentChunk(pb.ContentChunk_START, "t1"))
+	tr.stop("c")
+	// The user resends: turn 2 is armed while the gate still lingers.
+	tr.startTurn("c")
+	// Turn 1's straggler END arrives, gated (not a START); the handler's gated-END
+	// cleanup must preserve turn 2.
+	if drop := tr.gateContent("c", false); !drop {
+		t.Fatal("stopped turn's straggler must be gated")
+	}
+	tr.clearStoppedTurn("c")
+	if !tr.isStreaming("c") {
+		t.Fatal("fresh resent turn was wiped by the stale END cleanup")
+	}
+	if got := tr.activeConversations(); len(got) != 1 || got[0] != "c" {
+		t.Fatalf("fresh turn should remain active, got %v", got)
+	}
+	if _, ok := tr.failActive("c"); !ok {
+		t.Fatal("fresh turn must remain reapable after the stale END cleanup")
+	}
+}

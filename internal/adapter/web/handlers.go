@@ -331,10 +331,8 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Arm the idle watchdog before forwarding, so the turn is tracked before any
-	// agent response can arrive. Arming after the forward left a window where the
-	// agent's full START..END could be handled first — clear() would delete the
-	// turn, then startTurn would resurrect it and arm a timer that later reaps a
-	// turn that already finished. A failed forward disarms it below.
+	// agent response can arrive (arming after left a window where an END handled
+	// first could resurrect a finished turn). A failed forward disarms it below.
 	if h.turns != nil {
 		h.turns.startTurn(conversationID)
 	}

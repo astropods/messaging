@@ -25,11 +25,9 @@ type turnState struct {
 	lastPersist  time.Time
 	idleTimer    *time.Timer
 	idleDeadline time.Time
-	// userStopped marks a turn the user explicitly stopped, so the idle watchdog
-	// and disconnect finalization skip it (the user already ended it). It is
-	// per-turn and distinct from the conversation-level stopped drop-gate: a fresh
-	// turn started after a lingering gate is reap-eligible even while the gate
-	// still drops the previous turn's trailing output.
+	// userStopped marks a turn the user stopped, so the idle watchdog and
+	// disconnect skip it. Per-turn and distinct from the conversation-level stopped
+	// drop-gate, so a fresh turn after a lingering gate is still reapable.
 	userStopped bool
 }
 
@@ -125,9 +123,7 @@ func stopIdleLocked(st *turnState) {
 
 // startTurn marks a turn in flight when the user's message is forwarded, arming
 // the idle watchdog so an agent that hangs before its first chunk is still reaped.
-// A fresh turn is reap-eligible even if a prior turn's stop drop-gate still
-// lingers (it's lifted by the agent's next START), so a resend after a stop that
-// then hangs is still finalized.
+// Clears userStopped so a resend after a lingering stop gate is reap-eligible.
 func (t *turnTracker) startTurn(conversationID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -163,10 +159,8 @@ func (t *turnTracker) touch(conversationID string) {
 // failActive atomically ends a tracked turn for abnormal termination (idle
 // timeout or agent disconnect), returning the buffered partial. ok=false when no
 // turn is active or it was user-stopped, so a terminal event fires exactly once.
-// It also sets the stop gate, matching a user stop: if a slow-but-alive agent
-// (reaped by the idle watchdog) produces output afterwards, that trailing output
-// is dropped until the next START rather than resurrecting the finalized turn and
-// flapping assistant_streaming back on.
+// It also sets the stop gate (like a user stop) so a slow-but-alive reaped agent's
+// later output is dropped rather than resurrecting the finalized turn.
 func (t *turnTracker) failActive(conversationID string) (partial string, ok bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -328,6 +322,24 @@ func (t *turnTracker) gateContent(conversationID string, isStart bool) (drop boo
 func (t *turnTracker) clear(conversationID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if st := t.turns[conversationID]; st != nil {
+		stopIdleLocked(st)
+	}
+	delete(t.turns, conversationID)
+	delete(t.stopped, conversationID)
+}
+
+// clearStoppedTurn cleans up a stopped conversation when its generation's END
+// arrives while still gated. It preserves a fresh turn already started for the
+// same conversation (a resend, marked !userStopped) — otherwise a stale END
+// would wipe the resent turn's watchdog and leave it unreapable. That fresh
+// turn's own START lifts the gate.
+func (t *turnTracker) clearStoppedTurn(conversationID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if st := t.turns[conversationID]; st != nil && !st.userStopped {
+		return
+	}
 	if st := t.turns[conversationID]; st != nil {
 		stopIdleLocked(st)
 	}

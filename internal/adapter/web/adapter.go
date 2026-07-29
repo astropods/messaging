@@ -392,11 +392,11 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		// NOT lifted by the next user send, so the stopped turn's trailing output
 		// can't bleed into the following message on the same conversation.
 		if a.turns != nil && a.turns.gateContent(conversationID, payload.Content.Type == pb.ContentChunk_START) {
-			// Dropped because the turn is stopped. If this is the stopped
-			// generation's terminal chunk, clear the gate so the entry doesn't
-			// linger for a stopped-then-abandoned conversation.
+			// Dropped because the turn is stopped. On the stopped generation's END,
+			// clear the lingering gate — but preserve a fresh turn already resent for
+			// this conversation, whose watchdog this stale END must not wipe.
 			if payload.Content.Type == pb.ContentChunk_END {
-				a.turns.clear(conversationID)
+				a.turns.clearStoppedTurn(conversationID)
 			}
 			return nil
 		}
