@@ -25,9 +25,11 @@ import (
 const chatPersistThrottle = 250 * time.Millisecond
 
 // defaultTurnIdleTimeout reaps a turn whose agent has produced no output for this
-// long. Generous so a long quiet tool call isn't mistaken for a hang; any agent
-// activity resets it.
-const defaultTurnIdleTimeout = 3 * time.Minute
+// long. Generous so a long quiet tool call (a slow model or tool with no
+// intermediate streaming) isn't mistaken for a hang; any agent activity resets
+// it. Tunable per deployment via WithTurnIdleTimeout. The client keeps its own
+// far-larger absolute backstop, so this can favor avoiding false reaps.
+const defaultTurnIdleTimeout = 5 * time.Minute
 
 // WebAdapter implements adapter.Adapter for web browser clients via HTTP + SSE
 type WebAdapter struct {
@@ -311,9 +313,10 @@ func (a *WebAdapter) conversationOwner(ctx context.Context, conversationID strin
 }
 
 // reapIdleTurn is the turn tracker's idle callback: the turn produced no agent
-// activity within the idle window, so finalize it as stalled.
+// activity within the idle window, so finalize it as stalled. failTurn logs the
+// surfaced error, so this only records the reason at debug.
 func (a *WebAdapter) reapIdleTurn(conversationID string) {
-	slog.Warn("[Web] turn idle timeout; finalizing stalled turn", "conversation", conversationID)
+	slog.Debug("[Web] turn idle timeout; finalizing stalled turn", "conversation", conversationID)
 	a.failTurn(context.Background(), conversationID, "The agent stopped responding. You can try sending again.")
 }
 
@@ -348,6 +351,11 @@ func (a *WebAdapter) failTurn(ctx context.Context, conversationID, message strin
 	if !ok {
 		return
 	}
+	// Log every surfaced abnormal termination in the sidecar (the source of truth
+	// for chat errors). This is delivered to the client as an in-band SSE error
+	// event on the 200 stream, not an HTTP 5xx, so it does not inflate the
+	// astro-server per-route 5xx rate.
+	slog.Warn("[Web] finalizing in-flight turn with terminal error", "conversation", conversationID, "message", message)
 	if a.chatStore != nil {
 		if _, err := a.chatStore.FinalizeTerminal(ctx, conversationID, partial); err != nil {
 			if errors.Is(err, sqlite.ErrMessageLimitReached) {

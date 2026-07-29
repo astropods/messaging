@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/store/sqlite"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
@@ -268,6 +269,30 @@ func TestHandleSendMessageForwardFailureFinalizes(t *testing.T) {
 	}
 	if len(msgs) != 2 || msgs[len(msgs)-1].Role != "assistant" {
 		t.Fatalf("forward failure did not finalize the turn (last row must be assistant): %+v", msgs)
+	}
+}
+
+// A send that fails only because no agent is connected is an expected, transient
+// condition, not an astro-server fault: it returns 424 (kept out of the per-route
+// 5xx rate) and still finalizes the turn so the thread doesn't hang streaming.
+func TestHandleSendMessageNoAgentReturns424(t *testing.T) {
+	h, st := newChatTitleHandlers(t)
+	h.SetMessageHandler(func(context.Context, *pb.Message) error {
+		return adapter.ErrNoAgentStream
+	})
+
+	w := httptest.NewRecorder()
+	h.HandleSendMessage(w, sendMessageRequest("user-1", "conv-1", "hello"))
+
+	if w.Code != http.StatusFailedDependency {
+		t.Fatalf("want 424 when no agent is connected, got %d body=%q", w.Code, w.Body.String())
+	}
+	msgs, err := st.ListMessages(t.Context(), "conv-1")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(msgs) != 2 || msgs[len(msgs)-1].Role != "assistant" {
+		t.Fatalf("no-agent send did not finalize the turn (last row must be assistant): %+v", msgs)
 	}
 }
 

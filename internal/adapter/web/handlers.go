@@ -340,7 +340,16 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.msgHandler(ctx, msg); err != nil {
-		slog.Error(fmt.Sprintf("[Web] Error forwarding message: %v", err))
+		// "No agent connected" is an expected, transient condition (the agent is
+		// restarting or not up yet), not an astro-server fault — log it at warn and
+		// return 424 so it doesn't inflate the per-route 5xx rate. Any other forward
+		// error is a genuine internal failure and stays a 500.
+		noAgent := errors.Is(err, adapter.ErrNoAgentStream)
+		if noAgent {
+			slog.Warn("[Web] no agent connected; cannot forward message", "conversation", conversationID, "err", err)
+		} else {
+			slog.Error(fmt.Sprintf("[Web] Error forwarding message: %v", err))
+		}
 		// The forward failed, so the agent will never respond for this turn. Disarm
 		// the watchdog just armed, and finalize the store — without the finalize the
 		// latest row stays the user's and the thread derives assistant_streaming
@@ -353,6 +362,11 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 			if _, ferr := h.chatStore.FinalizeTerminal(ctx, conversationID, ""); ferr != nil {
 				slog.Error("[Web] chat finalize on forward failure failed", "conversation", conversationID, "err", ferr)
 			}
+		}
+		if noAgent {
+			h.sendErrorEvent(conversationID, "AGENT_UNAVAILABLE", "The agent is not available right now. You can try sending again.")
+			http.Error(w, "agent unavailable", http.StatusFailedDependency)
+			return
 		}
 		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process message")
 		http.Error(w, "Failed to process message", http.StatusInternalServerError)
