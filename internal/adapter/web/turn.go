@@ -25,6 +25,12 @@ type turnState struct {
 	lastPersist  time.Time
 	idleTimer    *time.Timer
 	idleDeadline time.Time
+	// userStopped marks a turn the user explicitly stopped, so the idle watchdog
+	// and disconnect finalization skip it (the user already ended it). It is
+	// per-turn and distinct from the conversation-level stopped drop-gate: a fresh
+	// turn started after a lingering gate is reap-eligible even while the gate
+	// still drops the previous turn's trailing output.
+	userStopped bool
 }
 
 // turnTracker records per-conversation streaming turn state so the web adapter
@@ -93,7 +99,7 @@ func (t *turnTracker) armIdleLocked(conversationID string, st *turnState) {
 func (t *turnTracker) fireIdle(conversationID string) {
 	t.mu.Lock()
 	st := t.turns[conversationID]
-	if st == nil || t.stopped[conversationID] {
+	if st == nil || st.userStopped {
 		t.mu.Unlock()
 		return
 	}
@@ -119,6 +125,9 @@ func stopIdleLocked(st *turnState) {
 
 // startTurn marks a turn in flight when the user's message is forwarded, arming
 // the idle watchdog so an agent that hangs before its first chunk is still reaped.
+// A fresh turn is reap-eligible even if a prior turn's stop drop-gate still
+// lingers (it's lifted by the agent's next START), so a resend after a stop that
+// then hangs is still finalized.
 func (t *turnTracker) startTurn(conversationID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -134,6 +143,7 @@ func (t *turnTracker) startTurn(conversationID string) {
 		st = &turnState{}
 		t.turns[conversationID] = st
 	}
+	st.userStopped = false
 	t.armIdleLocked(conversationID, st)
 }
 
@@ -161,7 +171,7 @@ func (t *turnTracker) failActive(conversationID string) (partial string, ok bool
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	st := t.turns[conversationID]
-	if st == nil || t.stopped[conversationID] {
+	if st == nil || st.userStopped {
 		return "", false
 	}
 	stopIdleLocked(st)
@@ -180,13 +190,14 @@ func (t *turnTracker) failActive(conversationID string) (partial string, ok bool
 	return partial, true
 }
 
-// activeConversations lists conversations with a turn in flight (not stopped).
+// activeConversations lists conversations with a turn in flight (excluding turns
+// the user stopped, which disconnect finalization must not reap).
 func (t *turnTracker) activeConversations() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	ids := make([]string, 0, len(t.turns))
-	for id := range t.turns {
-		if !t.stopped[id] {
+	for id, st := range t.turns {
+		if !st.userStopped {
 			ids = append(ids, id)
 		}
 	}
@@ -259,13 +270,15 @@ func (t *turnTracker) dueForPersist(conversationID string, interval time.Duratio
 
 // isStreaming reports whether a turn is actively streaming for conversationID.
 // Read handlers combine it with the persisted state to report assistant_streaming.
-// A stopped conversation is excluded even though its turnState lingers (stop()
-// keeps it to gate trailing chunks): otherwise a cancelled turn whose agent
-// honored the abort (no END to clear the entry) would report streaming forever.
+// A user-stopped turn is excluded even though its turnState lingers (stop() keeps
+// it to gate trailing chunks): otherwise a cancelled turn whose agent honored the
+// abort (no END to clear the entry) would report streaming forever. A fresh turn
+// after a lingering gate reports streaming (its turnState is not userStopped).
 func (t *turnTracker) isStreaming(conversationID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.turns[conversationID] != nil && !t.stopped[conversationID]
+	st := t.turns[conversationID]
+	return st != nil && !st.userStopped
 }
 
 // stop marks the in-flight turn on conversationID stopped and returns the partial
@@ -286,6 +299,9 @@ func (t *turnTracker) stop(conversationID string) string {
 	t.stopped[conversationID] = true
 	if st := t.turns[conversationID]; st != nil {
 		stopIdleLocked(st)
+		// Mark this specific turn user-stopped so the idle watchdog and disconnect
+		// skip it; a later startTurn (resend) clears it for the fresh turn.
+		st.userStopped = true
 		return st.partial.String()
 	}
 	return ""

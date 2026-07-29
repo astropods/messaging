@@ -290,3 +290,36 @@ func TestTurnTrackerFailActiveGatesLateOutput(t *testing.T) {
 		t.Fatal("a new START must lift the gate")
 	}
 }
+
+// A turn started after a lingering user-stop drop-gate must still be reap-eligible:
+// the gate blocks the previous turn's trailing output, but the fresh turn's idle
+// watchdog and disconnect finalization must be able to end it. Regression for the
+// hang where a stop the agent honored by going silent left the gate resident and
+// disabled both safety nets for the next turn.
+func TestTurnTracker_FreshTurnReapableDespiteStopGate(t *testing.T) {
+	tr := newTurnTracker()
+	// A turn the user stops; the agent honors it by going silent (no END), so the
+	// drop-gate lingers.
+	tr.record("c", contentChunk(pb.ContentChunk_START, "partial"))
+	tr.stop("c")
+	if _, ok := tr.failActive("c"); ok {
+		t.Fatal("a user-stopped turn must not be reaped")
+	}
+
+	// The user sends again — a fresh turn is in flight while the gate still lingers.
+	tr.startTurn("c")
+	if !tr.isStreaming("c") {
+		t.Fatal("a fresh turn after a stop gate should report streaming")
+	}
+	if got := tr.activeConversations(); len(got) != 1 || got[0] != "c" {
+		t.Fatalf("fresh turn should be listed active for disconnect reaping, got %v", got)
+	}
+	// The fresh turn hangs — the idle reaper / disconnect must be able to claim it.
+	if _, ok := tr.failActive("c"); !ok {
+		t.Fatal("a fresh turn after a stop gate must be reapable")
+	}
+	// The gate still drops the previous turn's trailing output until a new START.
+	if drop := tr.gateContent("c", false); !drop {
+		t.Fatal("stop gate should still drop trailing output until a START")
+	}
+}
