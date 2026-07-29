@@ -340,10 +340,8 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.msgHandler(ctx, msg); err != nil {
-		// "No agent connected" is an expected, transient condition (the agent is
-		// restarting or not up yet), not an astro-server fault — log it at warn and
-		// return 424 so it doesn't inflate the per-route 5xx rate. Any other forward
-		// error is a genuine internal failure and stays a 500.
+		// No agent connected is expected and transient (agent restarting/not up),
+		// so return 424, not 500 — a genuine forward error stays a 500.
 		noAgent := errors.Is(err, adapter.ErrNoAgentStream)
 		if noAgent {
 			slog.Warn("[Web] no agent connected; cannot forward message", "conversation", conversationID, "err", err)

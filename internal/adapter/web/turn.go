@@ -153,6 +153,10 @@ func (t *turnTracker) touch(conversationID string) {
 // failActive atomically ends a tracked turn for abnormal termination (idle
 // timeout or agent disconnect), returning the buffered partial. ok=false when no
 // turn is active or it was user-stopped, so a terminal event fires exactly once.
+// It also sets the stop gate, matching a user stop: if a slow-but-alive agent
+// (reaped by the idle watchdog) produces output afterwards, that trailing output
+// is dropped until the next START rather than resurrecting the finalized turn and
+// flapping assistant_streaming back on.
 func (t *turnTracker) failActive(conversationID string) (partial string, ok bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -163,6 +167,16 @@ func (t *turnTracker) failActive(conversationID string) (partial string, ok bool
 	stopIdleLocked(st)
 	partial = st.partial.String()
 	delete(t.turns, conversationID)
+	// Gate trailing output like stop() does; bounded the same way, lifted by the
+	// next START. failActive already returned above if the turn was gone or
+	// stopped, so this conversation isn't in the map yet.
+	if len(t.stopped) >= maxTrackedStops {
+		for k := range t.stopped {
+			delete(t.stopped, k)
+			break
+		}
+	}
+	t.stopped[conversationID] = true
 	return partial, true
 }
 

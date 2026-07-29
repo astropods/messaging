@@ -351,10 +351,8 @@ func (a *WebAdapter) failTurn(ctx context.Context, conversationID, message strin
 	if !ok {
 		return
 	}
-	// Log every surfaced abnormal termination in the sidecar (the source of truth
-	// for chat errors). This is delivered to the client as an in-band SSE error
-	// event on the 200 stream, not an HTTP 5xx, so it does not inflate the
-	// astro-server per-route 5xx rate.
+	// Log every surfaced abnormal termination; it reaches the client as an in-band
+	// SSE error event, not an HTTP 5xx.
 	slog.Warn("[Web] finalizing in-flight turn with terminal error", "conversation", conversationID, "message", message)
 	if a.chatStore != nil {
 		if _, err := a.chatStore.FinalizeTerminal(ctx, conversationID, partial); err != nil {

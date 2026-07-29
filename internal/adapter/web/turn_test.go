@@ -268,3 +268,25 @@ func TestTurnTrackerFailActive(t *testing.T) {
 		t.Fatal("failActive must not claim a user-stopped turn")
 	}
 }
+
+// After an abnormal reap, a slow-but-alive agent's trailing output must be gated
+// (dropped) rather than resurrecting the finalized turn; a genuine new START
+// lifts the gate. Matches the user-stop gate.
+func TestTurnTrackerFailActiveGatesLateOutput(t *testing.T) {
+	tr := newTurnTracker()
+	tr.record("c", contentChunk(pb.ContentChunk_START, "working"))
+	if _, ok := tr.failActive("c"); !ok {
+		t.Fatal("failActive should claim the active turn")
+	}
+	// A late continuation chunk (not START) is dropped, so record() never runs.
+	if drop := tr.gateContent("c", false); !drop {
+		t.Fatal("late non-START output after a reap must be gated (dropped)")
+	}
+	if tr.isStreaming("c") {
+		t.Fatal("a reaped turn must not be resurrected by late output")
+	}
+	// A genuine new turn (START) lifts the gate.
+	if drop := tr.gateContent("c", true); drop {
+		t.Fatal("a new START must lift the gate")
+	}
+}

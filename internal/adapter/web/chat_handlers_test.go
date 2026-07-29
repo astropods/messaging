@@ -272,9 +272,8 @@ func TestHandleSendMessageForwardFailureFinalizes(t *testing.T) {
 	}
 }
 
-// A send that fails only because no agent is connected is an expected, transient
-// condition, not an astro-server fault: it returns 424 (kept out of the per-route
-// 5xx rate) and still finalizes the turn so the thread doesn't hang streaming.
+// A send that fails only because no agent is connected returns 424 (not 5xx) and
+// still finalizes the turn so the thread doesn't hang streaming.
 func TestHandleSendMessageNoAgentReturns424(t *testing.T) {
 	h, st := newChatTitleHandlers(t)
 	h.SetMessageHandler(func(context.Context, *pb.Message) error {
