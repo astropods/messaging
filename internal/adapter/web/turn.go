@@ -21,9 +21,10 @@ const maxTrackedStops = 4096
 // persisted (used to throttle mid-stream chat-store writes), and the idle
 // watchdog that reaps the turn if the agent goes silent.
 type turnState struct {
-	partial     strings.Builder
-	lastPersist time.Time
-	idleTimer   *time.Timer
+	partial      strings.Builder
+	lastPersist  time.Time
+	idleTimer    *time.Timer
+	idleDeadline time.Time
 }
 
 // turnTracker records per-conversation streaming turn state so the web adapter
@@ -69,17 +70,45 @@ func (t *turnTracker) setIdleReaper(timeout time.Duration, onIdle func(conversat
 	t.onIdle = onIdle
 }
 
-// armIdleLocked (re)starts a turn's idle watchdog. Caller holds mu.
+// armIdleLocked (re)starts a turn's idle watchdog. Caller holds mu. It records a
+// deadline and (re)schedules a single reused timer; the callback re-checks the
+// deadline so activity landing in the window between the timer firing and its
+// callback acquiring the lock reschedules the reap rather than ending a turn that
+// just showed life.
 func (t *turnTracker) armIdleLocked(conversationID string, st *turnState) {
 	if t.idleTimeout <= 0 || t.onIdle == nil {
 		return
 	}
-	onIdle := t.onIdle
+	st.idleDeadline = time.Now().Add(t.idleTimeout)
 	if st.idleTimer == nil {
-		st.idleTimer = time.AfterFunc(t.idleTimeout, func() { onIdle(conversationID) })
+		st.idleTimer = time.AfterFunc(t.idleTimeout, func() { t.fireIdle(conversationID) })
 		return
 	}
 	st.idleTimer.Reset(t.idleTimeout)
+}
+
+// fireIdle is the idle timer's callback. It reaps the turn only once the deadline
+// has actually elapsed; if activity extended the deadline after the timer fired,
+// it reschedules for the time remaining instead of reaping.
+func (t *turnTracker) fireIdle(conversationID string) {
+	t.mu.Lock()
+	st := t.turns[conversationID]
+	if st == nil || t.stopped[conversationID] {
+		t.mu.Unlock()
+		return
+	}
+	if remaining := time.Until(st.idleDeadline); remaining > 0 {
+		if st.idleTimer != nil {
+			st.idleTimer.Reset(remaining)
+		}
+		t.mu.Unlock()
+		return
+	}
+	onIdle := t.onIdle
+	t.mu.Unlock()
+	if onIdle != nil {
+		onIdle(conversationID)
+	}
 }
 
 func stopIdleLocked(st *turnState) {

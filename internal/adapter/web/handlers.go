@@ -348,7 +348,11 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Turn is forwarded and in flight; arm the idle watchdog so an agent that
-	// never produces output is still reaped.
+	// never produces output is still reaped. Armed after the forward so a failed
+	// forward (returns early above) never arms a watchdog for a turn that never
+	// started. This assumes the agent round-trip (network + model, ms) dwarfs the
+	// gap to this line (µs): were an END handled before startTurn, clear() would
+	// run first and startTurn would resurrect the finished turn.
 	if h.turns != nil {
 		h.turns.startTurn(conversationID)
 	}

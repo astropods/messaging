@@ -150,22 +150,27 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Register the stream
-	s.streamsMu.Lock()
-	s.streams[conversationID] = &conversationStream{
+	// Register the stream, keeping a handle to this exact registration so teardown
+	// can tell whether it is still the current stream for the key.
+	cs := &conversationStream{
 		stream:         stream,
 		conversationID: conversationID,
 		cancel:         cancel,
 	}
+	s.streamsMu.Lock()
+	s.streams[conversationID] = cs
 	s.streamsMu.Unlock()
 
 	slog.Debug("[gRPC] Registered agent stream", "conversation", conversationID)
 
 	// Clean up on exit
 	defer func() {
-		s.streamsMu.Lock()
-		delete(s.streams, conversationID)
-		s.streamsMu.Unlock()
+		if !s.unregisterStream(conversationID, cs) {
+			// A newer stream replaced this one under the same key (agent reconnect):
+			// it owns the in-flight turns now, so this teardown must not reap them.
+			slog.Debug("[gRPC] Superseded agent stream ended; leaving current stream and its turns intact", "conversation", conversationID)
+			return
+		}
 		slog.Debug("[gRPC] Unregistered agent stream", "conversation", conversationID)
 		// Stream ended (disconnect/crash/dead peer): finalize any in-flight turns
 		// so clients get a terminal event. No-op when nothing is in flight. One
@@ -503,6 +508,21 @@ func (s *Server) SendAudioChunk(conversationID string, data []byte, sequence int
 	})
 }
 
+// unregisterStream removes cs as the stream for conversationID, but only if it is
+// still the current registration, reporting whether it was. On agent reconnect a
+// newer stream registers under the same key before this one's teardown runs;
+// returning false there lets the caller skip disconnect handling so the live
+// stream and the turns it now owns survive.
+func (s *Server) unregisterStream(conversationID string, cs *conversationStream) (wasCurrent bool) {
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	if s.streams[conversationID] != cs {
+		return false
+	}
+	delete(s.streams, conversationID)
+	return true
+}
+
 // findStreamForConversation looks up the gRPC agent stream for a given conversation.
 //
 // Stream lookup strategy:
@@ -574,13 +594,24 @@ func (s *Server) routeAgentResponse(ctx context.Context, response *pb.AgentRespo
 // (e.g. Slack) are skipped. Uses a fresh context because the stream's context is
 // already cancelled by the time this runs.
 func (s *Server) notifyAgentDisconnect() {
+	type namedHandler struct {
+		name string
+		h    adapter.AgentDisconnectHandler
+	}
+	// Snapshot the handlers under the lock, then invoke them after releasing it:
+	// HandleAgentDisconnect does a store write plus SSE fan-out per in-flight turn,
+	// and we don't want to hold the adapter-registry lock across that I/O.
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	handlers := make([]namedHandler, 0, len(s.adapters))
 	for name, adpt := range s.adapters {
 		if h, ok := adpt.(adapter.AgentDisconnectHandler); ok {
-			slog.Debug("[gRPC] Finalizing in-flight turns after agent disconnect", "adapter", name)
-			h.HandleAgentDisconnect(context.Background())
+			handlers = append(handlers, namedHandler{name, h})
 		}
+	}
+	s.mu.RUnlock()
+	for _, nh := range handlers {
+		slog.Debug("[gRPC] Finalizing in-flight turns after agent disconnect", "adapter", nh.name)
+		nh.h.HandleAgentDisconnect(context.Background())
 	}
 }
 
