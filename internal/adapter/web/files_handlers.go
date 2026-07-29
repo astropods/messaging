@@ -59,6 +59,26 @@ type listFilesResponse struct {
 	Files []files.FileMeta `json:"files"`
 }
 
+type fileErrorResponse struct {
+	Error   string `json:"error"`
+	Details string `json:"details"`
+}
+
+func writeFileError(w http.ResponseWriter, status int, code, details string) {
+	writeJSON(w, status, fileErrorResponse{Error: code, Details: details})
+}
+
+func writeFileAuthError(w http.ResponseWriter, message string, status int) {
+	switch message {
+	case "Unauthorized":
+		writeFileError(w, status, "authentication_required", "Authentication is required.")
+	case "Forbidden":
+		writeFileError(w, status, "file_access_forbidden", "You don't have permission to access files for this deployment.")
+	default:
+		writeFileError(w, status, "files_unavailable", "File storage is temporarily unavailable. Try again.")
+	}
+}
+
 // filesUsageResponse reports the backing volume's capacity so the client can
 // warn as it fills. Available is false when the store can't report usage (an
 // S3-backed store, or a platform without statfs) — the client then hides the
@@ -76,26 +96,29 @@ type filesUsageResponse struct {
 // where to send the bytes: a presigned URL when the store supports it (S3), or a
 // relative content path handled by HandlePutFileContent (filesystem).
 func (h *Handlers) HandleCreateFile(w http.ResponseWriter, r *http.Request) {
-	session := h.authenticate(w, r)
+	session := h.authenticateWithErrorWriter(w, r, writeFileAuthError)
 	if session == nil {
 		return
 	}
 	if h.fileStore == nil {
-		http.Error(w, "file storage is not enabled", http.StatusNotFound)
+		writeFileError(w, http.StatusNotFound, "file_storage_unavailable", "File storage isn't available for this deployment yet.")
 		return
 	}
 
 	var input createFileInput
 	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&input)
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeFileError(w, http.StatusBadRequest, "invalid_file_request", "The file request is invalid.")
+			return
+		}
 	}
 	name, ok := sanitizeFileName(input.Name)
 	if !ok {
-		http.Error(w, "invalid file name", http.StatusBadRequest)
+		writeFileError(w, http.StatusBadRequest, "invalid_file_name", "This file name isn't supported.")
 		return
 	}
 	if input.Size < 0 || input.Size > filesMaxUploadBytes {
-		http.Error(w, "file too large", http.StatusRequestEntityTooLarge)
+		writeFileError(w, http.StatusRequestEntityTooLarge, "file_too_large", "This file is too large. Choose a smaller file and try again.")
 		return
 	}
 
@@ -106,7 +129,7 @@ func (h *Handlers) HandleCreateFile(w http.ResponseWriter, r *http.Request) {
 	// backstop.
 	if usage, err := h.fileStore.Usage(r.Context()); err == nil && usage.TotalBytes > 0 {
 		if uint64(input.Size)+filesStorageReserveBytes > usage.AvailableBytes {
-			http.Error(w, "not enough storage available on the deployment volume", http.StatusInsufficientStorage)
+			writeFileError(w, http.StatusInsufficientStorage, "insufficient_storage", "The deployment's storage is full. Delete files to free space, then try again.")
 			return
 		}
 	}
@@ -130,7 +153,7 @@ func (h *Handlers) HandleCreateFile(w http.ResponseWriter, r *http.Request) {
 	if target, err := h.fileStore.PresignPut(r.Context(), meta); err == nil {
 		if err := h.fileStore.WriteMeta(r.Context(), meta); err != nil {
 			slog.Error("[Web] files create: write meta failed", "err", err)
-			http.Error(w, "failed to create file", http.StatusInternalServerError)
+			writeFileError(w, http.StatusInternalServerError, "file_create_failed", "The file couldn't be created. Try again.")
 			return
 		}
 		writeJSON(w, http.StatusOK, createFileResponse{
@@ -145,13 +168,13 @@ func (h *Handlers) HandleCreateFile(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if !errors.Is(err, files.ErrUnsupported) {
 		slog.Error("[Web] files create: presign failed", "err", err)
-		http.Error(w, "failed to create file", http.StatusInternalServerError)
+		writeFileError(w, http.StatusInternalServerError, "file_create_failed", "The file couldn't be created. Try again.")
 		return
 	}
 
 	if err := h.fileStore.WriteMeta(r.Context(), meta); err != nil {
 		slog.Error("[Web] files create: write meta failed", "err", err)
-		http.Error(w, "failed to create file", http.StatusInternalServerError)
+		writeFileError(w, http.StatusInternalServerError, "file_create_failed", "The file couldn't be created. Try again.")
 		return
 	}
 	writeJSON(w, http.StatusOK, createFileResponse{
@@ -167,32 +190,32 @@ func (h *Handlers) HandleCreateFile(w http.ResponseWriter, r *http.Request) {
 // upload path for stores without presigned uploads. It streams the request body
 // into the blob and reconciles the recorded size.
 func (h *Handlers) HandlePutFileContent(w http.ResponseWriter, r *http.Request) {
-	session := h.authenticate(w, r)
+	session := h.authenticateWithErrorWriter(w, r, writeFileAuthError)
 	if session == nil {
 		return
 	}
 	key, ok := parseFileKey(r.PathValue("key"))
 	if !ok {
-		http.Error(w, "invalid file key", http.StatusBadRequest)
+		writeFileError(w, http.StatusBadRequest, "invalid_file_request", "The file key is invalid.")
 		return
 	}
 	if h.fileStore == nil {
-		http.Error(w, "file storage is not enabled", http.StatusNotFound)
+		writeFileError(w, http.StatusNotFound, "file_storage_unavailable", "File storage isn't available for this deployment yet.")
 		return
 	}
 
 	meta, err := h.fileStore.ReadMeta(r.Context(), key)
 	if err != nil {
 		if errors.Is(err, files.ErrNotFound) {
-			http.Error(w, "file not found", http.StatusNotFound)
+			writeFileError(w, http.StatusNotFound, "file_not_found", "This file is no longer available.")
 			return
 		}
 		slog.Error("[Web] files put: read meta failed", "err", err)
-		http.Error(w, "failed to store file", http.StatusInternalServerError)
+		writeFileError(w, http.StatusInternalServerError, "file_upload_failed", "The file couldn't be uploaded. Try again.")
 		return
 	}
 	if !ownsFile(session, meta) {
-		http.Error(w, "file not found", http.StatusNotFound)
+		writeFileError(w, http.StatusNotFound, "file_not_found", "This file is no longer available.")
 		return
 	}
 
@@ -204,7 +227,7 @@ func (h *Handlers) HandlePutFileContent(w http.ResponseWriter, r *http.Request) 
 	if limit < 0 || limit > filesMaxUploadBytes {
 		// Defensive: create already bounds this, so a stored size outside the
 		// range means corrupt metadata rather than a valid reservation.
-		http.Error(w, "invalid file size", http.StatusBadRequest)
+		writeFileError(w, http.StatusBadRequest, "invalid_file_request", "The file request is invalid.")
 		return
 	}
 
@@ -213,7 +236,7 @@ func (h *Handlers) HandlePutFileContent(w http.ResponseWriter, r *http.Request) 
 	// consumed between create and PUT.
 	if usage, uerr := h.fileStore.Usage(r.Context()); uerr == nil && usage.TotalBytes > 0 {
 		if uint64(meta.Size)+filesStorageReserveBytes > usage.AvailableBytes {
-			http.Error(w, "not enough storage available on the deployment volume", http.StatusInsufficientStorage)
+			writeFileError(w, http.StatusInsufficientStorage, "insufficient_storage", "The deployment's storage is full. Delete files to free space, then try again.")
 			return
 		}
 	}
@@ -223,18 +246,18 @@ func (h *Handlers) HandlePutFileContent(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			http.Error(w, "file too large", http.StatusRequestEntityTooLarge)
+			writeFileError(w, http.StatusRequestEntityTooLarge, "file_too_large", "This file is too large. Choose a smaller file and try again.")
 			return
 		}
 		if errors.Is(err, syscall.ENOSPC) {
 			// The volume filled mid-write (a concurrent writer raced us past the
 			// recheck above). Surface it as 507 so the client shows "storage
 			// full", not a generic error.
-			http.Error(w, "not enough storage available on the deployment volume", http.StatusInsufficientStorage)
+			writeFileError(w, http.StatusInsufficientStorage, "insufficient_storage", "The deployment's storage is full. Delete files to free space, then try again.")
 			return
 		}
 		slog.Error("[Web] files put: write blob failed", "err", err)
-		http.Error(w, "failed to store file", http.StatusInternalServerError)
+		writeFileError(w, http.StatusInternalServerError, "file_upload_failed", "The file couldn't be uploaded. Try again.")
 		return
 	}
 
@@ -247,7 +270,7 @@ func (h *Handlers) HandlePutFileContent(w http.ResponseWriter, r *http.Request) 
 	meta.UpdatedAt = time.Now().UTC()
 	if err := h.fileStore.WriteMeta(r.Context(), meta); err != nil {
 		slog.Error("[Web] files put: update meta failed", "err", err)
-		http.Error(w, "failed to store file", http.StatusInternalServerError)
+		writeFileError(w, http.StatusInternalServerError, "file_upload_failed", "The file couldn't be uploaded. Try again.")
 		return
 	}
 	writeJSON(w, http.StatusOK, meta)
@@ -258,39 +281,39 @@ func (h *Handlers) HandlePutFileContent(w http.ResponseWriter, r *http.Request) 
 // otherwise it streams the bytes from the blob (filesystem). Both paths look
 // identical to a redirect-following client.
 func (h *Handlers) HandleGetFileContent(w http.ResponseWriter, r *http.Request) {
-	session := h.authenticate(w, r)
+	session := h.authenticateWithErrorWriter(w, r, writeFileAuthError)
 	if session == nil {
 		return
 	}
 	key, ok := parseFileKey(r.PathValue("key"))
 	if !ok {
-		http.Error(w, "invalid file key", http.StatusBadRequest)
+		writeFileError(w, http.StatusBadRequest, "invalid_file_request", "The file key is invalid.")
 		return
 	}
 	if h.fileStore == nil {
-		http.Error(w, "file not found", http.StatusNotFound)
+		writeFileError(w, http.StatusNotFound, "file_not_found", "This file is no longer available.")
 		return
 	}
 
 	meta, err := h.fileStore.ReadMeta(r.Context(), key)
 	if err != nil {
 		if errors.Is(err, files.ErrNotFound) {
-			http.Error(w, "file not found", http.StatusNotFound)
+			writeFileError(w, http.StatusNotFound, "file_not_found", "This file is no longer available.")
 			return
 		}
 		slog.Error("[Web] files get content: read meta failed", "err", err)
-		http.Error(w, "failed to read file", http.StatusInternalServerError)
+		writeFileError(w, http.StatusInternalServerError, "file_download_failed", "The file couldn't be downloaded. Try again.")
 		return
 	}
 
 	if !ownsFile(session, meta) {
-		http.Error(w, "file not found", http.StatusNotFound)
+		writeFileError(w, http.StatusNotFound, "file_not_found", "This file is no longer available.")
 		return
 	}
 	if !meta.Ready() {
 		// Reserved/uploading: no committed bytes to serve. Treat as not found so a
 		// half-created upload isn't downloadable.
-		http.Error(w, "file not found", http.StatusNotFound)
+		writeFileError(w, http.StatusNotFound, "file_not_found", "This file is no longer available.")
 		return
 	}
 
@@ -300,18 +323,18 @@ func (h *Handlers) HandleGetFileContent(w http.ResponseWriter, r *http.Request) 
 		return
 	} else if !errors.Is(err, files.ErrUnsupported) {
 		slog.Error("[Web] files get content: presign failed", "err", err)
-		http.Error(w, "failed to read file", http.StatusInternalServerError)
+		writeFileError(w, http.StatusInternalServerError, "file_download_failed", "The file couldn't be downloaded. Try again.")
 		return
 	}
 
 	blob, err := h.fileStore.OpenBlob(r.Context(), key)
 	if err != nil {
 		if errors.Is(err, files.ErrNotFound) {
-			http.Error(w, "file content not found", http.StatusNotFound)
+			writeFileError(w, http.StatusNotFound, "file_not_found", "This file is no longer available.")
 			return
 		}
 		slog.Error("[Web] files get content: open blob failed", "err", err)
-		http.Error(w, "failed to read file", http.StatusInternalServerError)
+		writeFileError(w, http.StatusInternalServerError, "file_download_failed", "The file couldn't be downloaded. Try again.")
 		return
 	}
 	defer func() { _ = blob.Close() }()
@@ -330,7 +353,7 @@ func (h *Handlers) HandleGetFileContent(w http.ResponseWriter, r *http.Request) 
 
 // HandleListFiles handles GET /api/files.
 func (h *Handlers) HandleListFiles(w http.ResponseWriter, r *http.Request) {
-	session := h.authenticate(w, r)
+	session := h.authenticateWithErrorWriter(w, r, writeFileAuthError)
 	if session == nil {
 		return
 	}
@@ -341,7 +364,7 @@ func (h *Handlers) HandleListFiles(w http.ResponseWriter, r *http.Request) {
 	list, err := h.fileStore.List(r.Context())
 	if err != nil {
 		slog.Error("[Web] files list failed", "err", err)
-		http.Error(w, "failed to list files", http.StatusInternalServerError)
+		writeFileError(w, http.StatusInternalServerError, "file_list_failed", "Files couldn't be loaded. Try again.")
 		return
 	}
 	// Per-user scope: only surface the requester's own files (uploads and
@@ -370,7 +393,7 @@ func ownsFile(session *Session, meta files.FileMeta) bool {
 // numbers. Stores with no fixed capacity (S3) or platforms without statfs report
 // Available=false and the client hides the banner.
 func (h *Handlers) HandleFilesUsage(w http.ResponseWriter, r *http.Request) {
-	session := h.authenticate(w, r)
+	session := h.authenticateWithErrorWriter(w, r, writeFileAuthError)
 	if session == nil {
 		return
 	}
@@ -397,36 +420,36 @@ func (h *Handlers) HandleFilesUsage(w http.ResponseWriter, r *http.Request) {
 
 // HandleGetFile handles GET /api/files/{key} — metadata only.
 func (h *Handlers) HandleGetFile(w http.ResponseWriter, r *http.Request) {
-	session := h.authenticate(w, r)
+	session := h.authenticateWithErrorWriter(w, r, writeFileAuthError)
 	if session == nil {
 		return
 	}
 	key, ok := parseFileKey(r.PathValue("key"))
 	if !ok {
-		http.Error(w, "invalid file key", http.StatusBadRequest)
+		writeFileError(w, http.StatusBadRequest, "invalid_file_request", "The file key is invalid.")
 		return
 	}
 	if h.fileStore == nil {
-		http.Error(w, "file not found", http.StatusNotFound)
+		writeFileError(w, http.StatusNotFound, "file_not_found", "This file is no longer available.")
 		return
 	}
 	meta, err := h.fileStore.ReadMeta(r.Context(), key)
 	if err != nil {
 		if errors.Is(err, files.ErrNotFound) {
-			http.Error(w, "file not found", http.StatusNotFound)
+			writeFileError(w, http.StatusNotFound, "file_not_found", "This file is no longer available.")
 			return
 		}
 		slog.Error("[Web] files get failed", "err", err)
-		http.Error(w, "failed to read file", http.StatusInternalServerError)
+		writeFileError(w, http.StatusInternalServerError, "file_read_failed", "The file couldn't be loaded. Try again.")
 		return
 	}
 	if !ownsFile(session, meta) {
-		http.Error(w, "file not found", http.StatusNotFound)
+		writeFileError(w, http.StatusNotFound, "file_not_found", "This file is no longer available.")
 		return
 	}
 	if !meta.Ready() {
 		// A reserved/uploading file isn't a real file yet; don't expose it.
-		http.Error(w, "file not found", http.StatusNotFound)
+		writeFileError(w, http.StatusNotFound, "file_not_found", "This file is no longer available.")
 		return
 	}
 	writeJSON(w, http.StatusOK, meta)
@@ -434,13 +457,13 @@ func (h *Handlers) HandleGetFile(w http.ResponseWriter, r *http.Request) {
 
 // HandleDeleteFile handles DELETE /api/files/{key}.
 func (h *Handlers) HandleDeleteFile(w http.ResponseWriter, r *http.Request) {
-	session := h.authenticate(w, r)
+	session := h.authenticateWithErrorWriter(w, r, writeFileAuthError)
 	if session == nil {
 		return
 	}
 	key, ok := parseFileKey(r.PathValue("key"))
 	if !ok {
-		http.Error(w, "invalid file key", http.StatusBadRequest)
+		writeFileError(w, http.StatusBadRequest, "invalid_file_request", "The file key is invalid.")
 		return
 	}
 	if h.fileStore == nil {
@@ -456,16 +479,16 @@ func (h *Handlers) HandleDeleteFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Error("[Web] files delete: read meta failed", "err", err)
-		http.Error(w, "failed to delete file", http.StatusInternalServerError)
+		writeFileError(w, http.StatusInternalServerError, "file_delete_failed", "The file couldn't be deleted. Try again.")
 		return
 	}
 	if !ownsFile(session, meta) {
-		http.Error(w, "file not found", http.StatusNotFound)
+		writeFileError(w, http.StatusNotFound, "file_not_found", "This file is no longer available.")
 		return
 	}
 	if err := h.fileStore.Delete(r.Context(), key); err != nil {
 		slog.Error("[Web] files delete failed", "err", err)
-		http.Error(w, "failed to delete file", http.StatusInternalServerError)
+		writeFileError(w, http.StatusInternalServerError, "file_delete_failed", "The file couldn't be deleted. Try again.")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

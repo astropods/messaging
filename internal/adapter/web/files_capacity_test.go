@@ -54,6 +54,13 @@ func TestCreateFile_RejectsWhenVolumeNearFull(t *testing.T) {
 	if w.Code != http.StatusInsufficientStorage {
 		t.Errorf("near-full create: expected 507, got %d (%s)", w.Code, w.Body.String())
 	}
+	var capacityErr fileErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &capacityErr); err != nil {
+		t.Fatalf("near-full create: decode error response: %v", err)
+	}
+	if capacityErr.Error != "insufficient_storage" || capacityErr.Details == "" {
+		t.Errorf("near-full create: expected standard storage error, got %+v", capacityErr)
+	}
 
 	// The same store with plenty of headroom admits the upload (real temp dir
 	// has ample space).
