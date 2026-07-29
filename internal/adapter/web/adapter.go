@@ -45,12 +45,10 @@ type WebAdapter struct {
 	turns            *turnTracker
 
 	// Configuration
-	listenAddr               string
-	heartbeatInterval        time.Duration
-	turnIdleTimeout          time.Duration
-	allowedOrigins           []string
-	servePlayground          bool
-	supportsDeclarativeForms bool // overrides the capability; off until the switch
+	listenAddr        string
+	heartbeatInterval time.Duration
+	turnIdleTimeout   time.Duration
+	allowedOrigins    []string
 	// freshSubscribeSettle: how long a no-cursor subscribe observes the wire before
 	// the store-derived terminal fallback (see settleFreshSubscribe).
 	freshSubscribeSettle time.Duration
@@ -319,14 +317,22 @@ func (a *WebAdapter) reapIdleTurn(conversationID string) {
 	a.failTurn(context.Background(), conversationID, "The agent stopped responding. You can try sending again.")
 }
 
-// HandleAgentDisconnect finalizes every in-flight turn when the agent stream ends
-// (implements adapter.AgentDisconnectHandler).
-func (a *WebAdapter) HandleAgentDisconnect(ctx context.Context) {
+// HandleAgentDisconnect finalizes in-flight turns when an agent stream ends
+// (implements adapter.AgentDisconnectHandler). The shared single-agent stream
+// (adapter.AgentStreamID) owns every in-flight turn, so all are reaped; a
+// per-conversation stream owns only its own conversation, so only that turn is
+// reaped and other live streams' turns are left untouched.
+func (a *WebAdapter) HandleAgentDisconnect(ctx context.Context, conversationID string) {
 	if a.turns == nil {
 		return
 	}
-	for _, conversationID := range a.turns.activeConversations() {
-		a.failTurn(ctx, conversationID, "The agent disconnected. You can try sending again.")
+	const msg = "The agent disconnected. You can try sending again."
+	if conversationID != adapter.AgentStreamID {
+		a.failTurn(ctx, conversationID, msg)
+		return
+	}
+	for _, id := range a.turns.activeConversations() {
+		a.failTurn(ctx, id, msg)
 	}
 }
 

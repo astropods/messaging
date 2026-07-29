@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/store/sqlite"
 )
 
@@ -46,7 +47,8 @@ func TestWebAdapter_HandleAgentDisconnect_FinalizesInFlightTurn(t *testing.T) {
 	}
 	a.connManager.Add(conn)
 
-	a.HandleAgentDisconnect(ctx)
+	// The stream serving conv-1 dropped; scope the reap to that conversation.
+	a.HandleAgentDisconnect(ctx, conv)
 
 	select {
 	case ev := <-conn.EventChan:
@@ -66,5 +68,29 @@ func TestWebAdapter_HandleAgentDisconnect_FinalizesInFlightTurn(t *testing.T) {
 	}
 	if a.turns.isStreaming(conv) {
 		t.Fatal("turn tracker still reports the turn in flight after disconnect")
+	}
+}
+
+// A per-conversation stream's disconnect must reap only its own conversation and
+// leave turns owned by other, still-live streams in flight. The shared agent
+// stream (adapter.AgentStreamID) owns every in-flight turn, so it reaps them all.
+func TestWebAdapter_HandleAgentDisconnect_ScopedToStream(t *testing.T) {
+	a := &WebAdapter{turns: newTurnTracker()}
+	ctx := context.Background()
+
+	a.turns.startTurn("conv-A")
+	a.turns.startTurn("conv-B")
+
+	a.HandleAgentDisconnect(ctx, "conv-A")
+	if a.turns.isStreaming("conv-A") {
+		t.Fatal("conv-A's own stream disconnect should reap conv-A")
+	}
+	if !a.turns.isStreaming("conv-B") {
+		t.Fatal("conv-A's disconnect wrongly reaped conv-B, owned by another live stream")
+	}
+
+	a.HandleAgentDisconnect(ctx, adapter.AgentStreamID)
+	if a.turns.isStreaming("conv-B") {
+		t.Fatal("shared-stream disconnect should reap every in-flight turn")
 	}
 }

@@ -140,10 +140,10 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 			s.agentConfigStore.Set(payload.AgentConfig)
 			slog.Debug("[gRPC] Stored agent config from stream")
 		}
-		conversationID = "agent-stream"
+		conversationID = adapter.AgentStreamID
 	default:
 		// For now, use a generic ID if no message provided
-		conversationID = "agent-stream"
+		conversationID = adapter.AgentStreamID
 	}
 
 	// Create stream context with cancellation
@@ -172,10 +172,11 @@ func (s *Server) ProcessConversation(stream pb.AgentMessaging_ProcessConversatio
 			return
 		}
 		slog.Debug("[gRPC] Unregistered agent stream", "conversation", conversationID)
-		// Stream ended (disconnect/crash/dead peer): finalize any in-flight turns
-		// so clients get a terminal event. No-op when nothing is in flight. One
-		// shared stream per agent, so its end means every in-flight turn is dead.
-		s.notifyAgentDisconnect()
+		// Stream ended (disconnect/crash/dead peer): finalize the in-flight turns it
+		// owned so clients get a terminal event instead of hanging. Scoped by the
+		// stream's registration key — the shared agent stream owns every turn, a
+		// per-conversation stream owns just its own. No-op when nothing is in flight.
+		s.notifyAgentDisconnect(conversationID)
 	}()
 
 	// Handle incoming requests from agent
@@ -542,7 +543,7 @@ func (s *Server) findStreamForConversation(conversationID string) *conversationS
 	}
 
 	// Fall back to the generic agent stream (single-agent mode)
-	if cs, ok := s.streams["agent-stream"]; ok {
+	if cs, ok := s.streams[adapter.AgentStreamID]; ok {
 		return cs
 	}
 
@@ -589,11 +590,13 @@ func (s *Server) routeAgentResponse(ctx context.Context, response *pb.AgentRespo
 	return nil
 }
 
-// notifyAgentDisconnect finalizes in-flight turns after the agent stream ends.
-// Adapters that stream turns implement adapter.AgentDisconnectHandler; others
-// (e.g. Slack) are skipped. Uses a fresh context because the stream's context is
-// already cancelled by the time this runs.
-func (s *Server) notifyAgentDisconnect() {
+// notifyAgentDisconnect finalizes in-flight turns after an agent stream ends.
+// conversationID is the ended stream's registration key, forwarded to each
+// handler so it can scope the reap (AgentStreamID = the shared stream that owns
+// every turn; otherwise a single conversation). Adapters that stream turns
+// implement adapter.AgentDisconnectHandler; others (e.g. Slack) are skipped.
+// Uses a fresh context because the stream's context is already cancelled here.
+func (s *Server) notifyAgentDisconnect(conversationID string) {
 	type namedHandler struct {
 		name string
 		h    adapter.AgentDisconnectHandler
@@ -610,8 +613,8 @@ func (s *Server) notifyAgentDisconnect() {
 	}
 	s.mu.RUnlock()
 	for _, nh := range handlers {
-		slog.Debug("[gRPC] Finalizing in-flight turns after agent disconnect", "adapter", nh.name)
-		nh.h.HandleAgentDisconnect(context.Background())
+		slog.Debug("[gRPC] Finalizing in-flight turns after agent disconnect", "adapter", nh.name, "conversation", conversationID)
+		nh.h.HandleAgentDisconnect(context.Background(), conversationID)
 	}
 }
 

@@ -330,13 +330,25 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Arm the idle watchdog before forwarding, so the turn is tracked before any
+	// agent response can arrive. Arming after the forward left a window where the
+	// agent's full START..END could be handled first — clear() would delete the
+	// turn, then startTurn would resurrect it and arm a timer that later reaps a
+	// turn that already finished. A failed forward disarms it below.
+	if h.turns != nil {
+		h.turns.startTurn(conversationID)
+	}
+
 	if err := h.msgHandler(ctx, msg); err != nil {
 		slog.Error(fmt.Sprintf("[Web] Error forwarding message: %v", err))
-		// Forwarding failed after the user turn was persisted, and the agent will
-		// never respond — so nothing else finalizes the store. Without this the
+		// The forward failed, so the agent will never respond for this turn. Disarm
+		// the watchdog just armed, and finalize the store — without the finalize the
 		// latest row stays the user's and the thread derives assistant_streaming
 		// forever. Mirror the AgentResponse_Error path (empty partial: nothing
 		// streamed); FinalizeTerminal appends only when the last row is the user's.
+		if h.turns != nil {
+			h.turns.clear(conversationID)
+		}
 		if h.chatStore != nil {
 			if _, ferr := h.chatStore.FinalizeTerminal(ctx, conversationID, ""); ferr != nil {
 				slog.Error("[Web] chat finalize on forward failure failed", "conversation", conversationID, "err", ferr)
@@ -345,16 +357,6 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process message")
 		http.Error(w, "Failed to process message", http.StatusInternalServerError)
 		return
-	}
-
-	// Turn is forwarded and in flight; arm the idle watchdog so an agent that
-	// never produces output is still reaped. Armed after the forward so a failed
-	// forward (returns early above) never arms a watchdog for a turn that never
-	// started. This assumes the agent round-trip (network + model, ms) dwarfs the
-	// gap to this line (µs): were an END handled before startTurn, clear() would
-	// run first and startTurn would resurrect the finished turn.
-	if h.turns != nil {
-		h.turns.startTurn(conversationID)
 	}
 
 	// Add to thread store
