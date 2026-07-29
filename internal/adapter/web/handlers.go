@@ -1,11 +1,13 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
@@ -36,9 +38,10 @@ type Handlers struct {
 	fileStore files.FileStore
 	// turns tracks per-conversation streaming state so a client stop can drop
 	// the agent's late output and persist the partial. Shared with WebAdapter.
-	turns        *turnTracker
-	interactions store.InteractionStore // shared with WebAdapter
-	degraded     *degradeTracker        // shared with WebAdapter
+	turns *turnTracker
+	// freshSubscribeSettle: wait before the terminal fallback (see settleFreshSubscribe).
+	freshSubscribeSettle time.Duration
+	interactions         store.InteractionStore // shared with WebAdapter
 }
 
 // NewHandlers creates a new Handlers instance
@@ -65,15 +68,26 @@ func (h *Handlers) SetAuthorizer(a authz.Authorizer) {
 // Centralising authn+authz here keeps every protected handler a single guard
 // line and makes it impossible to forget the authz check on a new endpoint.
 func (h *Handlers) authenticate(w http.ResponseWriter, r *http.Request) *Session {
+	return h.authenticateWithErrorWriter(w, r, http.Error)
+}
+
+// authenticateWithErrorWriter lets an API surface opt into its own error
+// envelope without changing authentication or authorization semantics for
+// existing adapters.
+func (h *Handlers) authenticateWithErrorWriter(
+	w http.ResponseWriter,
+	r *http.Request,
+	writeError func(http.ResponseWriter, string, int),
+) *Session {
 	ctx := r.Context()
 
 	session, err := h.sessionManager.ValidateRequest(ctx, r)
 	if err != nil {
-		http.Error(w, "Authentication error", http.StatusInternalServerError)
+		writeError(w, "Authentication error", http.StatusInternalServerError)
 		return nil
 	}
 	if session == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeError(w, "Unauthorized", http.StatusUnauthorized)
 		return nil
 	}
 
@@ -86,12 +100,12 @@ func (h *Handlers) authenticate(w http.ResponseWriter, r *http.Request) *Session
 			// Fail closed on authz transport errors — better to return a 503
 			// than to silently drop the check.
 			slog.Warn("[Web] authz check failed", "user_id", session.UserID, "err", err) //nolint:gosec // session.UserID is from a trusted ALB OIDC header
-			http.Error(w, "Authorization unavailable", http.StatusServiceUnavailable)
+			writeError(w, "Authorization unavailable", http.StatusServiceUnavailable)
 			return nil
 		}
 		if !res.Allowed {
 			slog.Warn("[Web] authz denied", "user_id", session.UserID) //nolint:gosec // session.UserID is from a trusted ALB OIDC header
-			http.Error(w, "Forbidden", http.StatusForbidden)
+			writeError(w, "Forbidden", http.StatusForbidden)
 			return nil
 		}
 	}
@@ -220,19 +234,6 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	if req.Content == "" && len(req.Attachments) == 0 {
 		http.Error(w, "Content or attachment is required", http.StatusBadRequest)
 		return
-	}
-
-	// A degraded free-text-tolerant ask: the owner's reply is its RESPOND answer,
-	// not a new turn (a non-owner falls through and leaves it pending).
-	if h.degraded != nil {
-		if interactionID, ok := h.degraded.take(conversationID, session.UserID); ok {
-			h.resolveDegradedRespond(ctx, conversationID, session, interactionID, req.Content)
-			writeJSON(w, http.StatusOK, SendMessageResponse{
-				MessageID: uuid.NewString(),
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
-			})
-			return
-		}
 	}
 
 	// Bound the attachment count so a single send can't fan out into thousands
@@ -471,6 +472,110 @@ func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// streamTurnTerminal reports whether the latest turn has finished — the assistant
+// reply is persisted and this sidecar isn't streaming it. Mirrors the
+// assistant_streaming derivation in HandleGetChatConversation. Returns false when
+// the state is unknown or the turn may be live, so a finish is only replayed for a
+// genuinely ended turn.
+func (h *Handlers) streamTurnTerminal(ctx context.Context, conversationID string) bool {
+	if h.chatStore == nil {
+		return false
+	}
+	// An actively streaming turn delivers its finish over the live broadcast;
+	// replaying one here would end the turn early.
+	if h.turns != nil && h.turns.isStreaming(conversationID) {
+		return false
+	}
+	//nolint:dogsled // PageMessages returns (msgs, hasMore, oldestSeq, lastRole, err); only the last role and error matter here.
+	_, _, _, lastRole, err := h.chatStore.PageMessages(ctx, conversationID, 1, 0)
+	if err != nil {
+		slog.Error("[Web] chat stream terminal-state check failed", "conversation", conversationID, "err", err)
+		return false
+	}
+	// Latest message is the assistant's => the reply landed and the turn is over.
+	// "user" (awaiting the first chunk) or "" (empty thread) => still in flight.
+	return lastRole == "assistant"
+}
+
+// writeFinish emits a synthetic terminal finish so a client leaves its loading
+// state (the reply is persisted and reconciled from history). It is tagged with
+// seq — the conversation's latest buffered id — so a reconnecting EventSource
+// advances its Last-Event-ID past it instead of replaying the same stale cursor
+// and re-entering this release path.
+func writeFinish(w http.ResponseWriter, flusher http.Flusher, seq uint64) {
+	ev := NewFinishEvent("")
+	if seq > 0 {
+		ev.ID = strconv.FormatUint(seq, 10)
+	}
+	_, _ = fmt.Fprint(w, ev.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
+	flusher.Flush()
+}
+
+// settleFreshSubscribe handles a no-cursor subscribe, where the store snapshot is
+// ambiguous mid-race. It observes the wire for freshSubscribeSettle: a live chunk
+// means the turn is live (return false), a finish ends it, and only silence falls
+// back to the store-derived terminal replay. Returns true when a finish was sent.
+func (h *Handlers) settleFreshSubscribe(
+	ctx context.Context,
+	w http.ResponseWriter,
+	flusher http.Flusher,
+	conn *SSEConnection,
+	conversationID string,
+) bool {
+	timer := time.NewTimer(h.freshSubscribeSettle)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return true
+		case <-conn.Done:
+			// Drain enqueued events before returning: a cancel broadcasts finish then
+			// closes Done, and select is random, so Done can win over the finish. Mirror
+			// the event loop's drain so the terminal isn't dropped.
+			for {
+				select {
+				case event := <-conn.EventChan:
+					_, _ = fmt.Fprint(w, event.Format()) //nolint:gosec // buffered SSE events are internally constructed
+					flusher.Flush()
+				default:
+					return true
+				}
+			}
+		case event := <-conn.EventChan:
+			_, _ = fmt.Fprint(w, event.Format()) //nolint:gosec // buffered SSE events are internally constructed
+			flusher.Flush()
+			switch event.Event {
+			case EventFinish, EventError:
+				return true
+			case EventHeartbeat:
+				continue // says nothing about the turn; keep settling
+			default:
+				return false // a content chunk: the turn is live
+			}
+		case <-timer.C:
+			if h.streamTurnTerminal(ctx, conversationID) {
+				writeFinish(w, flusher, h.connManager.LatestSeq(conversationID))
+				return true
+			}
+			return false
+		}
+	}
+}
+
+// parseLastEventID reads the SSE resume cursor the browser replays on reconnect.
+// Returns (0, false) when absent or unparseable — treated as a fresh subscribe.
+func parseLastEventID(r *http.Request) (uint64, bool) {
+	raw := r.Header.Get("Last-Event-ID")
+	if raw == "" {
+		return 0, false
+	}
+	seq, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return seq, true
+}
+
 // HandleStream handles GET /api/conversations/{id}/stream (SSE)
 func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -534,8 +639,16 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 		LastEventAt:    time.Now(),
 	}
 
-	// Register connection
-	h.connManager.Add(conn)
+	// With a Last-Event-ID, register + snapshot missed events atomically (see
+	// AddWithResume); otherwise register a fresh subscribe.
+	lastEventID, resuming := parseLastEventID(r)
+	var missed []SSEEvent
+	var caughtUp, crossedBoundary bool
+	if resuming {
+		missed, caughtUp, crossedBoundary = h.connManager.AddWithResume(conn, lastEventID)
+	} else {
+		h.connManager.Add(conn)
+	}
 	defer h.connManager.Remove(conversationID, connID)
 
 	// Send connected event
@@ -543,7 +656,40 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprint(w, connectedEvent.Format()) //nolint:gosec // SSE event data is constructed internally, not from user input
 	flusher.Flush()
 
-	slog.Debug(fmt.Sprintf("[Web] SSE stream started: connection=%q, conversation=%q, user=%q", connID, conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
+	slog.Debug(fmt.Sprintf("[Web] SSE stream started: connection=%q, conversation=%q, user=%q, resume=%v", connID, conversationID, session.UserID, resuming)) //nolint:gosec // G706 false positive: %q escapes control characters
+
+	if resuming {
+		if crossedBoundary {
+			// Cursor predates the current turn — the client missed a turn boundary
+			// while away. Release it with a finish so it reconciles from history and
+			// re-subscribes for any live turn.
+			writeFinish(w, flusher, h.connManager.LatestSeq(conversationID))
+			return
+		}
+		// Replay missed events in order; their ids advance the client's cursor. A
+		// live turn's remaining events then arrive via the loop below.
+		replayedTerminal := false
+		for _, ev := range missed {
+			_, _ = fmt.Fprint(w, ev.Format()) //nolint:gosec // buffered SSE events are internally constructed
+			if ev.Event == EventFinish || ev.Event == EventError {
+				replayedTerminal = true
+			}
+		}
+		flusher.Flush()
+		if len(missed) > 0 {
+			slog.Debug(fmt.Sprintf("[Web] SSE resumed: connection=%q, conversation=%q, replayed=%d", connID, conversationID, len(missed))) //nolint:gosec // G706 false positive
+		}
+		// Cursor predated the buffer and the replay carried no terminal, but the
+		// store shows the turn ended — release the client. Skipped when caught up so
+		// a terminal-cursor reconnect isn't sent a duplicate finish.
+		if !replayedTerminal && !caughtUp && h.streamTurnTerminal(ctx, conversationID) {
+			writeFinish(w, flusher, h.connManager.LatestSeq(conversationID))
+			return
+		}
+	} else if h.settleFreshSubscribe(ctx, w, flusher, conn, conversationID) {
+		return
+	}
+
 	// Event loop
 	for {
 		select {
@@ -667,7 +813,7 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build JSON response matching the playground's AgentConfig type
+	// Build JSON response matching the web client's AgentConfig type
 	type toolGraphNode struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
@@ -689,9 +835,17 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 		Type        string     `json:"type"`
 		Graph       *toolGraph `json:"graph,omitempty"`
 	}
+	type capabilitiesResp struct {
+		// Files reports whether uploads are usable: the sidecar has a file store
+		// wired AND the agent declared it consumes attachments. The client hides
+		// the composer's upload affordance when false, so an agent that never wires
+		// up the files API doesn't advertise an upload that would be ignored.
+		Files bool `json:"files"`
+	}
 	type agentConfigResp struct {
-		SystemPrompt string       `json:"systemPrompt"`
-		Tools        []toolConfig `json:"tools"`
+		SystemPrompt string           `json:"systemPrompt"`
+		Tools        []toolConfig     `json:"tools"`
+		Capabilities capabilitiesResp `json:"capabilities"`
 	}
 
 	tools := make([]toolConfig, 0, len(config.Tools))
@@ -721,6 +875,7 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	resp := agentConfigResp{
 		SystemPrompt: config.SystemPrompt,
 		Tools:        tools,
+		Capabilities: capabilitiesResp{Files: h.fileStore != nil && config.GetSupportsFiles()},
 	}
 
 	w.Header().Set("Content-Type", "application/json")

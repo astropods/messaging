@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1f\x61stro/messaging/v1/config.proto\x12\x12\x61stro.messaging.v1\"X\n\x0b\x41gentConfig\x12\x15\n\rsystem_prompt\x18\x01 \x01(\t\x12\x32\n\x05tools\x18\x02 \x03(\x0b\x32#.astro.messaging.v1.AgentToolConfig\"\x84\x01\n\x0f\x41gentToolConfig\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\r\n\x05title\x18\x02 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x03 \x01(\t\x12\x0c\n\x04type\x18\x04 \x01(\t\x12\x31\n\x05graph\x18\x05 \x01(\x0b\x32\".astro.messaging.v1.AgentToolGraph\"~\n\x0e\x41gentToolGraph\x12\x35\n\x05nodes\x18\x01 \x03(\x0b\x32&.astro.messaging.v1.AgentToolGraphNode\x12\x35\n\x05\x65\x64ges\x18\x02 \x03(\x0b\x32&.astro.messaging.v1.AgentToolGraphEdge\"<\n\x12\x41gentToolGraphNode\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x0c\n\x04type\x18\x03 \x01(\t\"@\n\x12\x41gentToolGraphEdge\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0e\n\x06source\x18\x02 \x01(\t\x12\x0e\n\x06target\x18\x03 \x01(\tB3Z1github.com/postman/astro/messaging/v1;messagingv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1f\x61stro/messaging/v1/config.proto\x12\x12\x61stro.messaging.v1\"p\n\x0b\x41gentConfig\x12\x15\n\rsystem_prompt\x18\x01 \x01(\t\x12\x32\n\x05tools\x18\x02 \x03(\x0b\x32#.astro.messaging.v1.AgentToolConfig\x12\x16\n\x0esupports_files\x18\x03 \x01(\x08\"\x84\x01\n\x0f\x41gentToolConfig\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\r\n\x05title\x18\x02 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x03 \x01(\t\x12\x0c\n\x04type\x18\x04 \x01(\t\x12\x31\n\x05graph\x18\x05 \x01(\x0b\x32\".astro.messaging.v1.AgentToolGraph\"~\n\x0e\x41gentToolGraph\x12\x35\n\x05nodes\x18\x01 \x03(\x0b\x32&.astro.messaging.v1.AgentToolGraphNode\x12\x35\n\x05\x65\x64ges\x18\x02 \x03(\x0b\x32&.astro.messaging.v1.AgentToolGraphEdge\"<\n\x12\x41gentToolGraphNode\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x0c\n\x04type\x18\x03 \x01(\t\"@\n\x12\x41gentToolGraphEdge\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0e\n\x06source\x18\x02 \x01(\t\x12\x0e\n\x06target\x18\x03 \x01(\tB3Z1github.com/postman/astro/messaging/v1;messagingv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,13 +33,13 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'Z1github.com/postman/astro/messaging/v1;messagingv1'
   _globals['_AGENTCONFIG']._serialized_start=55
-  _globals['_AGENTCONFIG']._serialized_end=143
-  _globals['_AGENTTOOLCONFIG']._serialized_start=146
-  _globals['_AGENTTOOLCONFIG']._serialized_end=278
-  _globals['_AGENTTOOLGRAPH']._serialized_start=280
-  _globals['_AGENTTOOLGRAPH']._serialized_end=406
-  _globals['_AGENTTOOLGRAPHNODE']._serialized_start=408
-  _globals['_AGENTTOOLGRAPHNODE']._serialized_end=468
-  _globals['_AGENTTOOLGRAPHEDGE']._serialized_start=470
-  _globals['_AGENTTOOLGRAPHEDGE']._serialized_end=534
+  _globals['_AGENTCONFIG']._serialized_end=167
+  _globals['_AGENTTOOLCONFIG']._serialized_start=170
+  _globals['_AGENTTOOLCONFIG']._serialized_end=302
+  _globals['_AGENTTOOLGRAPH']._serialized_start=304
+  _globals['_AGENTTOOLGRAPH']._serialized_end=430
+  _globals['_AGENTTOOLGRAPHNODE']._serialized_start=432
+  _globals['_AGENTTOOLGRAPHNODE']._serialized_end=492
+  _globals['_AGENTTOOLGRAPHEDGE']._serialized_start=494
+  _globals['_AGENTTOOLGRAPHEDGE']._serialized_end=558
 # @@protoc_insertion_point(module_scope)

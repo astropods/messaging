@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/authz"
@@ -1237,6 +1238,18 @@ func (c *captureFeedbackHandler) count() int {
 	return len(c.calls)
 }
 
+func (c *captureFeedbackHandler) waitForCount(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if c.count() == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected %d feedback calls, got %d", want, c.count())
+}
+
 func (c *captureFeedbackHandler) last() *pb.PlatformFeedback {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1253,7 +1266,9 @@ func TestHandleFeedbackButton_ThumbsUpForwardedToHandler(t *testing.T) {
 	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
 
 	fbHandler := &captureFeedbackHandler{}
+	internalFeedbackHandler := &captureFeedbackHandler{}
 	a.feedbackHandler = fbHandler.handle
+	a.internalFeedbackHandler = internalFeedbackHandler.handle
 
 	cb := &slacklib.InteractionCallback{
 		User:      slacklib.User{ID: "U999", Name: "alice"},
@@ -1261,6 +1276,12 @@ func TestHandleFeedbackButton_ThumbsUpForwardedToHandler(t *testing.T) {
 		Container: slacklib.Container{ThreadTs: "1700000000.000001"},
 	}
 	cb.Message.Timestamp = "1700000000.000002"
+	cb.Message.Metadata = slacklib.SlackMetadata{
+		EventType: slackReplyMetadataEventType,
+		EventPayload: map[string]any{
+			slackTraceMetadataTraceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+		},
+	}
 
 	action := &slacklib.BlockAction{ActionID: feedbackButtonsActionID, Value: "positive_feedback"}
 	a.handleFeedbackButton(t.Context(), cb, action)
@@ -1287,6 +1308,13 @@ func TestHandleFeedbackButton_ThumbsUpForwardedToHandler(t *testing.T) {
 	}
 	if !react.Added {
 		t.Error("expected Added=true")
+	}
+	if fb.TraceContext == nil || fb.TraceContext.Traceparent == "" {
+		t.Fatalf("expected forwarded trace context, got %+v", fb.TraceContext)
+	}
+	internalFeedbackHandler.waitForCount(t, 1)
+	if internalFeedbackHandler.last().TraceContext.Traceparent != fb.TraceContext.Traceparent {
+		t.Errorf("internal feedback traceparent: got %q want %q", internalFeedbackHandler.last().TraceContext.Traceparent, fb.TraceContext.Traceparent)
 	}
 }
 
@@ -1357,13 +1385,16 @@ func TestHandleViewSubmission_TextForwarded(t *testing.T) {
 	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
 
 	fbHandler := &captureFeedbackHandler{}
+	internalFeedbackHandler := &captureFeedbackHandler{}
 	a.feedbackHandler = fbHandler.handle
+	a.internalFeedbackHandler = internalFeedbackHandler.handle
 
 	meta, _ := json.Marshal(map[string]string{
 		"channel_id":      "C123",
 		"message_ts":      "1700000000.000002",
 		"thread_ts":       "1700000000.000001",
 		"conversation_id": "C123-1700000000.000001",
+		"traceparent":     "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
 	})
 
 	cb := &slacklib.InteractionCallback{
@@ -1403,6 +1434,10 @@ func TestHandleViewSubmission_TextForwarded(t *testing.T) {
 	if tf.Prompt == "" {
 		t.Error("expected Prompt to be set")
 	}
+	if fb.TraceContext == nil || fb.TraceContext.Traceparent == "" {
+		t.Fatalf("expected text feedback trace context, got %+v", fb.TraceContext)
+	}
+	internalFeedbackHandler.waitForCount(t, 1)
 }
 
 func TestHandleViewSubmission_EmptySubmissionNotForwarded(t *testing.T) {

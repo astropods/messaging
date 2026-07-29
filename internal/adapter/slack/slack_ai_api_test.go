@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
 // newTestAIClient creates a SlackAIClient pointing at a mock server.
@@ -243,7 +245,10 @@ func TestSlackAIClient_PostMessageWithFeedback_Success(t *testing.T) {
 	})
 	defer cleanup()
 
-	ts, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello world", "1234.000001")
+	traceContext := &pb.TraceContext{
+		Traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+	}
+	ts, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello world", "1234.000001", traceContext)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -259,6 +264,20 @@ func TestSlackAIClient_PostMessageWithFeedback_Success(t *testing.T) {
 	}
 	if capturedBody["thread_ts"] != "1234.000001" {
 		t.Errorf("expected thread_ts '1234.000001', got %v", capturedBody["thread_ts"])
+	}
+	metadata, ok := capturedBody["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected metadata in payload, got %v", capturedBody["metadata"])
+	}
+	if metadata["event_type"] != slackReplyMetadataEventType {
+		t.Errorf("metadata event_type: got %v", metadata["event_type"])
+	}
+	payload, ok := metadata["event_payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected metadata payload, got %v", metadata["event_payload"])
+	}
+	if payload[slackTraceMetadataTraceparent] != traceContext.Traceparent {
+		t.Errorf("traceparent: got %v", payload[slackTraceMetadataTraceparent])
 	}
 	// Verify blocks were included (feedback buttons)
 	blocks, ok := capturedBody["blocks"].([]any)
@@ -283,7 +302,7 @@ func TestSlackAIClient_PostMessageWithFeedback_DevMode(t *testing.T) {
 		baseURL:    server.URL,
 	}
 
-	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001")
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -364,7 +383,7 @@ func TestSlackAIClient_PostMessageWithFeedback_DevMode_WithAgentID(t *testing.T)
 		baseURL:    server.URL,
 	}
 
-	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001")
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -391,7 +410,7 @@ func TestSlackAIClient_PostMessageWithFeedback_NoDevMode_WithAgentID(t *testing.
 		baseURL:    server.URL,
 	}
 
-	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001")
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -405,6 +424,64 @@ func TestSlackAIClient_PostMessageWithFeedback_NoDevMode_WithAgentID(t *testing.
 	}
 }
 
+func TestSlackAIClient_PostMessageWithFeedback_TraceAboveAgentID(t *testing.T) {
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "9999.000001"})
+	}))
+	defer server.Close()
+
+	client := &SlackAIClient{
+		botToken:   "xoxb-test-token",
+		agentID:    "agent-xyz-123",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+	traceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+	traceContext := &pb.TraceContext{
+		Traceparent: "00-" + traceID + "-00f067aa0ba902b7-01",
+	}
+	if _, err := client.PostMessageWithFeedback(t.Context(), "C123", "Hello", "1234.000001", traceContext); err != nil {
+		t.Fatalf("PostMessageWithFeedback: %v", err)
+	}
+
+	if got, want := firstContextFooter(t, capturedBody), "Trace ID: "+traceID+"\nAgent ID: agent-xyz-123"; got != want {
+		t.Fatalf("footer = %q, want %q", got, want)
+	}
+}
+
+func TestSlackAIClient_PostMessageWithFeedback_DevMode_TraceAboveEnvironmentAndAgentID(t *testing.T) {
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "9999.000001"})
+	}))
+	defer server.Close()
+
+	client := &SlackAIClient{
+		botToken:   "xoxb-test-token",
+		devMode:    true,
+		agentID:    "agent-xyz-123",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+	traceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+	traceContext := &pb.TraceContext{
+		Traceparent: "00-" + traceID + "-00f067aa0ba902b7-01",
+	}
+	if _, err := client.PostMessageWithFeedback(t.Context(), "C123", "Hello", "1234.000001", traceContext); err != nil {
+		t.Fatalf("PostMessageWithFeedback: %v", err)
+	}
+
+	want := "Trace ID: " + traceID + "\n:test_tube: Sent from dev environment — Agent ID: agent-xyz-123"
+	if got := firstContextFooter(t, capturedBody); got != want {
+		t.Fatalf("footer = %q, want %q", got, want)
+	}
+}
+
 func TestSlackAIClient_PostMessageWithFeedback_NoDevMode(t *testing.T) {
 	var capturedBody map[string]any
 	client, cleanup := newTestAIClient(func(w http.ResponseWriter, r *http.Request) {
@@ -414,7 +491,7 @@ func TestSlackAIClient_PostMessageWithFeedback_NoDevMode(t *testing.T) {
 	})
 	defer cleanup()
 
-	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001")
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -444,7 +521,7 @@ func TestSlackAIClient_PostMessageWithFeedback_NoThreadID(t *testing.T) {
 	})
 	defer cleanup()
 
-	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "")
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -464,7 +541,7 @@ func TestSlackAIClient_PostMessageWithFeedback_APIError(t *testing.T) {
 	})
 	defer cleanup()
 
-	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001")
+	_, err := client.PostMessageWithFeedback(context.Background(), "C123", "Hello", "1234.000001", nil)
 	if err == nil {
 		t.Fatal("expected error for API error response")
 	}
@@ -480,15 +557,18 @@ func TestSlackAIClient_PostMessageWithFeedback_FansOutLongReply(t *testing.T) {
 	var (
 		bodies []map[string]any
 		mu     sync.Mutex
+		count  int
 	)
 	client, cleanup := newTestAIClient(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
 		mu.Lock()
 		bodies = append(bodies, body)
+		count++
+		ts := fmt.Sprintf("9999.%06d", count)
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "9999.000001"})
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": ts})
 	})
 	defer cleanup()
 
@@ -501,7 +581,11 @@ func TestSlackAIClient_PostMessageWithFeedback_FansOutLongReply(t *testing.T) {
 	}
 	content := strings.Join(lines, "\n")
 
-	if _, err := client.PostMessageWithFeedback(context.Background(), "C123", content, "1234.000001"); err != nil {
+	traceContext := &pb.TraceContext{
+		Traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+	}
+	ts, err := client.PostMessageWithFeedback(context.Background(), "C123", content, "1234.000001", traceContext)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -509,6 +593,9 @@ func TestSlackAIClient_PostMessageWithFeedback_FansOutLongReply(t *testing.T) {
 	defer mu.Unlock()
 	if len(bodies) < 2 {
 		t.Fatalf("expected the long reply to fan out across multiple messages, got %d", len(bodies))
+	}
+	if ts != "9999.000001" {
+		t.Fatalf("returned timestamp: got %q want first message timestamp", ts)
 	}
 
 	var allText strings.Builder
@@ -535,6 +622,10 @@ func TestSlackAIClient_PostMessageWithFeedback_FansOutLongReply(t *testing.T) {
 		hasFeedback := len(blocks) > 1
 		if isLast := i == len(bodies)-1; hasFeedback != isLast {
 			t.Errorf("message %d: feedback present=%v, want %v", i, hasFeedback, isLast)
+		}
+		_, hasMetadata := body["metadata"]
+		if isLast := i == len(bodies)-1; hasMetadata != isLast {
+			t.Errorf("message %d: metadata present=%v, want %v", i, hasMetadata, isLast)
 		}
 	}
 	for i := range lines {

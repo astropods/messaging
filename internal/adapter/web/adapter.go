@@ -11,6 +11,7 @@ import (
 
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/authz"
+	"github.com/astropods/messaging/internal/logctx"
 	"github.com/astropods/messaging/internal/store"
 	"github.com/astropods/messaging/internal/store/files"
 	"github.com/astropods/messaging/internal/store/sqlite"
@@ -42,7 +43,6 @@ type WebAdapter struct {
 	server           *http.Server
 	handlers         *Handlers
 	turns            *turnTracker
-	degraded         *degradeTracker
 
 	// Configuration
 	listenAddr               string
@@ -51,6 +51,9 @@ type WebAdapter struct {
 	allowedOrigins           []string
 	servePlayground          bool
 	supportsDeclarativeForms bool // overrides the capability; off until the switch
+	// freshSubscribeSettle: how long a no-cursor subscribe observes the wire before
+	// the store-derived terminal fallback (see settleFreshSubscribe).
+	freshSubscribeSettle time.Duration
 }
 
 // WebAdapterOption configures the WebAdapter
@@ -84,24 +87,19 @@ func WithTurnIdleTimeout(d time.Duration) WebAdapterOption {
 	}
 }
 
+// WithFreshSubscribeSettle sets how long a fresh SSE subscribe waits for a live
+// turn event before synthesizing a terminal finish from the store. Zero decides
+// immediately (no settle).
+func WithFreshSubscribeSettle(d time.Duration) WebAdapterOption {
+	return func(a *WebAdapter) {
+		a.freshSubscribeSettle = d
+	}
+}
+
 // WithAllowedOrigins sets the allowed CORS origins
 func WithAllowedOrigins(origins []string) WebAdapterOption {
 	return func(a *WebAdapter) {
 		a.allowedOrigins = origins
-	}
-}
-
-// WithServePlayground enables serving the embedded playground UI
-func WithServePlayground(enabled bool) WebAdapterOption {
-	return func(a *WebAdapter) {
-		a.servePlayground = enabled
-	}
-}
-
-// WithDeclarativeForms sets the SupportsDeclarativeForms capability (off by default).
-func WithDeclarativeForms(enabled bool) WebAdapterOption {
-	return func(a *WebAdapter) {
-		a.supportsDeclarativeForms = enabled
 	}
 }
 
@@ -115,10 +113,11 @@ func WithInteractionStore(s store.InteractionStore) WebAdapterOption {
 // New creates a new WebAdapter
 func New(opts ...WebAdapterOption) *WebAdapter {
 	a := &WebAdapter{
-		listenAddr:        ":8080",
-		heartbeatInterval: 30 * time.Second,
-		turnIdleTimeout:   defaultTurnIdleTimeout,
-		sessionManager:    &NoopSessionManager{},
+		listenAddr:           ":8080",
+		heartbeatInterval:    30 * time.Second,
+		turnIdleTimeout:      defaultTurnIdleTimeout,
+		freshSubscribeSettle: 300 * time.Millisecond,
+		sessionManager:       &NoopSessionManager{},
 	}
 
 	for _, opt := range opts {
@@ -141,8 +140,6 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 	a.turns = newTurnTracker()
 	a.turns.setIdleReaper(a.turnIdleTimeout, a.reapIdleTurn)
 
-	a.degraded = newDegradeTracker()
-
 	if a.interactions == nil {
 		a.interactions = store.NewMemoryInteractionStore()
 	}
@@ -150,7 +147,7 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 	// Initialize handlers
 	a.handlers = NewHandlers(a.connManager, a.sessionManager, a.threadStore, a.agentConfigStore)
 	a.handlers.turns = a.turns
-	a.handlers.degraded = a.degraded
+	a.handlers.freshSubscribeSettle = a.freshSubscribeSettle
 	a.handlers.interactions = a.interactions
 
 	slog.Info("[Web] Adapter initialized", "listen", a.listenAddr)
@@ -202,11 +199,6 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/files/{key}/content", a.handlers.HandleGetFileContent)
 
 	mux.HandleFunc("GET /health", a.handlers.HandleHealth)
-
-	// Playground UI — must be registered last so API routes always take priority
-	if a.servePlayground {
-		registerPlaygroundRoutes(mux)
-	}
 
 	// Wrap with CORS middleware
 	handler := a.corsMiddleware(mux)
@@ -260,9 +252,7 @@ func (a *WebAdapter) Stop(ctx context.Context) error {
 
 // Capabilities returns the adapter's capabilities
 func (a *WebAdapter) Capabilities() adapter.AdapterCapabilities {
-	caps := adapter.WebCapabilities()
-	caps.SupportsDeclarativeForms = a.supportsDeclarativeForms
-	return caps
+	return adapter.WebCapabilities()
 }
 
 // GetPlatformName returns the platform identifier
@@ -370,6 +360,7 @@ func (a *WebAdapter) failTurn(ctx context.Context, conversationID, message strin
 // HandleAgentResponse processes responses from the agent and sends to SSE clients
 func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.AgentResponse) error {
 	conversationID := response.ConversationId
+	log := logctx.FromContext(ctx)
 	if conversationID == "" {
 		return fmt.Errorf("missing conversation ID in response")
 	}
@@ -453,9 +444,9 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 					if errors.Is(err, sqlite.ErrMessageLimitReached) {
 						// Terminal per-conversation state, not a real failure — don't
 						// spam ERROR on every throttled write near the cap.
-						slog.Debug("[Web] chat at message limit; assistant reply not persisted", "conversation", conversationID)
+						log.Debug("[Web] chat at message limit; assistant reply not persisted", "conversation", conversationID)
 					} else {
-						slog.Error("[Web] chat persist assistant message failed", "conversation", conversationID, "err", err)
+						log.Error("[Web] chat persist assistant message failed", "conversation", conversationID, "err", err)
 					}
 				}
 			}
@@ -492,9 +483,9 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 			}
 			if _, err := a.chatStore.FinalizeTerminal(ctx, conversationID, partial); err != nil {
 				if errors.Is(err, sqlite.ErrMessageLimitReached) {
-					slog.Debug("[Web] chat at message limit; errored turn not finalized", "conversation", conversationID)
+					log.Debug("[Web] chat at message limit; errored turn not finalized", "conversation", conversationID)
 				} else {
-					slog.Error("[Web] chat finalize errored turn failed", "conversation", conversationID, "err", err)
+					log.Error("[Web] chat finalize errored turn failed", "conversation", conversationID, "err", err)
 				}
 			}
 		}
@@ -511,16 +502,16 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 
 	case *pb.AgentResponse_Transcript:
 		// Audio transcript — update user message placeholder
-		slog.Debug("[Web] Transcript received", "conversation", conversationID, "text", payload.Transcript.Text)
+		log.Debug("[Web] Transcript received", "conversation", conversationID, "text", payload.Transcript.Text)
 		event := NewTranscriptEvent(payload.Transcript)
 		a.connManager.Broadcast(conversationID, event)
 
 	case *pb.AgentResponse_ThreadMetadata:
 		// Thread metadata
-		slog.Debug("[Web] Thread metadata received", "metadata", payload.ThreadMetadata)
+		log.Debug("[Web] Thread metadata received", "metadata", payload.ThreadMetadata)
 
 	default:
-		slog.Warn("[Web] Unhandled response payload type", "type", fmt.Sprintf("%T", response.Payload))
+		log.Warn("[Web] Unhandled response payload type", "type", fmt.Sprintf("%T", response.Payload))
 	}
 
 	return nil
