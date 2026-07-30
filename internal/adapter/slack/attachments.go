@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
@@ -49,6 +50,17 @@ func (a *SlackAdapter) imageAttachments(ctx context.Context, files []slack.File)
 		var buf bytes.Buffer
 		if err := a.client.GetFileContext(ctx, url, &buf); err != nil {
 			slog.Error("[Slack] Failed to download image attachment", "file", f.Name, "err", err)
+			continue
+		}
+		// An unauthorized url_private download returns HTTP 200 with a Slack
+		// sign-in HTML page rather than the bytes. Sniff the payload and skip
+		// anything that isn't actually an image so we never hand the model a
+		// data URI whose bytes are HTML (which the vision API rejects). The
+		// usual cause is the app missing the `files:read` scope.
+		sniffed := http.DetectContentType(buf.Bytes())
+		if !strings.HasPrefix(sniffed, "image/") {
+			slog.Error("[Slack] Downloaded attachment is not an image; skipping (check the Slack app's files:read scope)",
+				"file", f.Name, "declared_mimetype", f.Mimetype, "detected", sniffed, "bytes", buf.Len())
 			continue
 		}
 		dataURI := fmt.Sprintf("data:%s;base64,%s", f.Mimetype, base64.StdEncoding.EncodeToString(buf.Bytes()))
