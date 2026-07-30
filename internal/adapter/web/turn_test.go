@@ -201,3 +201,152 @@ func TestTurnTrackerDueForPersist(t *testing.T) {
 		t.Fatal("dueForPersist must be false for an untracked conversation")
 	}
 }
+
+// The idle reaper fires when a started turn produces no activity within the
+// window, and activity (touch/record) resets it.
+func TestTurnTrackerIdleReaper(t *testing.T) {
+	fired := make(chan string, 1)
+	tr := newTurnTracker()
+	tr.setIdleReaper(60*time.Millisecond, func(conv string) { fired <- conv })
+
+	tr.startTurn("c")
+	// Keep it alive with activity below the window.
+	for i := 0; i < 5; i++ {
+		time.Sleep(20 * time.Millisecond)
+		tr.touch("c")
+	}
+	select {
+	case <-fired:
+		t.Fatal("reaper fired while activity kept resetting it")
+	default:
+	}
+
+	// Go quiet: the reaper must fire.
+	select {
+	case conv := <-fired:
+		if conv != "c" {
+			t.Fatalf("reaper fired for %q, want %q", conv, "c")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("reaper did not fire after the idle window elapsed")
+	}
+}
+
+// clear() stops the idle timer so a completed turn is never reaped.
+func TestTurnTrackerIdleReaperStoppedByClear(t *testing.T) {
+	fired := make(chan string, 1)
+	tr := newTurnTracker()
+	tr.setIdleReaper(40*time.Millisecond, func(conv string) { fired <- conv })
+
+	tr.startTurn("c")
+	tr.clear("c")
+	select {
+	case <-fired:
+		t.Fatal("reaper fired after clear")
+	case <-time.After(120 * time.Millisecond):
+	}
+}
+
+// failActive returns the buffered partial once, then reports no active turn; a
+// user-stopped turn is never claimed (the stop path already finalized it).
+func TestTurnTrackerFailActive(t *testing.T) {
+	tr := newTurnTracker()
+	tr.record("c", contentChunk(pb.ContentChunk_START, "half "))
+	tr.record("c", contentChunk(pb.ContentChunk_DELTA, "done"))
+
+	partial, ok := tr.failActive("c")
+	if !ok || partial != "half done" {
+		t.Fatalf("failActive = (%q, %v), want (%q, true)", partial, ok, "half done")
+	}
+	if _, ok := tr.failActive("c"); ok {
+		t.Fatal("second failActive must report no active turn")
+	}
+
+	tr.record("c2", contentChunk(pb.ContentChunk_START, "x"))
+	tr.stop("c2")
+	if _, ok := tr.failActive("c2"); ok {
+		t.Fatal("failActive must not claim a user-stopped turn")
+	}
+}
+
+// After an abnormal reap, a slow-but-alive agent's trailing output must be gated
+// (dropped) rather than resurrecting the finalized turn; a genuine new START
+// lifts the gate. Matches the user-stop gate.
+func TestTurnTrackerFailActiveGatesLateOutput(t *testing.T) {
+	tr := newTurnTracker()
+	tr.record("c", contentChunk(pb.ContentChunk_START, "working"))
+	if _, ok := tr.failActive("c"); !ok {
+		t.Fatal("failActive should claim the active turn")
+	}
+	// A late continuation chunk (not START) is dropped, so record() never runs.
+	if drop := tr.gateContent("c", false); !drop {
+		t.Fatal("late non-START output after a reap must be gated (dropped)")
+	}
+	if tr.isStreaming("c") {
+		t.Fatal("a reaped turn must not be resurrected by late output")
+	}
+	// A genuine new turn (START) lifts the gate.
+	if drop := tr.gateContent("c", true); drop {
+		t.Fatal("a new START must lift the gate")
+	}
+}
+
+// A turn started after a lingering user-stop drop-gate must still be reap-eligible:
+// the gate blocks the previous turn's trailing output, but the fresh turn's idle
+// watchdog and disconnect finalization must be able to end it. Regression for the
+// hang where a stop the agent honored by going silent left the gate resident and
+// disabled both safety nets for the next turn.
+func TestTurnTracker_FreshTurnReapableDespiteStopGate(t *testing.T) {
+	tr := newTurnTracker()
+	// A turn the user stops; the agent honors it by going silent (no END), so the
+	// drop-gate lingers.
+	tr.record("c", contentChunk(pb.ContentChunk_START, "partial"))
+	tr.stop("c")
+	if _, ok := tr.failActive("c"); ok {
+		t.Fatal("a user-stopped turn must not be reaped")
+	}
+
+	// The user sends again — a fresh turn is in flight while the gate still lingers.
+	tr.startTurn("c")
+	if !tr.isStreaming("c") {
+		t.Fatal("a fresh turn after a stop gate should report streaming")
+	}
+	if got := tr.activeConversations(); len(got) != 1 || got[0] != "c" {
+		t.Fatalf("fresh turn should be listed active for disconnect reaping, got %v", got)
+	}
+	// The fresh turn hangs — the idle reaper / disconnect must be able to claim it.
+	if _, ok := tr.failActive("c"); !ok {
+		t.Fatal("a fresh turn after a stop gate must be reapable")
+	}
+	// The gate still drops the previous turn's trailing output until a new START.
+	if drop := tr.gateContent("c", false); !drop {
+		t.Fatal("stop gate should still drop trailing output until a START")
+	}
+}
+
+// A stale END from a stopped turn's generation must not wipe a freshly-resent
+// turn's tracking. clearStoppedTurn preserves the fresh (non-userStopped) turn so
+// its watchdog and disconnect finalization still work if it then hangs.
+func TestTurnTracker_GatedEndKeepsFreshResentTurn(t *testing.T) {
+	tr := newTurnTracker()
+	// Turn 1 is user-stopped; the agent hasn't sent its END yet, so the gate lingers.
+	tr.record("c", contentChunk(pb.ContentChunk_START, "t1"))
+	tr.stop("c")
+	// The user resends: turn 2 is armed while the gate still lingers.
+	tr.startTurn("c")
+	// Turn 1's straggler END arrives, gated (not a START); the handler's gated-END
+	// cleanup must preserve turn 2.
+	if drop := tr.gateContent("c", false); !drop {
+		t.Fatal("stopped turn's straggler must be gated")
+	}
+	tr.clearStoppedTurn("c")
+	if !tr.isStreaming("c") {
+		t.Fatal("fresh resent turn was wiped by the stale END cleanup")
+	}
+	if got := tr.activeConversations(); len(got) != 1 || got[0] != "c" {
+		t.Fatalf("fresh turn should remain active, got %v", got)
+	}
+	if _, ok := tr.failActive("c"); !ok {
+		t.Fatal("fresh turn must remain reapable after the stale END cleanup")
+	}
+}

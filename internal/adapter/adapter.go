@@ -13,6 +13,14 @@ import (
 // rather than surfacing it to end users.
 var ErrNoAgentStream = errors.New("no active agent stream available")
 
+// AgentStreamID is the registration key for the single shared agent stream —
+// one stream that serves every conversation, used by the web/sidecar deployment.
+// Agents may instead register a stream per conversation under the conversation's
+// own id (see the gRPC server's stream lookup). On disconnect this distinguishes
+// "the shared stream that owns every in-flight turn ended" from "one
+// conversation's stream ended".
+const AgentStreamID = "agent-stream"
+
 // Adapter is the interface that all platform adapters must implement
 type Adapter interface {
 	// Lifecycle
@@ -40,6 +48,17 @@ type Adapter interface {
 
 	// Thread history
 	HydrateThread(ctx context.Context, conversationID string, store *store.ThreadHistoryStore) error
+}
+
+// AgentDisconnectHandler is implemented by adapters that stream turns and must
+// finalize them when the agent's gRPC stream ends, so clients get a terminal
+// event instead of hanging. Optional (Slack, etc. don't implement it).
+//
+// conversationID is the ended stream's registration key: a specific conversation
+// for a per-conversation stream (finalize only that turn), or AgentStreamID for
+// the shared single-agent stream (finalize every in-flight turn it owned).
+type AgentDisconnectHandler interface {
+	HandleAgentDisconnect(ctx context.Context, conversationID string)
 }
 
 // MessageHandler is called when a message is received from the platform.
@@ -82,12 +101,12 @@ type AudioForwarder interface {
 
 // Config holds adapter configuration
 type Config struct {
-	BotToken            string
-	AppToken            string // For Slack Socket Mode
-	SocketMode          bool
-	WebhookURL          string
-	AutoThread          bool
-	DevMode             bool // When true, messages include a "sent from dev" context
+	BotToken   string
+	AppToken   string // For Slack Socket Mode
+	SocketMode bool
+	WebhookURL string
+	AutoThread bool
+	DevMode    bool // When true, messages include a "sent from dev" context
 	// AgentID is the value of ASTRO_AGENT_ID at startup. When non-empty it is
 	// rendered in the Slack message footer so users know which agent replied.
 	AgentID             string

@@ -24,6 +24,13 @@ import (
 // text regardless of this throttle.
 const chatPersistThrottle = 250 * time.Millisecond
 
+// defaultTurnIdleTimeout reaps a turn whose agent has produced no output for this
+// long. Generous so a long quiet tool call (a slow model or tool with no
+// intermediate streaming) isn't mistaken for a hang; any agent activity resets
+// it. Tunable per deployment via WithTurnIdleTimeout. The client keeps its own
+// far-larger absolute backstop, so this can favor avoiding false reaps.
+const defaultTurnIdleTimeout = 5 * time.Minute
+
 // WebAdapter implements adapter.Adapter for web browser clients via HTTP + SSE
 type WebAdapter struct {
 	config           adapter.Config
@@ -42,6 +49,7 @@ type WebAdapter struct {
 	// Configuration
 	listenAddr        string
 	heartbeatInterval time.Duration
+	turnIdleTimeout   time.Duration
 	allowedOrigins    []string
 	// freshSubscribeSettle: how long a no-cursor subscribe observes the wire before
 	// the store-derived terminal fallback (see settleFreshSubscribe).
@@ -69,6 +77,13 @@ func WithSessionManager(sm SessionManager) WebAdapterOption {
 func WithHeartbeatInterval(d time.Duration) WebAdapterOption {
 	return func(a *WebAdapter) {
 		a.heartbeatInterval = d
+	}
+}
+
+// WithTurnIdleTimeout overrides the idle-turn reap window. Zero disables it.
+func WithTurnIdleTimeout(d time.Duration) WebAdapterOption {
+	return func(a *WebAdapter) {
+		a.turnIdleTimeout = d
 	}
 }
 
@@ -100,6 +115,7 @@ func New(opts ...WebAdapterOption) *WebAdapter {
 	a := &WebAdapter{
 		listenAddr:           ":8080",
 		heartbeatInterval:    30 * time.Second,
+		turnIdleTimeout:      defaultTurnIdleTimeout,
 		freshSubscribeSettle: 300 * time.Millisecond,
 		sessionManager:       &NoopSessionManager{},
 	}
@@ -122,6 +138,7 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 	// (HandleCancel) and the agent response loop (HandleAgentResponse) agree on
 	// which turns are stopped and what partial text was streamed.
 	a.turns = newTurnTracker()
+	a.turns.setIdleReaper(a.turnIdleTimeout, a.reapIdleTurn)
 
 	if a.interactions == nil {
 		a.interactions = store.NewMemoryInteractionStore()
@@ -295,12 +312,74 @@ func (a *WebAdapter) conversationOwner(ctx context.Context, conversationID strin
 	return conv.UserID
 }
 
+// reapIdleTurn is the turn tracker's idle callback: the turn produced no agent
+// activity within the idle window, so finalize it as stalled. failTurn logs the
+// surfaced error, so this only records the reason at debug.
+func (a *WebAdapter) reapIdleTurn(conversationID string) {
+	slog.Debug("[Web] turn idle timeout; finalizing stalled turn", "conversation", conversationID)
+	a.failTurn(context.Background(), conversationID, "The agent stopped responding. You can try sending again.")
+}
+
+// HandleAgentDisconnect finalizes in-flight turns when an agent stream ends
+// (implements adapter.AgentDisconnectHandler). The shared single-agent stream
+// (adapter.AgentStreamID) owns every in-flight turn, so all are reaped; a
+// per-conversation stream owns only its own conversation, so only that turn is
+// reaped and other live streams' turns are left untouched.
+func (a *WebAdapter) HandleAgentDisconnect(ctx context.Context, conversationID string) {
+	if a.turns == nil {
+		return
+	}
+	const msg = "The agent disconnected. You can try sending again."
+	if conversationID != adapter.AgentStreamID {
+		a.failTurn(ctx, conversationID, msg)
+		return
+	}
+	for _, id := range a.turns.activeConversations() {
+		a.failTurn(ctx, id, msg)
+	}
+}
+
+// failTurn abnormally terminates an in-flight turn: finalize the store row (so it
+// stops deriving assistant_streaming), broadcast a retryable error, and close the
+// conversation's SSE connections. failActive claims the turn atomically, so this
+// is a no-op once the turn has ended and the terminal event fires exactly once.
+func (a *WebAdapter) failTurn(ctx context.Context, conversationID, message string) {
+	if a.turns == nil {
+		return
+	}
+	partial, ok := a.turns.failActive(conversationID)
+	if !ok {
+		return
+	}
+	// Log every surfaced abnormal termination; it reaches the client as an in-band
+	// SSE error event, not an HTTP 5xx.
+	slog.Warn("[Web] finalizing in-flight turn with terminal error", "conversation", conversationID, "message", message)
+	if a.chatStore != nil {
+		if _, err := a.chatStore.FinalizeTerminal(ctx, conversationID, partial); err != nil {
+			if errors.Is(err, sqlite.ErrMessageLimitReached) {
+				slog.Debug("[Web] chat at message limit; stalled turn not finalized", "conversation", conversationID)
+			} else {
+				slog.Error("[Web] chat finalize stalled turn failed", "conversation", conversationID, "err", err)
+			}
+		}
+	}
+	if a.connManager != nil {
+		a.connManager.Broadcast(conversationID, NewErrorEventFromMessage("AGENT_UNAVAILABLE", message, true))
+		a.connManager.CloseConversation(conversationID)
+	}
+}
+
 // HandleAgentResponse processes responses from the agent and sends to SSE clients
 func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.AgentResponse) error {
 	conversationID := response.ConversationId
 	log := logctx.FromContext(ctx)
 	if conversationID == "" {
 		return fmt.Errorf("missing conversation ID in response")
+	}
+
+	// Any agent response is liveness; reset the idle watchdog.
+	if a.turns != nil {
+		a.turns.touch(conversationID)
 	}
 
 	// Convert response to SSE events based on payload type
@@ -313,11 +392,11 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		// NOT lifted by the next user send, so the stopped turn's trailing output
 		// can't bleed into the following message on the same conversation.
 		if a.turns != nil && a.turns.gateContent(conversationID, payload.Content.Type == pb.ContentChunk_START) {
-			// Dropped because the turn is stopped. If this is the stopped
-			// generation's terminal chunk, clear the gate so the entry doesn't
-			// linger for a stopped-then-abandoned conversation.
+			// Dropped because the turn is stopped. On the stopped generation's END,
+			// clear the lingering gate — but preserve a fresh turn already resent for
+			// this conversation, whose watchdog this stale END must not wipe.
 			if payload.Content.Type == pb.ContentChunk_END {
-				a.turns.clear(conversationID)
+				a.turns.clearStoppedTurn(conversationID)
 			}
 			return nil
 		}

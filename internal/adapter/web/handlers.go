@@ -330,17 +330,39 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Arm the idle watchdog before forwarding, so the turn is tracked before any
+	// agent response can arrive (arming after left a window where an END handled
+	// first could resurrect a finished turn). A failed forward disarms it below.
+	if h.turns != nil {
+		h.turns.startTurn(conversationID)
+	}
+
 	if err := h.msgHandler(ctx, msg); err != nil {
-		slog.Error(fmt.Sprintf("[Web] Error forwarding message: %v", err))
-		// Forwarding failed after the user turn was persisted, and the agent will
-		// never respond — so nothing else finalizes the store. Without this the
+		// No agent connected is expected and transient (agent restarting/not up),
+		// so return 424, not 500 — a genuine forward error stays a 500.
+		noAgent := errors.Is(err, adapter.ErrNoAgentStream)
+		if noAgent {
+			slog.Warn("[Web] no agent connected; cannot forward message", "conversation", conversationID, "err", err)
+		} else {
+			slog.Error(fmt.Sprintf("[Web] Error forwarding message: %v", err))
+		}
+		// The forward failed, so the agent will never respond for this turn. Disarm
+		// the watchdog just armed, and finalize the store — without the finalize the
 		// latest row stays the user's and the thread derives assistant_streaming
 		// forever. Mirror the AgentResponse_Error path (empty partial: nothing
 		// streamed); FinalizeTerminal appends only when the last row is the user's.
+		if h.turns != nil {
+			h.turns.clear(conversationID)
+		}
 		if h.chatStore != nil {
 			if _, ferr := h.chatStore.FinalizeTerminal(ctx, conversationID, ""); ferr != nil {
 				slog.Error("[Web] chat finalize on forward failure failed", "conversation", conversationID, "err", ferr)
 			}
+		}
+		if noAgent {
+			h.sendErrorEvent(conversationID, "AGENT_UNAVAILABLE", "The agent is not available right now. You can try sending again.")
+			http.Error(w, "agent unavailable", http.StatusFailedDependency)
+			return
 		}
 		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process message")
 		http.Error(w, "Failed to process message", http.StatusInternalServerError)

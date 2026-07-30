@@ -1378,6 +1378,37 @@ func TestFindStreamForConversation_MatchesExactConversation(t *testing.T) {
 	}
 }
 
+// A reconnecting agent registers a new stream under the same key before the old
+// stream's teardown runs. The superseded teardown must not drop the live stream
+// or trigger disconnect finalization of the turns the new stream now owns.
+func TestUnregisterStream_SupersededReconnectKeepsCurrent(t *testing.T) {
+	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
+	convStore := store.NewMemoryStore()
+	server := NewServer(":0", threadStore, convStore, nil)
+
+	old := &conversationStream{stream: &captureStream{}, conversationID: "agent-stream"}
+	fresh := &conversationStream{stream: &captureStream{}, conversationID: "agent-stream"}
+
+	server.streamsMu.Lock()
+	server.streams["agent-stream"] = old
+	server.streams["agent-stream"] = fresh // reconnect replaces under the same key
+	server.streamsMu.Unlock()
+
+	if server.unregisterStream("agent-stream", old) {
+		t.Error("superseded stream reported as current; disconnect would reap the live stream's turns")
+	}
+	if got := server.findStreamForConversation("agent-stream"); got != fresh {
+		t.Error("superseded teardown dropped the current stream registration")
+	}
+
+	if !server.unregisterStream("agent-stream", fresh) {
+		t.Error("current stream teardown should report wasCurrent=true")
+	}
+	if got := server.findStreamForConversation("agent-stream"); got != nil {
+		t.Error("current stream should be unregistered after its own teardown")
+	}
+}
+
 func TestFindStreamForConversation_FallsBackToAgentStream(t *testing.T) {
 	threadStore := store.NewThreadHistoryStore(100, 50, time.Hour)
 	convStore := store.NewMemoryStore()
