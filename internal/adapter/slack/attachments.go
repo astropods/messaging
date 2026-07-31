@@ -78,8 +78,8 @@ func (a *SlackAdapter) imageAttachments(ctx context.Context, files []slack.File)
 			Filename:  f.Name,
 			MimeType:  mediaType,
 			SizeBytes: int64(buf.Len()),
-			Width:     int32(f.OriginalW),
-			Height:    int32(f.OriginalH),
+			Width:     int32(f.OriginalW), //nolint:gosec // G115: image pixel dimensions never overflow int32
+			Height:    int32(f.OriginalH), //nolint:gosec // G115: image pixel dimensions never overflow int32
 		})
 		slog.Debug("[Slack] Inlined image attachment",
 			"file", f.Name, "declared_mimetype", f.Mimetype, "sent_mimetype", mediaType, "bytes", buf.Len())
