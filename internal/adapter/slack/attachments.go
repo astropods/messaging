@@ -63,17 +63,26 @@ func (a *SlackAdapter) imageAttachments(ctx context.Context, files []slack.File)
 				"file", f.Name, "declared_mimetype", f.Mimetype, "detected", sniffed, "bytes", buf.Len())
 			continue
 		}
-		dataURI := fmt.Sprintf("data:%s;base64,%s", f.Mimetype, base64.StdEncoding.EncodeToString(buf.Bytes()))
+		// Label the data URI with the sniffed type, not Slack's declared
+		// Mimetype: Slack mislabels some images (a PNG as image/jpeg) and the
+		// model rejects a data URI whose type disagrees with the bytes. Strip
+		// any parameters DetectContentType may append.
+		mediaType := sniffed
+		if j := strings.IndexByte(mediaType, ';'); j >= 0 {
+			mediaType = mediaType[:j]
+		}
+		dataURI := fmt.Sprintf("data:%s;base64,%s", mediaType, base64.StdEncoding.EncodeToString(buf.Bytes()))
 		out = append(out, &pb.Attachment{
 			Type:      pb.Attachment_IMAGE,
 			Url:       dataURI,
 			Filename:  f.Name,
-			MimeType:  f.Mimetype,
+			MimeType:  mediaType,
 			SizeBytes: int64(buf.Len()),
 			Width:     int32(f.OriginalW),
 			Height:    int32(f.OriginalH),
 		})
-		slog.Debug("[Slack] Inlined image attachment", "file", f.Name, "mimetype", f.Mimetype, "bytes", buf.Len())
+		slog.Debug("[Slack] Inlined image attachment",
+			"file", f.Name, "declared_mimetype", f.Mimetype, "sent_mimetype", mediaType, "bytes", buf.Len())
 	}
 	return out
 }
