@@ -1032,6 +1032,15 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 	// rendered as <@U…> by renderBlocks, so the same regex handles them.
 	text := stripMentions(renderBlocks(ev.Text, ev.Blocks))
 
+	// When the mention is a reply inside an existing thread, prepend the thread
+	// transcript so the agent sees the discussion it was summoned into — an
+	// @-mention event carries only the mention line, not the earlier replies.
+	if ev.ThreadTimeStamp != "" {
+		if summary := a.threadTranscript(ctx, ev.Channel, ev.ThreadTimeStamp); summary != "" {
+			text = "[slack_thread_summary]\n" + summary + "\n\n" + text
+		}
+	}
+
 	slog.Debug(fmt.Sprintf("[Slack] Setting loading state: channel=%s, threadTS=%s", ev.Channel, threadID))
 	if err := a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "Assistant is thinking...", "thinking_face"); err != nil {
 		slog.Error(fmt.Sprintf("[Slack] ERROR: Failed to set loading state: %v", err))
@@ -1043,6 +1052,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 		Timestamp:      timestamppb.New(parseSlackTimestamp(ev.TimeStamp)),
 		Platform:       "slack",
 		Content:        text,
+		Attachments:    a.imageAttachments(ctx, ev.Files),
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
 			MessageId:    ev.TimeStamp,
@@ -1082,7 +1092,7 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 
 	metrics.SlackEvents.WithLabelValues("reaction").Inc()
 
-	originalText, parentThreadTs, ok := a.fetchReactionMessage(ctx, ev.Item.Channel, ev.Item.Timestamp)
+	originalText, parentThreadTs, files, ok := a.fetchReactionMessage(ctx, ev.Item.Channel, ev.Item.Timestamp)
 	if !ok || originalText == "" {
 		slog.Debug("[Slack] Could not fetch original message for reaction, skipping")
 		return
@@ -1104,6 +1114,7 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 		Timestamp:      timestamppb.New(time.Now()),
 		Platform:       "slack",
 		Content:        content,
+		Attachments:    a.imageAttachments(ctx, files),
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
 			MessageId:    ev.Item.Timestamp,
@@ -1130,7 +1141,7 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 // parent thread timestamp. The parent thread ts is what lets handleReactionAdded
 // populate PlatformContext.ThreadRootId so the agent can distinguish a reaction
 // on a top-level message from a reaction on a reply in an existing thread.
-func (a *SlackAdapter) fetchReactionMessage(ctx context.Context, channelID, timestamp string) (text string, parentThreadTs string, ok bool) {
+func (a *SlackAdapter) fetchReactionMessage(ctx context.Context, channelID, timestamp string) (text string, parentThreadTs string, files []slack.File, ok bool) {
 	msgs, _, _, err := a.client.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
 		ChannelID: channelID,
 		Timestamp: timestamp,
@@ -1139,7 +1150,7 @@ func (a *SlackAdapter) fetchReactionMessage(ctx context.Context, channelID, time
 	})
 	if err != nil {
 		slog.Error(fmt.Sprintf("[Slack] Failed to fetch message %s in %s: %v", timestamp, channelID, err))
-		return "", "", false
+		return "", "", nil, false
 	}
 	for _, m := range msgs {
 		if m.Timestamp == timestamp {
@@ -1149,10 +1160,10 @@ func (a *SlackAdapter) fetchReactionMessage(ctx context.Context, channelID, time
 			if m.ThreadTimestamp != "" && m.ThreadTimestamp != m.Timestamp {
 				parentThreadTs = m.ThreadTimestamp
 			}
-			return renderBlocks(m.Text, m.Blocks), parentThreadTs, true
+			return renderBlocks(m.Text, m.Blocks), parentThreadTs, m.Files, true
 		}
 	}
-	return "", "", false
+	return "", "", nil, false
 }
 
 // sendErrorMessage posts user-facing errors to Slack. Infrastructure errors
