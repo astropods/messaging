@@ -317,8 +317,6 @@ go run tools/test-serialization/main.go deserialize
 
 ## Versioning
 
-There is no `VERSION` file; versions are derived at build/publish time:
-
 - **Go binary / Docker image** - stamped with the short commit SHA via ldflags in `.github/workflows/build.yml` (shown by `astro-messaging --version`).
 - **npm SDK** (`@astropods/messaging`) - versioned independently from `sdk/node/package.json`; bump that file, then publish. npm versioning is decoupled from the Go binary.
 
