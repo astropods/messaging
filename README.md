@@ -23,7 +23,7 @@ messaging/
 │   │   ├── slack/               # Slack Socket Mode adapter
 │   │   └── web/                 # HTTP/SSE adapter
 │   ├── grpc/                    # gRPC server
-│   ├── store/                   # Redis + in-memory stores
+│   ├── store/                   # Redis, in-memory, and SQLite (chat) stores
 │   └── version/                 # Build-time version info
 ├── pkg/
 │   ├── client/                  # Go client SDK
@@ -34,8 +34,7 @@ messaging/
 │   └── src/
 ├── tools/test-serialization/    # Cross-language serialization test tool
 ├── Dockerfile
-├── go.mod
-└── VERSION                      # Single version source of truth
+└── go.mod
 ```
 
 ## Quick Start
@@ -43,20 +42,30 @@ messaging/
 ### Prerequisites
 
 - Go 1.25+
-- Slack app with Socket Mode enabled (bot token + app token)
+- Redis (or set `STORAGE_TYPE=memory` to use the in-memory store)
+- A Slack app with Socket Mode enabled, only if you use the Slack adapter (bot token + app token)
 
 ### Run locally
 
+The server is gRPC-only by default; enable the Slack and/or web adapters explicitly, and either run Redis or use the in-memory store:
+
 ```bash
+export STORAGE_TYPE=memory          # default is redis (needs Redis on :6379)
+
+# Slack adapter (optional)
+export SLACK_ENABLED=true
 export SLACK_BOT_TOKEN="xoxb-your-token"
 export SLACK_APP_TOKEN="xapp-your-token"
+
+# Web (HTTP/SSE) adapter (optional)
+export WEB_ENABLED=true
 
 go run cmd/server/main.go
 ```
 
 The server starts:
 - gRPC on `:9090` (agents connect here)
-- HTTP/SSE on `:8080` (web adapter)
+- HTTP/SSE on `:8080` (web adapter, when `WEB_ENABLED=true`)
 - Prometheus metrics on `:9091`
 
 ### Run with Docker
@@ -65,8 +74,10 @@ The server starts:
 docker build -t astro-messaging .
 
 docker run \
+  -e SLACK_ENABLED=true \
   -e SLACK_BOT_TOKEN=xoxb-your-token \
   -e SLACK_APP_TOKEN=xapp-your-token \
+  -e STORAGE_TYPE=memory \
   -p 9090:9090 \
   astro-messaging
 ```
@@ -80,10 +91,11 @@ same-origin `/chat/*` proxy.
 All config via environment variables:
 
 ```bash
-# Slack
+# Slack (adapter is off unless SLACK_ENABLED=true)
+SLACK_ENABLED=false
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
-SLACK_RATE_LIMIT_RPS=0.33     # 3s minimum between messages
+SLACK_RATE_LIMIT_RPS=3.0      # messages per second
 SLACK_RATE_LIMIT_BURST=10
 
 # Slack behavioural settings (JSON). All keys are optional.
@@ -106,8 +118,8 @@ WEB_ENABLED=false
 WEB_LISTEN_ADDR=:8080
 WEB_ALLOWED_ORIGINS=*
 
-# Storage: "memory" (default) or "redis"
-STORAGE_TYPE=memory
+# Storage: "redis" (default) or "memory"
+STORAGE_TYPE=redis
 REDIS_URL=redis://localhost:6379
 
 # Thread history
@@ -305,14 +317,8 @@ go run tools/test-serialization/main.go deserialize
 
 ## Versioning
 
-`VERSION` is the single source of truth for both the Go binary and the npm package. CI reads it automatically at build/publish time.
-
-To release a new version:
-
-1. Update `VERSION`
-2. Commit and push
-3. Create a GitHub release — this triggers the npm publish workflow
-4. The Docker build workflow embeds the version in the binary via ldflags
+- **Go binary / Docker image** - stamped with the short commit SHA via ldflags in `.github/workflows/build.yml` (shown by `astro-messaging --version`).
+- **npm SDK** (`@astropods/messaging`) - versioned independently from `sdk/node/package.json`; bump that file, then publish. npm versioning is decoupled from the Go binary.
 
 ## Build & Publish
 
@@ -335,7 +341,7 @@ The TypeScript SDK is published to npm via `.github/workflows/publish-npm.yml`.
 Triggered automatically when a GitHub release is published, or manually via **Actions → Publish npm package → Run workflow**.
 
 The workflow:
-1. Reads the version from `VERSION` and syncs it into `sdk/node/package.json`
+1. Reads the version from `sdk/node/package.json`
 2. Builds and tests the SDK
 3. Publishes with provenance (`npm publish --provenance --access public`)
 4. Commits the version bump and tags the release

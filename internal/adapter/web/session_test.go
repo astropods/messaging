@@ -16,7 +16,7 @@ func TestFixedSessionManager_ReturnsConfiguredSessionForEveryRequest(t *testing.
 
 	// Two distinct requests with no auth headers should both resolve to the
 	// configured session — the manager ignores request contents.
-	for _, path := range []string{"/api/threads", "/assets/main.js"} {
+	for _, path := range []string{"/api/threads", "/static/app.js"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		got, err := mgr.ValidateRequest(context.Background(), req)
 		if err != nil {
