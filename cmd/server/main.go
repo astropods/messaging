@@ -215,11 +215,45 @@ func main() {
 			grpcServer.RegisterAdapter(name, adpt)
 		}
 
-		// Register gRPC message handler with adapters
-		// When messages arrive from platforms, route them to agent via gRPC
+		// Select the message-handler transport. Default: route to a dialed-in
+		// agent over the gRPC stream (today's behavior). Opt-in (AGENT_TRANSPORT=
+		// agentcore): invoke the AgentCore Runtime per turn and stream the reply
+		// back through the same response-routing path.
+		messageHandler := grpcServer.HandleIncomingMessage
+		if cfg.IsAgentCore() {
+			// Pick the invoke backend from the deploy target. "aws" signs
+			// InvokeAgentRuntime against the runtime ARN; any other value uses
+			// local unsigned HTTP.
+			ac := cfg.Runtime.AgentCore
+			var invoker grpc.AgentInvoker
+			if cfg.AgentCoreOnAWS() {
+				if ac.ARN == "" {
+					slog.Error("ASTRO_DEPLOY_TARGET=aws requires AGENT_RUNTIME_ARN")
+					os.Exit(1)
+				}
+				inv, err := grpc.NewSigV4Invoker(ctx, ac.ARN, ac.Region, ac.Qualifier)
+				if err != nil {
+					slog.Error("Failed to build AgentCore SigV4 invoker", "err", err)
+					os.Exit(1)
+				}
+				invoker = inv
+			} else {
+				if ac.Endpoint == "" {
+					slog.Error("AGENT_TRANSPORT=agentcore requires AGENT_RUNTIME_ENDPOINT (local) or ASTRO_DEPLOY_TARGET=aws + AGENT_RUNTIME_ARN")
+					os.Exit(1)
+				}
+				invoker = grpc.NewHTTPInvoker(ac.Endpoint)
+			}
+			acTransport := grpc.NewAgentCoreTransport(grpcServer, invoker)
+			messageHandler = acTransport.HandleIncomingMessage
+			slog.Info("Agent transport: AgentCore invoke-per-turn", "backend", invoker.Describe())
+		}
+
+		// Register the message handler with adapters.
+		// When messages arrive from platforms, route them to the agent.
 		for name, adpt := range adapters {
-			slog.Info("Registering gRPC message handler for adapter", "adapter", name)
-			adpt.SetMessageHandler(grpcServer.HandleIncomingMessage)
+			slog.Info("Registering message handler for adapter", "adapter", name)
+			adpt.SetMessageHandler(messageHandler)
 			adpt.SetFeedbackHandler(grpcServer.HandleIncomingFeedback)
 
 			// Wire audio forwarder for adapters that support it

@@ -39,6 +39,10 @@ type Config struct {
 	// Files (deployment-local file upload/download on the shared volume)
 	Files FilesConfig
 
+	// Runtime selects the agent transport (default gRPC dial-in, opt-in
+	// AgentCore invoke-per-turn) and holds any per-runtime settings.
+	Runtime RuntimeConfig
+
 	// Logging
 	LogLevel string
 }
@@ -53,6 +57,55 @@ type FilesConfig struct {
 	// Backend selects the storage implementation: "fs" (default) uses Dir; "s3"
 	// is reserved for a future presigned-object implementation.
 	Backend string
+}
+
+// Agent transports select how the messaging sidecar reaches the agent. A new
+// runtime adds a constant here and its own settings section on RuntimeConfig.
+const (
+	TransportGRPC      = "grpc"      // dial in to the agent's gRPC stream
+	TransportAgentCore = "agentcore" // invoke the agent's runtime once per turn
+)
+
+// RuntimeConfig selects the agent transport and carries per-runtime settings.
+// The zero value is the default gRPC dial-in; each non-default transport reads
+// its own section.
+type RuntimeConfig struct {
+	// Transport is the selected transport (AGENT_TRANSPORT). Empty or "grpc"
+	// dials in over gRPC; "agentcore" invokes the runtime once per turn.
+	Transport string
+
+	// AgentCore is read when Transport is "agentcore".
+	AgentCore AgentCoreRuntime
+}
+
+// AgentCoreRuntime holds the settings for the AWS Bedrock AgentCore transport.
+type AgentCoreRuntime struct {
+	// Backend selects the invoke path (ASTRO_DEPLOY_TARGET). "aws" signs
+	// InvokeAgentRuntime against ARN; any other value POSTs to Endpoint unsigned
+	// for local dev.
+	Backend string
+	// ARN is the runtime invoked when Backend is "aws" (AGENT_RUNTIME_ARN). Deploy
+	// tooling creates the runtime and sets this; messaging never derives it.
+	ARN string
+	// Endpoint is the runtime base URL whose /invocations is POSTed when Backend
+	// is not "aws" (AGENT_RUNTIME_ENDPOINT).
+	Endpoint string
+	// Region is the AWS region for the invoke call (AWS_REGION); empty falls back
+	// to the AWS SDK's own resolution.
+	Region string
+	// Qualifier optionally pins a runtime endpoint version (AGENT_RUNTIME_QUALIFIER).
+	Qualifier string
+}
+
+// IsAgentCore reports whether the AgentCore invoke-per-turn transport is selected.
+func (c *Config) IsAgentCore() bool {
+	return strings.EqualFold(c.Runtime.Transport, TransportAgentCore)
+}
+
+// AgentCoreOnAWS reports whether AgentCore uses the signed AWS invoke backend;
+// otherwise it uses the local unsigned HTTP backend.
+func (c *Config) AgentCoreOnAWS() bool {
+	return strings.EqualFold(c.Runtime.AgentCore.Backend, "aws")
 }
 
 // ChatConfig holds deployment-local chat persistence configuration.
@@ -263,6 +316,19 @@ func Load() (*Config, error) {
 	cfg.Files = FilesConfig{
 		Dir:     getEnv("FILES_DIR", ""),
 		Backend: getEnv("FILES_BACKEND", "fs"),
+	}
+
+	// Agent transport (opt-in). Empty AGENT_TRANSPORT keeps the default gRPC
+	// dial-in; "agentcore" invokes the runtime per turn.
+	cfg.Runtime = RuntimeConfig{
+		Transport: strings.TrimSpace(os.Getenv("AGENT_TRANSPORT")),
+		AgentCore: AgentCoreRuntime{
+			Backend:   strings.TrimSpace(os.Getenv("ASTRO_DEPLOY_TARGET")),
+			ARN:       strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ARN")),
+			Endpoint:  strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ENDPOINT")),
+			Region:    strings.TrimSpace(os.Getenv("AWS_REGION")),
+			Qualifier: strings.TrimSpace(os.Getenv("AGENT_RUNTIME_QUALIFIER")),
+		},
 	}
 
 	return cfg, nil
