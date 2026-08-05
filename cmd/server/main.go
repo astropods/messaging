@@ -220,28 +220,29 @@ func main() {
 		// agentcore): invoke the AgentCore Runtime per turn and stream the reply
 		// back through the same response-routing path.
 		messageHandler := grpcServer.HandleIncomingMessage
-		if cfg.AgentCoreEnabled() {
-			// Pick the invoke backend from the deploy target. "aws" ⇒ signed
-			// InvokeAgentRuntime against the runtime ARN (produced by
-			// `wrapper deploy`); anything else ⇒ local unsigned HTTP.
+		if cfg.IsAgentCore() {
+			// Pick the invoke backend from the deploy target. "aws" signs
+			// InvokeAgentRuntime against the runtime ARN; any other value uses
+			// local unsigned HTTP.
+			ac := cfg.Runtime.AgentCore
 			var invoker grpc.AgentInvoker
 			if cfg.AgentCoreOnAWS() {
-				if cfg.AgentCore.Arn == "" {
-					slog.Error("ASTRO_DEPLOY_TARGET=aws requires AGENT_RUNTIME_ARN (set by `wrapper deploy`)")
+				if ac.ARN == "" {
+					slog.Error("ASTRO_DEPLOY_TARGET=aws requires AGENT_RUNTIME_ARN")
 					os.Exit(1)
 				}
-				inv, err := grpc.NewSigV4Invoker(ctx, cfg.AgentCore.Arn, cfg.AgentCore.Region, cfg.AgentCore.Qualifier)
+				inv, err := grpc.NewSigV4Invoker(ctx, ac.ARN, ac.Region, ac.Qualifier)
 				if err != nil {
 					slog.Error("Failed to build AgentCore SigV4 invoker", "err", err)
 					os.Exit(1)
 				}
 				invoker = inv
 			} else {
-				if cfg.AgentCore.Endpoint == "" {
+				if ac.Endpoint == "" {
 					slog.Error("AGENT_TRANSPORT=agentcore requires AGENT_RUNTIME_ENDPOINT (local) or ASTRO_DEPLOY_TARGET=aws + AGENT_RUNTIME_ARN")
 					os.Exit(1)
 				}
-				invoker = grpc.NewHTTPInvoker(cfg.AgentCore.Endpoint)
+				invoker = grpc.NewHTTPInvoker(ac.Endpoint)
 			}
 			acTransport := grpc.NewAgentCoreTransport(grpcServer, invoker)
 			messageHandler = acTransport.HandleIncomingMessage
