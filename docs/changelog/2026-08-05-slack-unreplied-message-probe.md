@@ -42,6 +42,22 @@ Silent drops are also now counted, not just logged: `messages_dropped` gains the
 reasons `thread_parent_gone` and `reaction_message_unavailable`, so a recurrence
 is visible without reading Debug logs.
 
+## Reactions on an image with no caption
+
+A second silent drop on the same path: `handleReactionAdded` skipped any reacted
+message whose rendered text was empty. Slack leaves `text` empty on an
+uncaptioned upload and `renderBlocks` deliberately drops image blocks, so a
+`:ticket:` on a screenshot resolved fine and was then thrown away — the one shape
+where the whole request lives in the attachment. The @-mention path never had
+this guard, which is why the same screenshot worked when the bot was @-mentioned.
+
+The guard now runs against resolved attachments as well as text, and the images
+are resolved once and reused for the outbound message. Resolved attachments
+rather than raw files is deliberate: a non-image upload or a failed download
+leaves nothing to act on, and the agent would receive a bare reaction preamble.
+Genuinely contentless reactions are still dropped, now counted as
+`reaction_message_empty`.
+
 # Migration
 
 None. The adapter already needs the history scope it uses here

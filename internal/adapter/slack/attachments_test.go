@@ -161,6 +161,91 @@ func TestHandleAppMention_InThreadPrependsThreadSummary(t *testing.T) {
 	}
 }
 
+// A :ticket: on an uncaptioned screenshot must reach the agent. Slack leaves
+// `text` empty on such a message and renderBlocks drops image blocks, so the
+// reacted content is entirely in the attachments.
+func TestHandleReactionAdded_ImageOnlyMessageForwarded(t *testing.T) {
+	a, handler := newTestAdapterWithReactions([]string{"ticket"})
+
+	imgBytes := []byte("\x89PNG\r\n\x1a\nfake-image-bytes")
+	mux := http.NewServeMux()
+	mux.HandleFunc("/files/download", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(imgBytes)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
+			"messages": []map[string]any{{
+				"ts":   r.FormValue("ts"),
+				"text": "",
+				"user": "U999",
+				"files": []map[string]any{{
+					"name":                 "screenshot.png",
+					"mimetype":             "image/png",
+					"size":                 len(imgBytes),
+					"url_private_download": srv.URL + "/files/download",
+				}},
+			}},
+		})
+	})
+	mux.HandleFunc("/", jsonOK)
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	ev := &slackevents.ReactionAddedEvent{
+		Reaction: "ticket",
+		User:     "U123",
+		Item: slackevents.Item{
+			Channel:   "C123456",
+			Timestamp: "1234567890.000001",
+		},
+	}
+
+	a.handleReactionAdded(t.Context(), ev, "")
+
+	msg := handler.last()
+	if msg == nil {
+		t.Fatal("expected the reaction to be forwarded despite the message having no text")
+	}
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("expected the image to ride along, got %d attachments", len(msg.Attachments))
+	}
+	want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgBytes)
+	if msg.Attachments[0].Url != want {
+		t.Errorf("url mismatch:\n got %q\nwant %q", msg.Attachments[0].Url, want)
+	}
+	if !strings.Contains(msg.Content, "[reaction :ticket:") {
+		t.Errorf("expected the reaction preamble in content, got %q", msg.Content)
+	}
+}
+
+// The empty-text guard still earns its place when there is genuinely nothing
+// to act on: no text and no image means the agent would see a bare preamble.
+func TestHandleReactionAdded_NoTextNoImageDropped(t *testing.T) {
+	a, handler := newTestAdapterWithReactions([]string{"ticket"})
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	ev := &slackevents.ReactionAddedEvent{
+		Reaction: "ticket",
+		User:     "U123",
+		Item: slackevents.Item{
+			Channel:   "C123456",
+			Timestamp: "1234567890.000001",
+		},
+	}
+
+	a.handleReactionAdded(t.Context(), ev, "")
+
+	if handler.count() != 0 {
+		t.Errorf("expected a contentless reacted message to be dropped, got %d messages", handler.count())
+	}
+}
+
 func TestHandleAppMention_TopLevelNoThreadSummary(t *testing.T) {
 	a, handler := newTestAdapter()
 	mux := http.NewServeMux()

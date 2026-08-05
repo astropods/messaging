@@ -1093,8 +1093,22 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 	metrics.SlackEvents.WithLabelValues("reaction").Inc()
 
 	originalText, parentThreadTs, files, ok := a.fetchReactionMessage(ctx, ev.Item.Channel, ev.Item.Timestamp)
-	if !ok || originalText == "" {
+	if !ok {
 		slog.Debug("[Slack] Could not fetch original message for reaction, skipping")
+		return
+	}
+
+	// A message whose only content is an image renders to empty text — renderBlocks
+	// drops image blocks, and Slack leaves `text` empty on an uncaptioned upload —
+	// so the reacted content lives entirely in the attachments. Gate on those too,
+	// or a :ticket: on a screenshot never reaches the agent. Resolved attachments
+	// rather than raw files: non-image uploads and failed downloads leave nothing
+	// to act on, and the agent would get a bare reaction preamble.
+	attachments := a.imageAttachments(ctx, files)
+	if originalText == "" && len(attachments) == 0 {
+		slog.Warn(fmt.Sprintf("[Slack] Reacted message %s in %s has no text or images; dropping reaction",
+			ev.Item.Timestamp, ev.Item.Channel))
+		metrics.MessagesDropped.WithLabelValues("slack", "reaction_message_empty").Inc()
 		return
 	}
 
@@ -1114,7 +1128,7 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 		Timestamp:      timestamppb.New(time.Now()),
 		Platform:       "slack",
 		Content:        content,
-		Attachments:    a.imageAttachments(ctx, files),
+		Attachments:    attachments,
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
 			MessageId:    ev.Item.Timestamp,
