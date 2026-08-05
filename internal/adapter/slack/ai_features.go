@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/astropods/messaging/internal/logctx"
+	"github.com/astropods/messaging/internal/metrics"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/slack-go/slack"
 )
@@ -359,10 +360,8 @@ func (a *SlackAdapter) parseConversationID(conversationID string) (channelID str
 // message it was answering.
 //
 // A bare channel target (threadTS == "") is always allowed — there is no thread
-// to orphan (DMs and observed/top-level posts). For a threaded target we probe
-// the parent with conversations.replies (the same call fetchReactionMessage
-// uses): a live message — parent or not — comes back as a one-element result,
-// while a deleted parent returns thread_not_found.
+// to orphan (DMs and observed/top-level posts). Otherwise lookupMessage decides
+// whether the parent still exists.
 //
 // Policy on a missing parent lives here, in one place: we return false and the
 // caller skips the post. Change this branch (e.g. to notify the user out-of-band
@@ -372,32 +371,94 @@ func (a *SlackAdapter) canPostToThread(ctx context.Context, channelID, threadTS 
 		return true
 	}
 
+	res := a.lookupMessage(ctx, channelID, threadTS)
+	if !res.certain {
+		logctx.FromContext(ctx).Warn(fmt.Sprintf("[Slack] Could not verify thread parent %s/%s, posting anyway: %v", channelID, threadTS, res.err))
+		return true
+	}
+	if !res.found {
+		logctx.FromContext(ctx).Warn(fmt.Sprintf("[Slack] Thread parent %s/%s no longer exists; skipping reply to avoid posting in channel", channelID, threadTS))
+		metrics.MessagesDropped.WithLabelValues("slack", "thread_parent_gone").Inc()
+		return false
+	}
+	return true
+}
+
+// messageLookup is the outcome of probing one Slack message by timestamp.
+// certain separates "Slack answered" from "we could not tell", so callers can
+// fail open on an API blip instead of treating it as a deleted message.
+type messageLookup struct {
+	msg     slack.Message
+	found   bool
+	certain bool
+	err     error
+}
+
+// lookupMessage resolves a single message by its ts, whether or not it has any
+// replies.
+//
+// conversations.replies is tried first: it is the only call that reaches a
+// message posted *inside* a thread, which is the common case for reply targets.
+// A message with no replies is not reliably a "thread" as far as that endpoint
+// is concerned, so an ok-but-empty answer is not evidence the message is gone —
+// conversations.history, scoped to the exact ts, answers that case. Only when
+// both agree the message is absent do we report found=false.
+//
+// Treating replies' empty result as definitive is what silently broke @-mentions
+// and :ticket: reactions on top-level messages: their reply target is the
+// mentioned/reacted message itself, which has no replies at that moment.
+func (a *SlackAdapter) lookupMessage(ctx context.Context, channelID, ts string) messageLookup {
+	if a.client == nil {
+		return messageLookup{err: fmt.Errorf("no slack client")}
+	}
+
 	msgs, _, _, err := a.client.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
 		ChannelID: channelID,
-		Timestamp: threadTS,
+		Timestamp: ts,
 		Limit:     1,
 		Inclusive: true,
 	})
+	if err == nil {
+		for _, m := range msgs {
+			if m.Timestamp == ts {
+				return messageLookup{msg: m, found: true, certain: true}
+			}
+		}
+	} else if !isMessageGoneErr(err) {
+		// Anything other than a definitive "not found" (rate limit, transport,
+		// scope) tells us nothing about the message; don't fall through and let
+		// a second failing call look like an absent message.
+		return messageLookup{err: err}
+	}
+
+	hist, err := a.client.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
+		ChannelID: channelID,
+		Latest:    ts,
+		Oldest:    ts,
+		Inclusive: true,
+		Limit:     1,
+	})
 	if err != nil {
-		// thread_not_found / message_not_found are definitive: the parent is
-		// gone, so skip rather than let Slack post in-channel. Any other error
-		// is treated as transient — don't drop a legitimate reply over a blip.
-		if msg := err.Error(); strings.Contains(msg, "thread_not_found") || strings.Contains(msg, "message_not_found") {
-			logctx.FromContext(ctx).Warn(fmt.Sprintf("[Slack] Thread parent %s/%s is gone (%s); skipping reply to avoid posting in channel", channelID, threadTS, msg))
-			return false
+		if isMessageGoneErr(err) {
+			return messageLookup{certain: true, err: err}
 		}
-		logctx.FromContext(ctx).Warn(fmt.Sprintf("[Slack] Could not verify thread parent %s/%s, posting anyway: %v", channelID, threadTS, err))
-		return true
+		return messageLookup{err: err}
 	}
-
-	for _, m := range msgs {
-		if m.Timestamp == threadTS {
-			return true
+	if hist != nil {
+		for _, m := range hist.Messages {
+			if m.Timestamp == ts {
+				return messageLookup{msg: m, found: true, certain: true}
+			}
 		}
 	}
+	return messageLookup{certain: true}
+}
 
-	logctx.FromContext(ctx).Warn(fmt.Sprintf("[Slack] Thread parent %s/%s no longer exists; skipping reply to avoid posting in channel", channelID, threadTS))
-	return false
+// isMessageGoneErr reports whether a Slack error means the message itself is
+// gone, as opposed to a transient or configuration failure.
+func isMessageGoneErr(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "thread_not_found") || strings.Contains(msg, "message_not_found")
 }
 
 // mapStatusToMessage converts proto status to human-readable message

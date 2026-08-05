@@ -376,6 +376,105 @@ func TestSlackAdapter_HandleAgentResponse_ContentEnd_SkipsWhenParentDeleted(t *t
 	}
 }
 
+// An @-mention on a top-level message replies into a thread that does not exist
+// yet, so the reply target has no replies of its own. conversations.replies can
+// answer ok-but-empty for such a message; the parent is still live, so the guard
+// must confirm with conversations.history and let the post through.
+func TestSlackAdapter_HandleAgentResponse_ContentEnd_PostsToUnrepliedParent(t *testing.T) {
+	const parentTS = "1234567890.000001"
+
+	var (
+		calls   []slackCall
+		callsMu sync.Mutex
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm() //nolint:errcheck
+		callsMu.Lock()
+		calls = append(calls, slackCall{Method: r.URL.Path})
+		callsMu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/conversations.replies":
+			// Message exists but has no thread yet.
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "messages": []map[string]any{}}) //nolint:errcheck
+		case "/conversations.history":
+			json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+				"ok":       true,
+				"messages": []map[string]any{{"ts": parentTS, "text": "the original message"}},
+			})
+		default:
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "1234567890.000002"}) //nolint:errcheck
+		}
+	}))
+	defer server.Close()
+
+	a := &SlackAdapter{
+		client:         slackapi.New("xoxb-test-token", slackapi.OptionAPIURL(server.URL+"/")),
+		aiClient:       &SlackAIClient{botToken: "xoxb-test-token", httpClient: server.Client(), baseURL: server.URL},
+		rateLimiter:    NewRateLimiter(100, 100),
+		config:         adapter.Config{},
+		contentBuffers: make(map[string]string),
+	}
+
+	convID := "C123-" + parentTS
+	for _, resp := range []*pb.AgentResponse{
+		{ConversationId: convID, Payload: &pb.AgentResponse_Content{Content: &pb.ContentChunk{Type: pb.ContentChunk_START}}},
+		{ConversationId: convID, Payload: &pb.AgentResponse_Content{Content: &pb.ContentChunk{Type: pb.ContentChunk_DELTA, Content: "Here is my answer"}}},
+		{ConversationId: convID, Payload: &pb.AgentResponse_Content{Content: &pb.ContentChunk{Type: pb.ContentChunk_END}}},
+	} {
+		if err := a.HandleAgentResponse(t.Context(), resp); err != nil {
+			t.Fatalf("HandleAgentResponse failed: %v", err)
+		}
+	}
+
+	callsMu.Lock()
+	defer callsMu.Unlock()
+	for _, call := range calls {
+		if call.Method == "/chat.postMessage" {
+			return
+		}
+	}
+	t.Fatalf("expected chat.postMessage for a live parent with no replies; calls: %v", calls)
+}
+
+// A :ticket: reaction on a top-level message must still be forwarded to the
+// agent when conversations.replies reports no thread for it.
+func TestSlackAdapter_FetchReactionMessage_UnrepliedMessage(t *testing.T) {
+	const ts = "1234567890.000001"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm() //nolint:errcheck
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/conversations.replies":
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "messages": []map[string]any{}}) //nolint:errcheck
+		case "/conversations.history":
+			json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+				"ok":       true,
+				"messages": []map[string]any{{"ts": ts, "text": "search is broken"}},
+			})
+		default:
+			json.NewEncoder(w).Encode(map[string]any{"ok": true}) //nolint:errcheck
+		}
+	}))
+	defer server.Close()
+
+	a := &SlackAdapter{client: slackapi.New("xoxb-test-token", slackapi.OptionAPIURL(server.URL+"/"))}
+
+	text, parentThreadTs, _, ok := a.fetchReactionMessage(t.Context(), "C123", ts)
+	if !ok {
+		t.Fatal("expected the reacted message to resolve from conversations.history")
+	}
+	if text != "search is broken" {
+		t.Errorf("text = %q, want %q", text, "search is broken")
+	}
+	if parentThreadTs != "" {
+		t.Errorf("parentThreadTs = %q, want empty for a top-level message", parentThreadTs)
+	}
+}
+
 func TestSlackAdapter_HandleAgentResponse_DeltaIgnored(t *testing.T) {
 	a, calls, cleanup := newTestSlackAdapter(t)
 	defer cleanup()
