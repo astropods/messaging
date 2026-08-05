@@ -1142,28 +1142,24 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 // populate PlatformContext.ThreadRootId so the agent can distinguish a reaction
 // on a top-level message from a reaction on a reply in an existing thread.
 func (a *SlackAdapter) fetchReactionMessage(ctx context.Context, channelID, timestamp string) (text string, parentThreadTs string, files []slack.File, ok bool) {
-	msgs, _, _, err := a.client.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
-		ChannelID: channelID,
-		Timestamp: timestamp,
-		Limit:     1,
-		Inclusive: true,
-	})
-	if err != nil {
-		slog.Error(fmt.Sprintf("[Slack] Failed to fetch message %s in %s: %v", timestamp, channelID, err))
+	res := a.lookupMessage(ctx, channelID, timestamp)
+	if !res.found {
+		if res.err != nil {
+			slog.Error(fmt.Sprintf("[Slack] Failed to fetch message %s in %s: %v", timestamp, channelID, res.err))
+		} else {
+			slog.Warn(fmt.Sprintf("[Slack] Reacted message %s in %s not found; dropping reaction", timestamp, channelID))
+		}
+		metrics.MessagesDropped.WithLabelValues("slack", "reaction_message_unavailable").Inc()
 		return "", "", nil, false
 	}
-	for _, m := range msgs {
-		if m.Timestamp == timestamp {
-			// ThreadTimestamp is set on thread replies; on a thread root it
-			// equals the message's own ts, which is not "in an existing
-			// thread" — so suppress that case.
-			if m.ThreadTimestamp != "" && m.ThreadTimestamp != m.Timestamp {
-				parentThreadTs = m.ThreadTimestamp
-			}
-			return renderBlocks(m.Text, m.Blocks), parentThreadTs, m.Files, true
-		}
+	m := res.msg
+	// ThreadTimestamp is set on thread replies; on a thread root it equals the
+	// message's own ts, which is not "in an existing thread" — so suppress that
+	// case.
+	if m.ThreadTimestamp != "" && m.ThreadTimestamp != m.Timestamp {
+		parentThreadTs = m.ThreadTimestamp
 	}
-	return "", "", nil, false
+	return renderBlocks(m.Text, m.Blocks), parentThreadTs, m.Files, true
 }
 
 // sendErrorMessage posts user-facing errors to Slack. Infrastructure errors
