@@ -379,13 +379,15 @@ func (t *turnTracker) resume(conversationID string) {
 	t.armIdleLocked(conversationID, st)
 }
 
-// setPendingRespond queues a "write your own reply" on the current turn, delivered when it finalizes (endTurn). No-op if no turn is tracked.
-func (t *turnTracker) setPendingRespond(conversationID, userID, text string) {
+// setPendingRespond queues a "write your own reply" on the current turn, delivered when it finalizes (endTurn / failActive). Returns false when no turn is tracked, so the caller can forward the prose directly instead of dropping it.
+func (t *turnTracker) setPendingRespond(conversationID, userID, text string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if st := t.turns[conversationID]; st != nil {
 		st.pending = &pendingRespond{userID: userID, text: text}
+		return true
 	}
+	return false
 }
 
 // startFreshBuffer resets the partial buffer so a post-interaction continuation doesn't concatenate onto the flushed preamble. No-op if no turn is tracked.

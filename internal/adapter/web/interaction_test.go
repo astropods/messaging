@@ -430,6 +430,63 @@ func TestHandleInteractionResponse_RespondCancelsAndQueues(t *testing.T) {
 	}
 }
 
+// RESPOND with no live turn to cancel (the awaiting turn was already torn down —
+// e.g. a disconnect reaped it while the interaction stayed pending) forwards the
+// prose as a fresh turn rather than dropping it, and trims it like every note.
+func TestHandleInteractionResponse_RespondNoTurnForwardsImmediately(t *testing.T) {
+	h, its, _ := newEndpointHandlers(t)
+	h.turns = newTurnTracker() // tracker present, but no turn tracked for "conv"
+	conn := attachConn(h.connManager)
+	var forwarded string
+	h.SetMessageHandler(func(_ context.Context, m *pb.Message) error {
+		forwarded = m.Content
+		return nil
+	})
+	seedInteraction(t, its, "alice",
+		pb.RenderableAction_RENDERABLE_ACTION_SUBMIT,
+		pb.RenderableAction_RENDERABLE_ACTION_RESPOND,
+		pb.RenderableAction_RENDERABLE_ACTION_CANCEL)
+
+	w := httptest.NewRecorder()
+	h.HandleInteractionResponse(w, interactionRequest("alice", `{"action":"respond","text":"  Tuesday at 2pm  "}`))
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%q", w.Code, w.Body.String())
+	}
+	content, ok := noteEventContent(t, drainSSE(conn))
+	if !ok || content != "Tuesday at 2pm" {
+		t.Fatalf("respond note: got (%q, %v), want the trimmed prose", content, ok)
+	}
+	if forwarded != "Tuesday at 2pm" {
+		t.Fatalf("prose not forwarded as a fresh turn: %q", forwarded)
+	}
+}
+
+// RESPOND re-arms the idle watchdog (suspended while awaiting) so a hung
+// post-cancel agent is reaped instead of wedging the conversation forever.
+func TestHandleInteractionResponse_RespondRearmsWatchdog(t *testing.T) {
+	h, its, _ := newEndpointHandlers(t)
+	h.turns = newTurnTracker()
+	fired := make(chan string, 1)
+	h.turns.setIdleReaper(40*time.Millisecond, func(c string) { fired <- c })
+	h.turns.startTurn("conv")
+	h.turns.enterAwaiting("conv") // suspends the watchdog
+	seedInteraction(t, its, "alice",
+		pb.RenderableAction_RENDERABLE_ACTION_SUBMIT,
+		pb.RenderableAction_RENDERABLE_ACTION_RESPOND,
+		pb.RenderableAction_RENDERABLE_ACTION_CANCEL)
+
+	w := httptest.NewRecorder()
+	h.HandleInteractionResponse(w, interactionRequest("alice", `{"action":"respond","text":"Tuesday"}`))
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%q", w.Code, w.Body.String())
+	}
+	select {
+	case <-fired:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("watchdog was not re-armed after RESPOND; a hung agent would wedge the conversation")
+	}
+}
+
 func TestHandleInteractionResponse_ActionNotAllowed_400(t *testing.T) {
 	h, its, fc := newEndpointHandlers(t)
 	// RESPOND not offered.

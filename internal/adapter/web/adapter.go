@@ -339,7 +339,7 @@ func (a *WebAdapter) HandleAgentDisconnect(ctx context.Context, conversationID s
 	}
 }
 
-// startPendingRespond starts the follow-up turn for a queued "write your own reply" if the terminated turn had one, returning whether it did. Every terminal path (END, error, reap, disconnect) routes through here so a queued respond is never dropped.
+// startPendingRespond delivers a queued "write your own reply" as its follow-up turn (returns whether one was queued) — the single point every terminal path routes through, so a queued respond is never dropped.
 func (a *WebAdapter) startPendingRespond(ctx context.Context, conversationID string, pending *pendingRespond) bool {
 	if pending == nil {
 		return false
@@ -473,7 +473,7 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 			}
 		}
 
-		// On END: if "write your own reply" queued prose, start the follow-up turn WITHOUT finish (keeping the SSE open for it); otherwise send finish to close the turn.
+		// On END, deliver a queued respond (its follow-up keeps the stream open) or finish the turn.
 		if payload.Content.Type == pb.ContentChunk_END {
 			var pending *pendingRespond
 			if a.turns != nil {
@@ -516,9 +516,7 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 				}
 			}
 		}
-		// Tear down the turn (endTurn also lifts any stop-gate). A queued "write your
-		// own reply" is delivered as its follow-up turn rather than dropped; otherwise
-		// surface the agent's error.
+		// Deliver a queued respond as its follow-up turn; otherwise surface the agent's error.
 		var pending *pendingRespond
 		if a.turns != nil {
 			pending = a.turns.endTurn(conversationID)
