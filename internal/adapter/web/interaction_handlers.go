@@ -92,8 +92,7 @@ func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "invalid action", http.StatusBadRequest)
 		return
 	}
-	// CANCEL is always permitted (the client always renders a dismiss); any other
-	// action must be one the Renderable offered.
+	// CANCEL is always allowed (client always offers dismiss); other actions must be offered by the Renderable.
 	if action != pb.RenderableAction_RENDERABLE_ACTION_CANCEL && !renderableOffersAction(it.Renderable, action) {
 		http.Error(w, "action not allowed for this interaction", http.StatusBadRequest)
 		return
@@ -149,15 +148,7 @@ func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Requ
 
 	switch action {
 	case pb.RenderableAction_RENDERABLE_ACTION_RESPOND:
-		// "Write your own reply" is a new message, not an in-turn answer: stash the
-		// prose and cancel the agent's current turn. When that turn finalizes, the
-		// agent-response END handler calls injectRespond to persist the note and
-		// start a fresh turn with the prose — so the reply is a new turn, and the
-		// two can't overlap. Deliberately do NOT re-arm the idle watchdog here: the
-		// turn is being cancelled and its queued prose is delivered only on the
-		// terminal chunk, so re-arming would let the reaper fire in that window and
-		// drop the prose. The agent's own activity re-arms the watchdog if the cancel
-		// produces output, and the follow-up turn arms its own on startTurn.
+		// New turn, not an in-turn answer: queue the prose and cancel; the END handler injects it. No watchdog re-arm — a reap in that window would drop the queued prose.
 		if h.turns != nil {
 			h.turns.setPendingRespond(conversationID, session.UserID, input.Text)
 		}
@@ -166,25 +157,14 @@ func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Requ
 			Action: pb.RenderableAction_RENDERABLE_ACTION_CANCEL,
 		})
 	case pb.RenderableAction_RENDERABLE_ACTION_SUBMIT, pb.RenderableAction_RENDERABLE_ACTION_DECLINE:
-		// The agent resumes this same turn: re-arm the idle watchdog (suspended while
-		// awaiting) so a hung post-answer agent is still reaped. The continuation is
-		// a new message, not a continuation of the reply that preceded the
-		// interaction, so reset the turn's text buffer first: that reply was already
-		// flushed as its own row (enterAwaiting), and without this the continuation
-		// would persist as "preamble + continuation" in one row. Then persist a ghost
-		// note as the boundary — it records what the user answered and, as a
-		// non-assistant row, makes the continuation a new bubble (the store appends a
-		// fresh assistant row after a non-assistant tail, and the client opens a new
-		// bubble on the note tail too).
+		// Agent resumes this turn: re-arm the watchdog, reset the buffer so the continuation isn't glued to the flushed preamble, and persist the note as the new-bubble boundary.
 		if h.turns != nil {
 			h.turns.resume(conversationID)
 			h.turns.startFreshBuffer(conversationID)
 		}
 		h.persistNote(ctx, conversationID, noteContent(action, it.Renderable, resp))
 		h.emitRenderableResponse(r.Context(), conversationID, session.UserID, resp)
-	default: // CANCEL — the turn aborts, no continuation and no record to keep.
-		// Re-arm the idle watchdog so a hung post-cancel agent is reaped; nothing is
-		// queued, so there is nothing for the reaper to drop here.
+	default: // CANCEL — abort the turn; re-arm the watchdog to reap a hung post-cancel agent.
 		if h.turns != nil {
 			h.turns.resume(conversationID)
 		}
@@ -196,13 +176,7 @@ func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// injectRespond starts the follow-up turn for a "write your own reply": it
-// records the user's prose as a ghost note (the boundary that splits the
-// follow-up reply into its own bubble; server-injected, so not added
-// optimistically) and forwards the prose to the agent as a new turn.
-// autoResume-capable agents resume the suspended tool from the prose. Called from
-// the agent-response END handler once the cancelled turn has reached idle, so the
-// new turn can never overlap the old one.
+// injectRespond starts the follow-up turn for a "write your own reply": records the prose as a note, then forwards it as a fresh turn. Called from the END handler after the cancelled turn finalizes, so the two never overlap.
 func (h *Handlers) injectRespond(ctx context.Context, conversationID string, p *pendingRespond) {
 	h.persistNote(ctx, conversationID, p.text)
 	if h.msgHandler == nil {
@@ -227,10 +201,7 @@ func (h *Handlers) injectRespond(ctx context.Context, conversationID string, p *
 		ConversationId: conversationID,
 	}
 	if err := h.msgHandler(ctx, msg); err != nil {
-		// The follow-up turn never reached the agent. The END handler withheld the
-		// finish event so the SSE could stay open for this reply, so surface an error
-		// to resolve the live stream (mirroring HandleSendMessage's forward-failure
-		// path) rather than leaving the client's spinner hung until a reload.
+		// END withheld finish to keep the SSE open for this reply, so a failed forward must surface an error (as HandleSendMessage does) rather than hang the stream.
 		if h.turns != nil {
 			h.turns.clear(conversationID)
 		}
@@ -244,16 +215,10 @@ func (h *Handlers) injectRespond(ctx context.Context, conversationID string, p *
 	}
 }
 
-// intentToolPermission is the Renderable intent for a tool-approval ask (approve
-// or deny a tool call), which reads as "Approved"/"Denied" rather than the
-// form-oriented "Submitted"/"Declined".
+// intentToolPermission marks a tool-approval ask, which reads as Approved/Denied rather than Submitted/Declined.
 const intentToolPermission = "tool_permission"
 
-// persistNote records a ghost note for a resolved interaction and surfaces it to
-// connected clients over SSE. The persisted row and the SSE event share an id so a
-// reload reconciles to the same message. As a non-assistant, non-user row it both
-// records what the user answered and acts as the boundary that splits the agent's
-// continuation into its own bubble. No-op for empty content.
+// persistNote records a resolved interaction as a ghost note and broadcasts it; the row and SSE event share an id so a reload reconciles. No-op for empty content.
 func (h *Handlers) persistNote(ctx context.Context, conversationID, content string) {
 	if strings.TrimSpace(content) == "" {
 		return
@@ -262,12 +227,7 @@ func (h *Handlers) persistNote(ctx context.Context, conversationID, content stri
 	if h.chatStore != nil {
 		msg, err := h.chatStore.AppendMessage(ctx, conversationID, "", "note", content, "")
 		if err != nil {
-			// A note that didn't persist must not be broadcast: a reload wouldn't
-			// show it, and the missing row leaves the trailing store row the flushed
-			// assistant preamble, so the continuation would update that row in place
-			// rather than start a new bubble. The message cap is terminal
-			// per-conversation state, not a real failure — log it at Debug like the
-			// rest of the adapter rather than spamming ERROR.
+			// Don't broadcast a note that didn't persist: a reload wouldn't show it and the continuation would clobber the preamble row. The cap is expected — log at Debug, not ERROR.
 			if errors.Is(err, sqlite.ErrMessageLimitReached) {
 				slog.Debug("[Web] chat at message limit; note not persisted", "conversation", conversationID)
 			} else {
@@ -282,11 +242,7 @@ func (h *Handlers) persistNote(ctx context.Context, conversationID, content stri
 	}
 }
 
-// noteContent is the ghost-note text recorded when an interaction resolves: a
-// compact record of what the user answered. A tool-permission ask reads as an
-// approve/deny; a submitted form as its field values ("Answered · Date: … · …");
-// a "write your own reply" as the prose itself. Returns "" for actions that leave
-// no record (cancel), so the caller skips the note.
+// noteContent is the ghost-note text for a resolved interaction: approve/deny, a submitted-form summary, or the prose. "" for actions with no record (cancel).
 func noteContent(action pb.RenderableAction, r *pb.Renderable, resp *pb.RenderableResponse) string {
 	isPermission := r.GetIntent() == intentToolPermission
 	switch action {
@@ -310,11 +266,7 @@ func noteContent(action pb.RenderableAction, r *pb.Renderable, resp *pb.Renderab
 	}
 }
 
-// summarizeSubmission renders a submitted form's values as a compact one-line
-// record ("Date: 2027-06-23 · Attendees: 12"), preferring each field's schema
-// title over the raw property key and formatting scalar values. Non-scalar fields
-// (nested objects, arrays) are omitted. Returns "" when the content isn't a JSON
-// object or has no scalar fields, so the caller falls back to a generic label.
+// summarizeSubmission renders a submitted form's scalar fields as a one-line record ("Date: … · Attendees: 12"), preferring schema titles. "" when nothing scalar to show.
 func summarizeSubmission(contentJSON, schemaJSON string) string {
 	var values map[string]json.RawMessage
 	if json.Unmarshal([]byte(contentJSON), &values) != nil || len(values) == 0 {
@@ -341,8 +293,7 @@ func summarizeSubmission(contentJSON, schemaJSON string) string {
 	return strings.Join(parts, " · ")
 }
 
-// schemaTitles maps each top-level property to its schema title, for humanizing
-// field labels in a submission summary. Empty for a schema without titles.
+// schemaTitles maps each top-level property to its schema title (empty when the schema has none).
 func schemaTitles(schemaJSON string) map[string]string {
 	var schema struct {
 		Properties map[string]struct {
@@ -361,9 +312,7 @@ func schemaTitles(schemaJSON string) map[string]string {
 	return titles
 }
 
-// scalarString renders a JSON scalar (string, number, bool) as plain text for a
-// submission summary. Non-scalars (object, array, null) return "" so the summary
-// stays a one-line record rather than dumping nested JSON.
+// scalarString renders a JSON scalar as text (bools as yes/no); non-scalars return "".
 func scalarString(raw json.RawMessage) string {
 	var v any
 	if json.Unmarshal(raw, &v) != nil {
@@ -387,10 +336,7 @@ func scalarString(raw json.RawMessage) string {
 	}
 }
 
-// humanizeKey turns a property key into a readable label: snake_case / kebab-case
-// separators become spaces, camelCase boundaries are split, and the first letter
-// is capitalized ("meetingDate" → "Meeting date", "attendee_count" → "Attendee
-// count"). Used only when the schema provides no title for the field.
+// humanizeKey turns a property key into a label ("meetingDate" → "Meeting date"); used only when the schema has no title.
 func humanizeKey(k string) string {
 	var b strings.Builder
 	for i := 0; i < len(k); i++ {
@@ -412,9 +358,7 @@ func humanizeKey(k string) string {
 	return s
 }
 
-// emitRenderableResponse forwards a response to the local agent over the feedback
-// channel. Delivery is best effort: with no agent stream the send is dropped, and
-// there is no reconnect redelivery yet, so the agent's render() stays unresolved.
+// emitRenderableResponse forwards a response to the agent (best effort: dropped if no stream; no reconnect redelivery yet).
 func (h *Handlers) emitRenderableResponse(ctx context.Context, conversationID, userID string, resp *pb.RenderableResponse) {
 	if h.feedbackHandler == nil {
 		slog.Debug("[Web] no feedback handler; dropping renderable response", "conversation", conversationID)
@@ -458,9 +402,7 @@ func renderableOffersAction(r *pb.Renderable, action pb.RenderableAction) bool {
 	return false
 }
 
-// noExternalRefLoader refuses every external $ref: interaction schemas are
-// agent-authored (untrusted), and the library's default FileLoader would resolve
-// a file:// $ref against the sidecar filesystem at compile time.
+// noExternalRefLoader refuses external $refs: agent-authored schemas are untrusted and the default loader would read file:// refs off the sidecar FS.
 type noExternalRefLoader struct{}
 
 func (noExternalRefLoader) Load(url string) (any, error) {

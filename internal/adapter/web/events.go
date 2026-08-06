@@ -69,12 +69,7 @@ type ChunkEventData struct {
 	Attachments []chatAttachment `json:"attachments,omitempty"`
 }
 
-// NoteEventData is a server-synthesized note the sidecar injects into the thread
-// when an interaction resolves: the ghost record of what the user answered
-// (submit/decline/respond) and the boundary that splits the agent's continuation
-// into its own bubble. It is a non-assistant, non-user role so the client renders
-// it as a muted ghost line, not a chat bubble; unlike a composer send it isn't
-// added optimistically, so it must arrive over SSE.
+// NoteEventData is a server-injected note marking a resolved interaction: the record of what the user answered and the boundary that starts the continuation's own bubble.
 type NoteEventData struct {
 	Type      string `json:"type"`
 	ID        string `json:"id"`
@@ -82,8 +77,7 @@ type NoteEventData struct {
 	Timestamp string `json:"timestamp"`
 }
 
-// NewNoteEvent creates a note SSE event for a server-injected note. The id
-// matches the persisted note row so a reload reconciles to the same message.
+// NewNoteEvent creates a note SSE event; the id matches the persisted row so a reload reconciles to the same message.
 func NewNoteEvent(messageID, content, timestamp string) SSEEvent {
 	data := NoteEventData{
 		Type:      "note",

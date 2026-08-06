@@ -398,10 +398,7 @@ func TestHandleInteractionResponse_Decline(t *testing.T) {
 	}
 }
 
-// RESPOND ("write your own reply") is not an in-turn answer: the agent's current
-// turn is CANCELLED (so it finalizes) and the prose is queued as a pendingRespond
-// that the END handler turns into a fresh turn. The agent must never receive a
-// RESPOND response.
+// RESPOND cancels the current turn and queues the prose (delivered as a fresh turn); the agent must never receive a RESPOND response.
 func TestHandleInteractionResponse_RespondCancelsAndQueues(t *testing.T) {
 	h, its, fc := newEndpointHandlers(t)
 	h.turns = newTurnTracker()
@@ -480,9 +477,7 @@ func TestHandleInteractionResponse_NotFound_404(t *testing.T) {
 
 // --- Resolved-interaction ghost note ---
 
-// SUBMIT and DECLINE broadcast a ghost note before resuming the turn: the record
-// of what the user answered, and the boundary that splits the continuation into
-// its own bubble.
+// SUBMIT and DECLINE broadcast a ghost note recording the answer before the turn resumes.
 func TestHandleInteractionResponse_SubmitAndDeclineBroadcastNote(t *testing.T) {
 	for _, tc := range []struct {
 		name, body, want string
@@ -560,9 +555,7 @@ func TestHandleInteractionResponse_CancelBroadcastsNoNote(t *testing.T) {
 	}
 }
 
-// RESPOND defers its note to the follow-up turn (injectRespond), so the endpoint
-// itself broadcasts none — the ghost lands just before the fresh reply, not while
-// the cancelled turn is still finalizing.
+// RESPOND defers its note to injectRespond, so the endpoint itself broadcasts none.
 func TestHandleInteractionResponse_RespondDefersNote(t *testing.T) {
 	h, its, _ := newEndpointHandlers(t)
 	h.turns = newTurnTracker()
@@ -590,9 +583,7 @@ func TestSummarizeSubmission(t *testing.T) {
 		"attendee_count":{"type":"integer"},
 		"recurring":{"type":"boolean"}
 	}}`
-	// Schema title wins ("Date"); no-title keys humanize ("attendee_count" ->
-	// "Attendee count"); scalars format (int without ".0", bool as yes/no); keys
-	// are alphabetical for determinism.
+	// Schema title wins ("Date"); no-title keys humanize; scalars format (int, yes/no); keys sorted for determinism.
 	got := summarizeSubmission(`{"meetingDate":"2027-06-23","attendee_count":12,"recurring":true}`, schema)
 	if got != "Attendee count: 12 · Date: 2027-06-23 · Recurring: yes" {
 		t.Fatalf("summary: got %q", got)
@@ -635,9 +626,7 @@ func TestInjectRespond_NotesProseAndForwards(t *testing.T) {
 	}
 }
 
-// When the follow-up forward fails, injectRespond must resolve the live SSE
-// stream with an error (the END handler withheld the finish so the stream stayed
-// open for this reply) and clear the turn, rather than leaving the client hung.
+// A failed follow-up forward must resolve the live stream with an error and clear the turn, not leave the client hung.
 func TestInjectRespond_ForwardFailureSurfacesError(t *testing.T) {
 	h, _, _ := newEndpointHandlers(t)
 	h.turns = newTurnTracker()

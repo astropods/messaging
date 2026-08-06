@@ -236,12 +236,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// One turn at a time: reject a send while a turn is already in flight on this
-	// conversation (streaming, or paused on an interaction). The client disables
-	// the composer during a turn, so this guards against a racing/buggy client
-	// rather than a normal path. The interaction-response path (which starts a
-	// fresh turn for "write your own reply") forwards to the agent directly and
-	// does not pass through here.
+	// One turn at a time: reject a send while a turn is in flight (streaming or paused on an interaction) — a guard against a racing client; the interaction-response path forwards directly, not through here.
 	if h.turns != nil && h.turns.isStreaming(conversationID) {
 		writeJSON(w, http.StatusConflict, map[string]string{
 			"error":             "turn_in_progress",

@@ -446,10 +446,7 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 						content = buffered
 					}
 				}
-				// After an in-turn interaction the sidecar persists a note (non-assistant
-				// row) as the boundary, so UpsertAssistantProgress appends a new row for
-				// the continuation rather than updating the pre-interaction reply — the
-				// continuation is its own bubble structurally, with no fresh-row flag.
+				// A persisted note (non-assistant row) is the boundary, so this appends a new row for the continuation instead of updating the pre-interaction reply.
 				_, err := a.chatStore.UpsertAssistantProgress(ctx, conversationID, content, marshalAttachments(agentAttachments))
 				if err != nil {
 					if errors.Is(err, sqlite.ErrMessageLimitReached) {
@@ -463,13 +460,7 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 			}
 		}
 
-		// On END, finalize the turn — unless the user chose "write your own reply"
-		// while it was paused on an interaction. In that case endTurn returns the
-		// queued prose and we start the follow-up turn WITHOUT sending finish: the
-		// SSE session stays open so the injected note and the new reply reach the
-		// client on the same stream (a finish here would close it, and the two turns
-		// still can't overlap — the follow-up begins only here).
-		// Otherwise send finish now, after persisting, so the turn closes cleanly.
+		// On END: if "write your own reply" queued prose, start the follow-up turn WITHOUT finish (keeping the SSE open for it); otherwise send finish to close the turn.
 		if payload.Content.Type == pb.ContentChunk_END {
 			var pending *pendingRespond
 			if a.turns != nil {
@@ -523,12 +514,7 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		a.connManager.Broadcast(conversationID, event)
 
 	case *pb.AgentResponse_Renderable:
-		// Pause the turn (suspend the idle watchdog so a user taking their time to
-		// answer isn't reaped) and flush the reply-so-far to the store BEFORE
-		// emitting the interaction. Progressive persists are throttled and nothing
-		// flushes the full buffer until END, so while the turn sits paused a reload
-		// would otherwise show a throttle-lagged partial (e.g. just the first
-		// token) instead of the full preamble the user saw stream in.
+		// Pause the turn and flush the reply-so-far before emitting the interaction, so a reload while paused shows the full preamble rather than a throttle-lagged partial.
 		if a.turns != nil {
 			a.turns.enterAwaiting(conversationID)
 			if a.chatStore != nil {
