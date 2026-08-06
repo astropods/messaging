@@ -339,6 +339,15 @@ func (a *WebAdapter) HandleAgentDisconnect(ctx context.Context, conversationID s
 	}
 }
 
+// startPendingRespond starts the follow-up turn for a queued "write your own reply" if the terminated turn had one, returning whether it did. Every terminal path (END, error, reap, disconnect) routes through here so a queued respond is never dropped.
+func (a *WebAdapter) startPendingRespond(ctx context.Context, conversationID string, pending *pendingRespond) bool {
+	if pending == nil {
+		return false
+	}
+	a.handlers.injectRespond(ctx, conversationID, pending)
+	return true
+}
+
 // failTurn abnormally terminates an in-flight turn: finalize the store row (so it
 // stops deriving assistant_streaming), broadcast a retryable error, and close the
 // conversation's SSE connections. failActive claims the turn atomically, so this
@@ -347,8 +356,12 @@ func (a *WebAdapter) failTurn(ctx context.Context, conversationID, message strin
 	if a.turns == nil {
 		return
 	}
-	partial, ok := a.turns.failActive(conversationID)
+	pending, partial, ok := a.turns.failActive(conversationID)
 	if !ok {
+		return
+	}
+	// A queued "write your own reply" is delivered as its follow-up turn rather than dropped here (injectRespond surfaces AGENT_UNAVAILABLE if the agent is truly gone).
+	if a.startPendingRespond(ctx, conversationID, pending) {
 		return
 	}
 	// Log every surfaced abnormal termination; it reaches the client as an in-band
@@ -466,9 +479,7 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 			if a.turns != nil {
 				pending = a.turns.endTurn(conversationID)
 			}
-			if pending != nil {
-				a.handlers.injectRespond(ctx, conversationID, pending)
-			} else {
+			if !a.startPendingRespond(ctx, conversationID, pending) {
 				a.connManager.Broadcast(conversationID, NewFinishEvent(response.ResponseId))
 			}
 		}
@@ -505,13 +516,16 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 				}
 			}
 		}
-		// The error terminates the turn; drop the per-turn tracker state (also
-		// lifts any stop-gate — a no-op when the conversation isn't stopped).
+		// Tear down the turn (endTurn also lifts any stop-gate). A queued "write your
+		// own reply" is delivered as its follow-up turn rather than dropped; otherwise
+		// surface the agent's error.
+		var pending *pendingRespond
 		if a.turns != nil {
-			a.turns.clear(conversationID)
+			pending = a.turns.endTurn(conversationID)
 		}
-		event := NewErrorEvent(payload.Error)
-		a.connManager.Broadcast(conversationID, event)
+		if !a.startPendingRespond(ctx, conversationID, pending) {
+			a.connManager.Broadcast(conversationID, NewErrorEvent(payload.Error))
+		}
 
 	case *pb.AgentResponse_Renderable:
 		// Pause the turn and flush the reply-so-far before emitting the interaction, so a reload while paused shows the full preamble rather than a throttle-lagged partial.

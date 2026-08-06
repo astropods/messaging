@@ -649,3 +649,62 @@ func TestInjectRespond_ForwardFailureSurfacesError(t *testing.T) {
 		t.Errorf("turn should be cleared after a failed forward")
 	}
 }
+
+// An abnormal end (idle reap / disconnect) with a queued "write your own reply"
+// delivers it as a follow-up turn instead of dropping it.
+func TestFailTurn_DeliversQueuedRespond(t *testing.T) {
+	a, conn, _ := newTestAdapter(t)
+	var forwarded string
+	a.handlers.SetMessageHandler(func(_ context.Context, m *pb.Message) error {
+		forwarded = m.Content
+		return nil
+	})
+	a.turns.startTurn("conv")
+	a.turns.enterAwaiting("conv")
+	a.turns.setPendingRespond("conv", "alice", "Tuesday at 2pm")
+
+	a.failTurn(context.Background(), "conv", "The agent disconnected.")
+
+	events := drainSSE(conn)
+	if content, ok := noteEventContent(t, events); !ok || content != "Tuesday at 2pm" {
+		t.Fatalf("queued respond note: got (%q, %v), want the prose", content, ok)
+	}
+	if hasEvent(events, EventError) {
+		t.Fatal("a delivered respond must not also broadcast the stall error")
+	}
+	if forwarded != "Tuesday at 2pm" {
+		t.Fatalf("prose not forwarded to agent: %q", forwarded)
+	}
+}
+
+// An agent error with a queued "write your own reply" delivers it rather than
+// dropping it for the error event.
+func TestAgentError_DeliversQueuedRespond(t *testing.T) {
+	a, conn, _ := newTestAdapter(t)
+	var forwarded string
+	a.handlers.SetMessageHandler(func(_ context.Context, m *pb.Message) error {
+		forwarded = m.Content
+		return nil
+	})
+	a.turns.startTurn("conv")
+	a.turns.enterAwaiting("conv")
+	a.turns.setPendingRespond("conv", "alice", "Tuesday at 2pm")
+
+	if err := a.HandleAgentResponse(context.Background(), &pb.AgentResponse{
+		ConversationId: "conv",
+		Payload:        &pb.AgentResponse_Error{Error: &pb.ErrorResponse{}},
+	}); err != nil {
+		t.Fatalf("HandleAgentResponse: %v", err)
+	}
+
+	events := drainSSE(conn)
+	if content, ok := noteEventContent(t, events); !ok || content != "Tuesday at 2pm" {
+		t.Fatalf("queued respond note: got (%q, %v), want the prose", content, ok)
+	}
+	if hasEvent(events, EventError) {
+		t.Fatal("a delivered respond must not also surface the agent error")
+	}
+	if forwarded != "Tuesday at 2pm" {
+		t.Fatalf("prose not forwarded to agent: %q", forwarded)
+	}
+}

@@ -254,18 +254,32 @@ func TestTurnTrackerFailActive(t *testing.T) {
 	tr.record("c", contentChunk(pb.ContentChunk_START, "half "))
 	tr.record("c", contentChunk(pb.ContentChunk_DELTA, "done"))
 
-	partial, ok := tr.failActive("c")
+	_, partial, ok := tr.failActive("c")
 	if !ok || partial != "half done" {
 		t.Fatalf("failActive = (%q, %v), want (%q, true)", partial, ok, "half done")
 	}
-	if _, ok := tr.failActive("c"); ok {
+	if _, _, ok := tr.failActive("c"); ok {
 		t.Fatal("second failActive must report no active turn")
 	}
 
 	tr.record("c2", contentChunk(pb.ContentChunk_START, "x"))
 	tr.stop("c2")
-	if _, ok := tr.failActive("c2"); ok {
+	if _, _, ok := tr.failActive("c2"); ok {
 		t.Fatal("failActive must not claim a user-stopped turn")
+	}
+}
+
+// failActive hands back a queued "write your own reply" so an abnormal end (reap /
+// disconnect) can deliver it as a follow-up turn rather than dropping it.
+func TestTurnTracker_FailActiveReturnsPending(t *testing.T) {
+	tr := newTurnTracker()
+	tr.startTurn("c")
+	tr.enterAwaiting("c")
+	tr.setPendingRespond("c", "alice", "Tuesday at 2pm")
+
+	pending, _, ok := tr.failActive("c")
+	if !ok || pending == nil || pending.text != "Tuesday at 2pm" || pending.userID != "alice" {
+		t.Fatalf("failActive pending = %+v (ok=%v), want the queued respond", pending, ok)
 	}
 }
 
@@ -275,7 +289,7 @@ func TestTurnTrackerFailActive(t *testing.T) {
 func TestTurnTrackerFailActiveGatesLateOutput(t *testing.T) {
 	tr := newTurnTracker()
 	tr.record("c", contentChunk(pb.ContentChunk_START, "working"))
-	if _, ok := tr.failActive("c"); !ok {
+	if _, _, ok := tr.failActive("c"); !ok {
 		t.Fatal("failActive should claim the active turn")
 	}
 	// A late continuation chunk (not START) is dropped, so record() never runs.
@@ -302,7 +316,7 @@ func TestTurnTracker_FreshTurnReapableDespiteStopGate(t *testing.T) {
 	// drop-gate lingers.
 	tr.record("c", contentChunk(pb.ContentChunk_START, "partial"))
 	tr.stop("c")
-	if _, ok := tr.failActive("c"); ok {
+	if _, _, ok := tr.failActive("c"); ok {
 		t.Fatal("a user-stopped turn must not be reaped")
 	}
 
@@ -315,7 +329,7 @@ func TestTurnTracker_FreshTurnReapableDespiteStopGate(t *testing.T) {
 		t.Fatalf("fresh turn should be listed active for disconnect reaping, got %v", got)
 	}
 	// The fresh turn hangs — the idle reaper / disconnect must be able to claim it.
-	if _, ok := tr.failActive("c"); !ok {
+	if _, _, ok := tr.failActive("c"); !ok {
 		t.Fatal("a fresh turn after a stop gate must be reapable")
 	}
 	// The gate still drops the previous turn's trailing output until a new START.
@@ -346,7 +360,7 @@ func TestTurnTracker_GatedEndKeepsFreshResentTurn(t *testing.T) {
 	if got := tr.activeConversations(); len(got) != 1 || got[0] != "c" {
 		t.Fatalf("fresh turn should remain active, got %v", got)
 	}
-	if _, ok := tr.failActive("c"); !ok {
+	if _, _, ok := tr.failActive("c"); !ok {
 		t.Fatal("fresh turn must remain reapable after the stale END cleanup")
 	}
 }

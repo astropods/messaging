@@ -169,24 +169,19 @@ func (t *turnTracker) touch(conversationID string) {
 	}
 }
 
-// failActive atomically ends a tracked turn for abnormal termination (idle
-// timeout or agent disconnect), returning the buffered partial. ok=false when no
-// turn is active or it was user-stopped, so a terminal event fires exactly once.
-// It also sets the stop gate (like a user stop) so a slow-but-alive reaped agent's
-// later output is dropped rather than resurrecting the finalized turn.
-func (t *turnTracker) failActive(conversationID string) (partial string, ok bool) {
+// failActive atomically ends a tracked turn for abnormal termination (idle timeout or disconnect), returning any queued respond and the buffered partial. ok=false for no active (non-user-stopped) turn, so a terminal event fires once. It sets the stop-gate so a slow reaped agent's later output is dropped rather than resurrecting the turn.
+func (t *turnTracker) failActive(conversationID string) (pending *pendingRespond, partial string, ok bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	st := t.turns[conversationID]
 	if st == nil || st.userStopped {
-		return "", false
+		return nil, "", false
 	}
+	pending = st.pending
 	stopIdleLocked(st)
 	partial = st.partial.String()
 	delete(t.turns, conversationID)
-	// Gate trailing output like stop() does; bounded the same way, lifted by the
-	// next START. failActive already returned above if the turn was gone or
-	// stopped, so this conversation isn't in the map yet.
+	// Gate trailing output like stop(); bounded the same way, lifted by the next START.
 	if len(t.stopped) >= maxTrackedStops {
 		for k := range t.stopped {
 			delete(t.stopped, k)
@@ -194,7 +189,7 @@ func (t *turnTracker) failActive(conversationID string) (partial string, ok bool
 		}
 	}
 	t.stopped[conversationID] = true
-	return partial, true
+	return pending, partial, true
 }
 
 // activeConversations lists conversations with a turn in flight (excluding turns
