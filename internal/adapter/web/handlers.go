@@ -236,6 +236,20 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One turn at a time: reject a send while a turn is already in flight on this
+	// conversation (streaming, or paused on an interaction). The client disables
+	// the composer during a turn, so this guards against a racing/buggy client
+	// rather than a normal path. The interaction-response path (which starts a
+	// fresh turn for "write your own reply") forwards to the agent directly and
+	// does not pass through here.
+	if h.turns != nil && h.turns.isStreaming(conversationID) {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error":             "turn_in_progress",
+			"error_description": "a response is already in progress on this conversation",
+		})
+		return
+	}
+
 	// Bound the attachment count so a single send can't fan out into thousands
 	// of metadata reads + an oversized message/DB row (the proxy body cap alone
 	// would still allow that many keys).

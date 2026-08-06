@@ -676,41 +676,6 @@ func (s *Store) UpsertAssistantProgress(ctx context.Context, conversationID, con
 	return id, nil
 }
 
-// AppendAssistantMessage always inserts a new assistant row (unlike
-// UpsertAssistantProgress, which updates the trailing one), so it won't clobber a
-// reply streamed earlier in the turn. No-ops for a missing conversation.
-func (s *Store) AppendAssistantMessage(ctx context.Context, conversationID, content string) (string, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", fmt.Errorf("chatstore append assistant begin: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // no-op after a successful commit
-
-	var one int
-	err = tx.QueryRowContext(ctx,
-		`SELECT 1 FROM conversations WHERE conversation_id = ? AND deleted_at IS NULL`,
-		conversationID,
-	).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("chatstore append assistant conv check: %w", err)
-	}
-
-	msg, err := appendMessageTx(ctx, tx, conversationID, "", "assistant", content, "")
-	if err != nil {
-		return "", err
-	}
-	if err := touchConversationTx(ctx, tx, conversationID); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("chatstore append assistant commit: %w", err)
-	}
-	return msg.ID, nil
-}
-
 // FinalizeStopped makes an interrupted turn terminal for a conversation owned by
 // userID, using `partial` — the full text the client saw at stop time. If no
 // assistant row exists yet (latest message is the user's), it appends one so

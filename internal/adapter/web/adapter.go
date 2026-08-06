@@ -416,12 +416,6 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		event := NewChunkEvent(payload.Content, response.ResponseId, agentAttachments)
 		a.connManager.Broadcast(conversationID, event)
 
-		// Send finish event on END chunk
-		if payload.Content.Type == pb.ContentChunk_END {
-			finishEvent := NewFinishEvent(response.ResponseId)
-			a.connManager.Broadcast(conversationID, finishEvent)
-		}
-
 		// Store message content for thread history
 		if a.threadStore != nil && payload.Content.Type == pb.ContentChunk_END {
 			a.threadStore.AddMessage(conversationID, &pb.ThreadMessage{
@@ -452,7 +446,12 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 						content = buffered
 					}
 				}
-				if _, err := a.chatStore.UpsertAssistantProgress(ctx, conversationID, content, marshalAttachments(agentAttachments)); err != nil {
+				// After an in-turn interaction the sidecar persists a note (non-assistant
+				// row) as the boundary, so UpsertAssistantProgress appends a new row for
+				// the continuation rather than updating the pre-interaction reply — the
+				// continuation is its own bubble structurally, with no fresh-row flag.
+				_, err := a.chatStore.UpsertAssistantProgress(ctx, conversationID, content, marshalAttachments(agentAttachments))
+				if err != nil {
 					if errors.Is(err, sqlite.ErrMessageLimitReached) {
 						// Terminal per-conversation state, not a real failure — don't
 						// spam ERROR on every throttled write near the cap.
@@ -464,9 +463,23 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 			}
 		}
 
-		// Turn completed normally — drop per-turn tracker state.
-		if payload.Content.Type == pb.ContentChunk_END && a.turns != nil {
-			a.turns.clear(conversationID)
+		// On END, finalize the turn — unless the user chose "write your own reply"
+		// while it was paused on an interaction. In that case endTurn returns the
+		// queued prose and we start the follow-up turn WITHOUT sending finish: the
+		// SSE session stays open so the injected note and the new reply reach the
+		// client on the same stream (a finish here would close it, and the two turns
+		// still can't overlap — the follow-up begins only here).
+		// Otherwise send finish now, after persisting, so the turn closes cleanly.
+		if payload.Content.Type == pb.ContentChunk_END {
+			var pending *pendingRespond
+			if a.turns != nil {
+				pending = a.turns.endTurn(conversationID)
+			}
+			if pending != nil {
+				a.handlers.injectRespond(ctx, conversationID, pending)
+			} else {
+				a.connManager.Broadcast(conversationID, NewFinishEvent(response.ResponseId))
+			}
 		}
 
 	case *pb.AgentResponse_Status:
@@ -510,6 +523,24 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		a.connManager.Broadcast(conversationID, event)
 
 	case *pb.AgentResponse_Renderable:
+		// Pause the turn (suspend the idle watchdog so a user taking their time to
+		// answer isn't reaped) and flush the reply-so-far to the store BEFORE
+		// emitting the interaction. Progressive persists are throttled and nothing
+		// flushes the full buffer until END, so while the turn sits paused a reload
+		// would otherwise show a throttle-lagged partial (e.g. just the first
+		// token) instead of the full preamble the user saw stream in.
+		if a.turns != nil {
+			a.turns.enterAwaiting(conversationID)
+			if a.chatStore != nil {
+				if buffered := a.turns.content(conversationID); buffered != "" {
+					if _, err := a.chatStore.UpsertAssistantProgress(ctx, conversationID, buffered, ""); err != nil {
+						if !errors.Is(err, sqlite.ErrMessageLimitReached) {
+							log.Error("[Web] flush before interaction failed", "conversation", conversationID, "err", err)
+						}
+					}
+				}
+			}
+		}
 		a.handleRenderable(ctx, conversationID, payload.Renderable)
 
 	case *pb.AgentResponse_Transcript:

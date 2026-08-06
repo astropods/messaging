@@ -8,10 +8,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
+	"time"
 
+	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/sqlite"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
+	"github.com/google/uuid"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -142,11 +147,269 @@ func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	h.emitRenderableResponse(r.Context(), conversationID, session.UserID, resp)
+	switch action {
+	case pb.RenderableAction_RENDERABLE_ACTION_RESPOND:
+		// "Write your own reply" is a new message, not an in-turn answer: stash the
+		// prose and cancel the agent's current turn. When that turn finalizes, the
+		// agent-response END handler calls injectRespond to persist the note and
+		// start a fresh turn with the prose — so the reply is a new turn, and the
+		// two can't overlap. Deliberately do NOT re-arm the idle watchdog here: the
+		// turn is being cancelled and its queued prose is delivered only on the
+		// terminal chunk, so re-arming would let the reaper fire in that window and
+		// drop the prose. The agent's own activity re-arms the watchdog if the cancel
+		// produces output, and the follow-up turn arms its own on startTurn.
+		if h.turns != nil {
+			h.turns.setPendingRespond(conversationID, session.UserID, input.Text)
+		}
+		h.emitRenderableResponse(r.Context(), conversationID, session.UserID, &pb.RenderableResponse{
+			Id:     interactionID,
+			Action: pb.RenderableAction_RENDERABLE_ACTION_CANCEL,
+		})
+	case pb.RenderableAction_RENDERABLE_ACTION_SUBMIT, pb.RenderableAction_RENDERABLE_ACTION_DECLINE:
+		// The agent resumes this same turn: re-arm the idle watchdog (suspended while
+		// awaiting) so a hung post-answer agent is still reaped. The continuation is
+		// a new message, not a continuation of the reply that preceded the
+		// interaction, so reset the turn's text buffer first: that reply was already
+		// flushed as its own row (enterAwaiting), and without this the continuation
+		// would persist as "preamble + continuation" in one row. Then persist a ghost
+		// note as the boundary — it records what the user answered and, as a
+		// non-assistant row, makes the continuation a new bubble (the store appends a
+		// fresh assistant row after a non-assistant tail, and the client opens a new
+		// bubble on the note tail too).
+		if h.turns != nil {
+			h.turns.resume(conversationID)
+			h.turns.startFreshBuffer(conversationID)
+		}
+		h.persistNote(ctx, conversationID, noteContent(action, it.Renderable, resp))
+		h.emitRenderableResponse(r.Context(), conversationID, session.UserID, resp)
+	default: // CANCEL — the turn aborts, no continuation and no record to keep.
+		// Re-arm the idle watchdog so a hung post-cancel agent is reaped; nothing is
+		// queued, so there is nothing for the reaper to drop here.
+		if h.turns != nil {
+			h.turns.resume(conversationID)
+		}
+		h.emitRenderableResponse(r.Context(), conversationID, session.UserID, resp)
+	}
 	writeJSON(w, http.StatusOK, interactionResponseAck{
 		Status: string(recorded.Status),
 		Action: renderableActionWireName(action),
 	})
+}
+
+// injectRespond starts the follow-up turn for a "write your own reply": it
+// records the user's prose as a ghost note (the boundary that splits the
+// follow-up reply into its own bubble; server-injected, so not added
+// optimistically) and forwards the prose to the agent as a new turn.
+// autoResume-capable agents resume the suspended tool from the prose. Called from
+// the agent-response END handler once the cancelled turn has reached idle, so the
+// new turn can never overlap the old one.
+func (h *Handlers) injectRespond(ctx context.Context, conversationID string, p *pendingRespond) {
+	h.persistNote(ctx, conversationID, p.text)
+	if h.msgHandler == nil {
+		slog.Warn("[Web] no message handler; respond not delivered", "conversation", conversationID)
+		return
+	}
+	if h.turns != nil {
+		h.turns.startTurn(conversationID)
+	}
+	messageID := uuid.NewString()
+	msg := &pb.Message{
+		Id:        messageID,
+		Timestamp: timestamppb.Now(),
+		Platform:  "web",
+		PlatformContext: &pb.PlatformContext{
+			MessageId: messageID,
+			ChannelId: conversationID,
+			EventKind: pb.PlatformContext_EVENT_KIND_DM,
+		},
+		User:           &pb.User{Id: p.userID},
+		Content:        p.text,
+		ConversationId: conversationID,
+	}
+	if err := h.msgHandler(ctx, msg); err != nil {
+		// The follow-up turn never reached the agent. The END handler withheld the
+		// finish event so the SSE could stay open for this reply, so surface an error
+		// to resolve the live stream (mirroring HandleSendMessage's forward-failure
+		// path) rather than leaving the client's spinner hung until a reload.
+		if h.turns != nil {
+			h.turns.clear(conversationID)
+		}
+		if errors.Is(err, adapter.ErrNoAgentStream) {
+			slog.Warn("[Web] no agent connected; respond not delivered", "conversation", conversationID)
+			h.sendErrorEvent(conversationID, "AGENT_UNAVAILABLE", "The agent is not available right now. You can try sending again.")
+		} else {
+			slog.Error("[Web] forward respond message failed", "conversation", conversationID, "err", err)
+			h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process message")
+		}
+	}
+}
+
+// intentToolPermission is the Renderable intent for a tool-approval ask (approve
+// or deny a tool call), which reads as "Approved"/"Denied" rather than the
+// form-oriented "Submitted"/"Declined".
+const intentToolPermission = "tool_permission"
+
+// persistNote records a ghost note for a resolved interaction and surfaces it to
+// connected clients over SSE. The persisted row and the SSE event share an id so a
+// reload reconciles to the same message. As a non-assistant, non-user row it both
+// records what the user answered and acts as the boundary that splits the agent's
+// continuation into its own bubble. No-op for empty content.
+func (h *Handlers) persistNote(ctx context.Context, conversationID, content string) {
+	if strings.TrimSpace(content) == "" {
+		return
+	}
+	messageID := uuid.NewString()
+	if h.chatStore != nil {
+		msg, err := h.chatStore.AppendMessage(ctx, conversationID, "", "note", content, "")
+		if err != nil {
+			// A note that didn't persist must not be broadcast: a reload wouldn't
+			// show it, and the missing row leaves the trailing store row the flushed
+			// assistant preamble, so the continuation would update that row in place
+			// rather than start a new bubble. The message cap is terminal
+			// per-conversation state, not a real failure — log it at Debug like the
+			// rest of the adapter rather than spamming ERROR.
+			if errors.Is(err, sqlite.ErrMessageLimitReached) {
+				slog.Debug("[Web] chat at message limit; note not persisted", "conversation", conversationID)
+			} else {
+				slog.Error("[Web] persist note failed", "conversation", conversationID, "err", err)
+			}
+			return
+		}
+		messageID = msg.ID
+	}
+	if h.connManager != nil {
+		h.connManager.Broadcast(conversationID, NewNoteEvent(messageID, content, time.Now().UTC().Format(time.RFC3339)))
+	}
+}
+
+// noteContent is the ghost-note text recorded when an interaction resolves: a
+// compact record of what the user answered. A tool-permission ask reads as an
+// approve/deny; a submitted form as its field values ("Answered · Date: … · …");
+// a "write your own reply" as the prose itself. Returns "" for actions that leave
+// no record (cancel), so the caller skips the note.
+func noteContent(action pb.RenderableAction, r *pb.Renderable, resp *pb.RenderableResponse) string {
+	isPermission := r.GetIntent() == intentToolPermission
+	switch action {
+	case pb.RenderableAction_RENDERABLE_ACTION_SUBMIT:
+		if isPermission {
+			return "Approved"
+		}
+		if answers := summarizeSubmission(resp.GetContentJson(), r.GetDataSchemaJson()); answers != "" {
+			return "Answered · " + answers
+		}
+		return "Submitted"
+	case pb.RenderableAction_RENDERABLE_ACTION_DECLINE:
+		if isPermission {
+			return "Denied"
+		}
+		return "Declined"
+	case pb.RenderableAction_RENDERABLE_ACTION_RESPOND:
+		return strings.TrimSpace(resp.GetText())
+	default:
+		return ""
+	}
+}
+
+// summarizeSubmission renders a submitted form's values as a compact one-line
+// record ("Date: 2027-06-23 · Attendees: 12"), preferring each field's schema
+// title over the raw property key and formatting scalar values. Non-scalar fields
+// (nested objects, arrays) are omitted. Returns "" when the content isn't a JSON
+// object or has no scalar fields, so the caller falls back to a generic label.
+func summarizeSubmission(contentJSON, schemaJSON string) string {
+	var values map[string]json.RawMessage
+	if json.Unmarshal([]byte(contentJSON), &values) != nil || len(values) == 0 {
+		return ""
+	}
+	titles := schemaTitles(schemaJSON)
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		v := scalarString(values[k])
+		if v == "" {
+			continue
+		}
+		label := titles[k]
+		if label == "" {
+			label = humanizeKey(k)
+		}
+		parts = append(parts, label+": "+v)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// schemaTitles maps each top-level property to its schema title, for humanizing
+// field labels in a submission summary. Empty for a schema without titles.
+func schemaTitles(schemaJSON string) map[string]string {
+	var schema struct {
+		Properties map[string]struct {
+			Title string `json:"title"`
+		} `json:"properties"`
+	}
+	titles := make(map[string]string)
+	if json.Unmarshal([]byte(schemaJSON), &schema) != nil {
+		return titles
+	}
+	for k, p := range schema.Properties {
+		if p.Title != "" {
+			titles[k] = p.Title
+		}
+	}
+	return titles
+}
+
+// scalarString renders a JSON scalar (string, number, bool) as plain text for a
+// submission summary. Non-scalars (object, array, null) return "" so the summary
+// stays a one-line record rather than dumping nested JSON.
+func scalarString(raw json.RawMessage) string {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case string:
+		return t
+	case bool:
+		if t {
+			return "yes"
+		}
+		return "no"
+	case float64:
+		if t == float64(int64(t)) {
+			return fmt.Sprintf("%d", int64(t))
+		}
+		return fmt.Sprintf("%g", t)
+	default:
+		return ""
+	}
+}
+
+// humanizeKey turns a property key into a readable label: snake_case / kebab-case
+// separators become spaces, camelCase boundaries are split, and the first letter
+// is capitalized ("meetingDate" → "Meeting date", "attendee_count" → "Attendee
+// count"). Used only when the schema provides no title for the field.
+func humanizeKey(k string) string {
+	var b strings.Builder
+	for i := 0; i < len(k); i++ {
+		c := k[i]
+		switch {
+		case c == '_' || c == '-':
+			b.WriteByte(' ')
+		case c >= 'A' && c <= 'Z' && i > 0 && k[i-1] >= 'a' && k[i-1] <= 'z':
+			b.WriteByte(' ')
+			b.WriteByte(c - 'A' + 'a')
+		default:
+			b.WriteByte(c)
+		}
+	}
+	s := strings.TrimSpace(b.String())
+	if s != "" && s[0] >= 'a' && s[0] <= 'z' {
+		s = string(s[0]-'a'+'A') + s[1:]
+	}
+	return s
 }
 
 // emitRenderableResponse forwards a response to the local agent over the feedback

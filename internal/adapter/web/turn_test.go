@@ -350,3 +350,51 @@ func TestTurnTracker_GatedEndKeepsFreshResentTurn(t *testing.T) {
 		t.Fatal("fresh turn must remain reapable after the stale END cleanup")
 	}
 }
+
+// enterAwaiting suspends the idle reaper (the agent is legitimately blocked on
+// the user, not stalled); resume re-arms it.
+func TestTurnTracker_AwaitingSuspendsReaper(t *testing.T) {
+	fired := make(chan string, 1)
+	tr := newTurnTracker()
+	tr.setIdleReaper(40*time.Millisecond, func(conv string) { fired <- conv })
+
+	tr.startTurn("c")
+	tr.enterAwaiting("c")
+	select {
+	case <-fired:
+		t.Fatal("reaper fired while awaiting an interaction response")
+	case <-time.After(120 * time.Millisecond):
+	}
+
+	tr.resume("c")
+	select {
+	case conv := <-fired:
+		if conv != "c" {
+			t.Fatalf("reaper fired for %q, want %q", conv, "c")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("reaper did not fire after resume re-armed it")
+	}
+}
+
+// endTurn hands back a queued "write your own reply" and clears the turn; with
+// nothing queued it returns nil.
+func TestTurnTracker_EndTurnReturnsPending(t *testing.T) {
+	tr := newTurnTracker()
+	tr.startTurn("c")
+	tr.enterAwaiting("c")
+	tr.setPendingRespond("c", "alice", "Tuesday at 2pm")
+
+	pending := tr.endTurn("c")
+	if pending == nil || pending.userID != "alice" || pending.text != "Tuesday at 2pm" {
+		t.Fatalf("endTurn pending: got %+v, want alice/Tuesday at 2pm", pending)
+	}
+	if tr.isStreaming("c") {
+		t.Error("turn should be cleared after endTurn")
+	}
+
+	tr.startTurn("c")
+	if p := tr.endTurn("c"); p != nil {
+		t.Errorf("endTurn with no queued respond: got %+v, want nil", p)
+	}
+}

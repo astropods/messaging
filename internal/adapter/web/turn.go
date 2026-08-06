@@ -16,15 +16,41 @@ import (
 // dies mid-turn), so neither map can grow without bound over a long-lived process.
 const maxTrackedStops = 4096
 
+// turnPhase is the lifecycle phase of an in-flight turn. A conversation with no
+// turnState is idle (no phase). streaming and awaiting are the two phases a
+// tracked turn can be in.
+type turnPhase uint8
+
+const (
+	// phaseStreaming: the agent is (or will be) producing output. Zero value, so a
+	// freshly-started turn is streaming by default.
+	phaseStreaming turnPhase = iota
+	// phaseAwaiting: the turn is paused on a blocking interaction, waiting for the
+	// user. The idle watchdog is suspended (the agent is legitimately blocked, not
+	// hung), so a user pondering a form is never reaped.
+	phaseAwaiting
+)
+
+// pendingRespond is a "write your own reply" queued on an awaiting turn: the
+// user answered in prose, so once this turn finalizes the sidecar starts a fresh
+// turn with the text (see endTurn / injectRespond). Held on the turn so the new
+// turn can only begin after this one reaches idle — the ordering is structural.
+type pendingRespond struct {
+	userID string
+	text   string
+}
+
 // turnState is the per-conversation streaming state for one in-flight turn: the
-// partial assistant text seen so far, the last time it was progressively
-// persisted (used to throttle mid-stream chat-store writes), and the idle
-// watchdog that reaps the turn if the agent goes silent.
+// lifecycle phase, the partial assistant text seen so far, the last time it was
+// progressively persisted (used to throttle mid-stream chat-store writes), and
+// the idle watchdog that reaps the turn if the agent goes silent.
 type turnState struct {
+	phase        turnPhase
 	partial      strings.Builder
 	lastPersist  time.Time
 	idleTimer    *time.Timer
 	idleDeadline time.Time
+	pending      *pendingRespond
 	// userStopped marks a turn the user stopped, so the idle watchdog and
 	// disconnect skip it. Per-turn and distinct from the conversation-level stopped
 	// drop-gate, so a fresh turn after a lingering gate is still reapable.
@@ -345,4 +371,75 @@ func (t *turnTracker) clearStoppedTurn(conversationID string) {
 	}
 	delete(t.turns, conversationID)
 	delete(t.stopped, conversationID)
+}
+
+// enterAwaiting moves an in-flight turn to the awaiting phase (paused on a
+// blocking interaction) and suspends the idle watchdog: the agent is legitimately
+// blocked on the user, not hung, so a user pondering a form must not be reaped.
+// No-op if no turn is tracked.
+func (t *turnTracker) enterAwaiting(conversationID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	st := t.turns[conversationID]
+	if st == nil {
+		return
+	}
+	st.phase = phaseAwaiting
+	stopIdleLocked(st)
+}
+
+// resume moves an awaiting turn back to streaming and re-arms the idle watchdog:
+// the user answered, so the agent is expected to act again (resume the tool,
+// finalize, or explain a decline). No-op if no turn is tracked.
+func (t *turnTracker) resume(conversationID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	st := t.turns[conversationID]
+	if st == nil {
+		return
+	}
+	st.phase = phaseStreaming
+	t.armIdleLocked(conversationID, st)
+}
+
+// setPendingRespond queues a "write your own reply" on the current turn: the user
+// answered in prose, so once this turn finalizes (endTurn) the sidecar starts a
+// fresh turn with the text. No-op if no turn is tracked.
+func (t *turnTracker) setPendingRespond(conversationID, userID, text string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if st := t.turns[conversationID]; st != nil {
+		st.pending = &pendingRespond{userID: userID, text: text}
+	}
+}
+
+// startFreshBuffer resets the partial buffer so the assistant's continuation
+// after an in-turn interaction (submit / decline resumes the same run)
+// accumulates on its own rather than concatenating onto the reply that preceded
+// the interaction. The persisted note between them is what splits the two into
+// separate rows; this only keeps the in-memory partial from carrying over. No-op
+// if no turn is tracked.
+func (t *turnTracker) startFreshBuffer(conversationID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if st := t.turns[conversationID]; st != nil {
+		st.partial.Reset()
+	}
+}
+
+// endTurn ends a turn on its terminal (END) chunk, clearing all state like clear,
+// and returns any queued "write your own reply" so the caller can start the
+// follow-up turn. Returns nil when nothing was queued. Because the follow-up can
+// only begin after this returns idle, the two turns can never overlap.
+func (t *turnTracker) endTurn(conversationID string) *pendingRespond {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var pending *pendingRespond
+	if st := t.turns[conversationID]; st != nil {
+		pending = st.pending
+		stopIdleLocked(st)
+	}
+	delete(t.turns, conversationID)
+	delete(t.stopped, conversationID)
+	return pending
 }

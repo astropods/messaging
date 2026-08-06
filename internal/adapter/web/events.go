@@ -24,6 +24,7 @@ const (
 	EventPrompts        = "prompts"
 	EventTranscript     = "transcript"
 	EventInteraction    = "interaction"
+	EventNote           = "note"
 )
 
 // SSEEvent represents a Server-Sent Event
@@ -66,6 +67,36 @@ type ChunkEventData struct {
 	PlatformMessageID string `json:"platform_message_id,omitempty"`
 	// Attachments carries agent-produced files, populated only on the END chunk.
 	Attachments []chatAttachment `json:"attachments,omitempty"`
+}
+
+// NoteEventData is a server-synthesized note the sidecar injects into the thread
+// when an interaction resolves: the ghost record of what the user answered
+// (submit/decline/respond) and the boundary that splits the agent's continuation
+// into its own bubble. It is a non-assistant, non-user role so the client renders
+// it as a muted ghost line, not a chat bubble; unlike a composer send it isn't
+// added optimistically, so it must arrive over SSE.
+type NoteEventData struct {
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	Content   string `json:"content"`
+	Timestamp string `json:"timestamp"`
+}
+
+// NewNoteEvent creates a note SSE event for a server-injected note. The id
+// matches the persisted note row so a reload reconciles to the same message.
+func NewNoteEvent(messageID, content, timestamp string) SSEEvent {
+	data := NoteEventData{
+		Type:      "note",
+		ID:        messageID,
+		Content:   content,
+		Timestamp: timestamp,
+	}
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		slog.Error("[Web] marshal note event failed", "err", err)
+		return SSEEvent{Event: EventNote, Data: "{}"}
+	}
+	return SSEEvent{Event: EventNote, Data: string(jsonData)}
 }
 
 // StatusEventData represents the data for a status update event

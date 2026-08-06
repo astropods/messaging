@@ -77,6 +77,44 @@ func testRenderable(id string, actions ...pb.RenderableAction) *pb.Renderable {
 	}
 }
 
+// testPermissionRenderable is a tool-approval ask (intent "tool_permission"), so
+// its resolved note reads "Approved"/"Denied" rather than "Submitted"/"Declined".
+func testPermissionRenderable(id string, actions ...pb.RenderableAction) *pb.Renderable {
+	r := testRenderable(id, actions...)
+	r.Intent = intentToolPermission
+	return r
+}
+
+// attachConn registers an SSE connection on a connection manager so a test can
+// drain the events broadcast to a conversation (e.g. the resolved-interaction note).
+func attachConn(cm *ConnectionManager) *SSEConnection {
+	conn := &SSEConnection{
+		ID:             "conn-note",
+		ConversationID: "conv",
+		EventChan:      make(chan SSEEvent, 20),
+		Done:           make(chan struct{}),
+	}
+	cm.Add(conn)
+	return conn
+}
+
+// noteEventContent returns the content of the first note event, or ("", false)
+// when none was broadcast.
+func noteEventContent(t *testing.T, events []SSEEvent) (string, bool) {
+	t.Helper()
+	for _, e := range events {
+		if e.Event != EventNote {
+			continue
+		}
+		var d NoteEventData
+		if err := json.Unmarshal([]byte(e.Data), &d); err != nil {
+			t.Fatalf("unmarshal note event: %v", err)
+		}
+		return d.Content, true
+	}
+	return "", false
+}
+
 func newTestAdapter(t *testing.T, opts ...WebAdapterOption) (*WebAdapter, *SSEConnection, *feedbackCapture) {
 	t.Helper()
 	a := New(opts...)
@@ -360,6 +398,41 @@ func TestHandleInteractionResponse_Decline(t *testing.T) {
 	}
 }
 
+// RESPOND ("write your own reply") is not an in-turn answer: the agent's current
+// turn is CANCELLED (so it finalizes) and the prose is queued as a pendingRespond
+// that the END handler turns into a fresh turn. The agent must never receive a
+// RESPOND response.
+func TestHandleInteractionResponse_RespondCancelsAndQueues(t *testing.T) {
+	h, its, fc := newEndpointHandlers(t)
+	h.turns = newTurnTracker()
+	h.turns.startTurn("conv")
+	h.turns.enterAwaiting("conv")
+	seedInteraction(t, its, "alice",
+		pb.RenderableAction_RENDERABLE_ACTION_SUBMIT,
+		pb.RenderableAction_RENDERABLE_ACTION_RESPOND,
+		pb.RenderableAction_RENDERABLE_ACTION_CANCEL)
+
+	w := httptest.NewRecorder()
+	h.HandleInteractionResponse(w, interactionRequest("alice", `{"action":"respond","text":"Tuesday at 2pm"}`))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%q", w.Code, w.Body.String())
+	}
+	// The agent is told to CANCEL its turn, never RESPOND.
+	if rr := fc.last().GetRenderableResponse(); rr == nil || rr.GetAction() != pb.RenderableAction_RENDERABLE_ACTION_CANCEL {
+		t.Fatalf("want CANCEL forwarded to agent, got %+v", fc.last())
+	}
+	// The prose is queued, surfaced when the cancelled turn reaches idle (endTurn).
+	pending := h.turns.endTurn("conv")
+	if pending == nil || pending.text != "Tuesday at 2pm" || pending.userID != "alice" {
+		t.Fatalf("pending respond not queued: %+v", pending)
+	}
+	it, _, _ := its.GetInteraction(context.Background(), "conv", "i1")
+	if it.Status == store.InteractionPending {
+		t.Errorf("interaction should be resolved after respond, got %q", it.Status)
+	}
+}
+
 func TestHandleInteractionResponse_ActionNotAllowed_400(t *testing.T) {
 	h, its, fc := newEndpointHandlers(t)
 	// RESPOND not offered.
@@ -402,5 +475,188 @@ func TestHandleInteractionResponse_NotFound_404(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d body=%q", w.Code, w.Body.String())
+	}
+}
+
+// --- Resolved-interaction ghost note ---
+
+// SUBMIT and DECLINE broadcast a ghost note before resuming the turn: the record
+// of what the user answered, and the boundary that splits the continuation into
+// its own bubble.
+func TestHandleInteractionResponse_SubmitAndDeclineBroadcastNote(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+		actions          []pb.RenderableAction
+	}{
+		{"submit", `{"action":"submit","content":{"name":"octocat"}}`, "Answered · Name: octocat",
+			[]pb.RenderableAction{pb.RenderableAction_RENDERABLE_ACTION_SUBMIT, pb.RenderableAction_RENDERABLE_ACTION_CANCEL}},
+		{"decline", `{"action":"decline"}`, "Declined",
+			[]pb.RenderableAction{pb.RenderableAction_RENDERABLE_ACTION_DECLINE, pb.RenderableAction_RENDERABLE_ACTION_CANCEL}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, its, _ := newEndpointHandlers(t)
+			conn := attachConn(h.connManager)
+			seedInteraction(t, its, "alice", tc.actions...)
+
+			w := httptest.NewRecorder()
+			h.HandleInteractionResponse(w, interactionRequest("alice", tc.body))
+			if w.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d body=%q", w.Code, w.Body.String())
+			}
+			content, ok := noteEventContent(t, drainSSE(conn))
+			if !ok || content != tc.want {
+				t.Fatalf("note: got (%q, %v), want (%q, true)", content, ok, tc.want)
+			}
+		})
+	}
+}
+
+// A tool-permission ask reads as approve/deny rather than submit/decline.
+func TestHandleInteractionResponse_PermissionNoteWording(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"approve", `{"action":"submit","content":{"name":"octocat"}}`, "Approved"},
+		{"deny", `{"action":"decline"}`, "Denied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, its, _ := newEndpointHandlers(t)
+			conn := attachConn(h.connManager)
+			if _, err := its.AppendInteraction(context.Background(), "conv", "alice",
+				testPermissionRenderable("i1",
+					pb.RenderableAction_RENDERABLE_ACTION_SUBMIT,
+					pb.RenderableAction_RENDERABLE_ACTION_DECLINE,
+					pb.RenderableAction_RENDERABLE_ACTION_CANCEL)); err != nil {
+				t.Fatalf("seed permission: %v", err)
+			}
+
+			w := httptest.NewRecorder()
+			h.HandleInteractionResponse(w, interactionRequest("alice", tc.body))
+			if w.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d body=%q", w.Code, w.Body.String())
+			}
+			content, ok := noteEventContent(t, drainSSE(conn))
+			if !ok || content != tc.want {
+				t.Fatalf("note: got (%q, %v), want (%q, true)", content, ok, tc.want)
+			}
+		})
+	}
+}
+
+// CANCEL is a dismissal — no answer to record and the turn aborts — so it
+// broadcasts no note.
+func TestHandleInteractionResponse_CancelBroadcastsNoNote(t *testing.T) {
+	h, its, _ := newEndpointHandlers(t)
+	conn := attachConn(h.connManager)
+	seedInteraction(t, its, "alice", pb.RenderableAction_RENDERABLE_ACTION_SUBMIT)
+
+	w := httptest.NewRecorder()
+	h.HandleInteractionResponse(w, interactionRequest("alice", `{"action":"cancel"}`))
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%q", w.Code, w.Body.String())
+	}
+	if content, ok := noteEventContent(t, drainSSE(conn)); ok {
+		t.Fatalf("cancel must not broadcast a note, got %q", content)
+	}
+}
+
+// RESPOND defers its note to the follow-up turn (injectRespond), so the endpoint
+// itself broadcasts none — the ghost lands just before the fresh reply, not while
+// the cancelled turn is still finalizing.
+func TestHandleInteractionResponse_RespondDefersNote(t *testing.T) {
+	h, its, _ := newEndpointHandlers(t)
+	h.turns = newTurnTracker()
+	h.turns.startTurn("conv")
+	h.turns.enterAwaiting("conv")
+	conn := attachConn(h.connManager)
+	seedInteraction(t, its, "alice",
+		pb.RenderableAction_RENDERABLE_ACTION_SUBMIT,
+		pb.RenderableAction_RENDERABLE_ACTION_RESPOND,
+		pb.RenderableAction_RENDERABLE_ACTION_CANCEL)
+
+	w := httptest.NewRecorder()
+	h.HandleInteractionResponse(w, interactionRequest("alice", `{"action":"respond","text":"Tuesday at 2pm"}`))
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%q", w.Code, w.Body.String())
+	}
+	if content, ok := noteEventContent(t, drainSSE(conn)); ok {
+		t.Fatalf("respond must not broadcast a note at endpoint time, got %q", content)
+	}
+}
+
+func TestSummarizeSubmission(t *testing.T) {
+	schema := `{"type":"object","properties":{
+		"meetingDate":{"type":"string","title":"Date"},
+		"attendee_count":{"type":"integer"},
+		"recurring":{"type":"boolean"}
+	}}`
+	// Schema title wins ("Date"); no-title keys humanize ("attendee_count" ->
+	// "Attendee count"); scalars format (int without ".0", bool as yes/no); keys
+	// are alphabetical for determinism.
+	got := summarizeSubmission(`{"meetingDate":"2027-06-23","attendee_count":12,"recurring":true}`, schema)
+	if got != "Attendee count: 12 · Date: 2027-06-23 · Recurring: yes" {
+		t.Fatalf("summary: got %q", got)
+	}
+}
+
+func TestSummarizeSubmission_NonObjectOrEmpty(t *testing.T) {
+	if s := summarizeSubmission(`[]`, `{}`); s != "" {
+		t.Errorf("array content: got %q, want empty", s)
+	}
+	if s := summarizeSubmission(`{}`, `{}`); s != "" {
+		t.Errorf("empty object: got %q, want empty", s)
+	}
+	// Non-scalar fields are omitted, leaving nothing to summarize.
+	if s := summarizeSubmission(`{"tags":["a","b"]}`, `{}`); s != "" {
+		t.Errorf("non-scalar field: got %q, want empty", s)
+	}
+}
+
+// injectRespond records the prose as the ghost note and forwards it to the agent
+// as the follow-up turn.
+func TestInjectRespond_NotesProseAndForwards(t *testing.T) {
+	h, _, _ := newEndpointHandlers(t)
+	h.turns = newTurnTracker()
+	conn := attachConn(h.connManager)
+	var forwarded string
+	h.SetMessageHandler(func(_ context.Context, m *pb.Message) error {
+		forwarded = m.Content
+		return nil
+	})
+
+	h.injectRespond(context.Background(), "conv", &pendingRespond{userID: "alice", text: "Tuesday at 2pm"})
+
+	content, ok := noteEventContent(t, drainSSE(conn))
+	if !ok || content != "Tuesday at 2pm" {
+		t.Fatalf("respond note: got (%q, %v), want the prose", content, ok)
+	}
+	if forwarded != "Tuesday at 2pm" {
+		t.Fatalf("prose not forwarded to agent: %q", forwarded)
+	}
+}
+
+// When the follow-up forward fails, injectRespond must resolve the live SSE
+// stream with an error (the END handler withheld the finish so the stream stayed
+// open for this reply) and clear the turn, rather than leaving the client hung.
+func TestInjectRespond_ForwardFailureSurfacesError(t *testing.T) {
+	h, _, _ := newEndpointHandlers(t)
+	h.turns = newTurnTracker()
+	h.turns.startTurn("conv")
+	conn := attachConn(h.connManager)
+	h.SetMessageHandler(func(_ context.Context, _ *pb.Message) error {
+		return adapter.ErrNoAgentStream
+	})
+
+	h.injectRespond(context.Background(), "conv", &pendingRespond{userID: "alice", text: "Tuesday at 2pm"})
+
+	events := drainSSE(conn)
+	if content, ok := noteEventContent(t, events); !ok || content != "Tuesday at 2pm" {
+		t.Fatalf("respond note still recorded: got (%q, %v)", content, ok)
+	}
+	if !hasEvent(events, EventError) {
+		t.Fatalf("forward failure must broadcast an error event; got %+v", events)
+	}
+	if h.turns.isStreaming("conv") {
+		t.Errorf("turn should be cleared after a failed forward")
 	}
 }
