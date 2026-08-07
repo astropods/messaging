@@ -526,6 +526,12 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		}
 
 	case *pb.AgentResponse_Renderable:
+		// Drop a stopped turn's straggler Renderable like its content — don't persist
+		// a pending interaction or transition a cancelled turn. A new turn's START
+		// lifts the gate before its own Renderable arrives.
+		if a.turns != nil && a.turns.isStopped(conversationID) {
+			return nil
+		}
 		// Pause the turn and flush the reply-so-far before emitting the interaction, so a reload while paused shows the full preamble rather than a throttle-lagged partial.
 		if a.turns != nil {
 			a.turns.enterAwaiting(conversationID)

@@ -16,25 +16,14 @@ import (
 // dies mid-turn), so neither map can grow without bound over a long-lived process.
 const maxTrackedStops = 4096
 
-// turnPhase is the lifecycle phase of an in-flight turn (no turnState = idle).
-type turnPhase uint8
-
-const (
-	// phaseStreaming: the agent is producing output (zero value — a fresh turn's default).
-	phaseStreaming turnPhase = iota
-	// phaseAwaiting: paused on a blocking interaction; the idle watchdog is suspended so a user pondering a form isn't reaped.
-	phaseAwaiting
-)
-
 // pendingRespond is a queued "write your own reply", held on the turn so the fresh turn begins only after this one reaches idle (see endTurn / injectRespond).
 type pendingRespond struct {
 	userID string
 	text   string
 }
 
-// turnState is the per-conversation state for one in-flight turn: phase, buffered assistant text, last progressive-persist time, and the idle watchdog.
+// turnState is the per-conversation state for one in-flight turn: buffered assistant text, last progressive-persist time, and the idle watchdog.
 type turnState struct {
-	phase        turnPhase
 	partial      strings.Builder
 	lastPersist  time.Time
 	idleTimer    *time.Timer
@@ -325,6 +314,15 @@ func (t *turnTracker) gateContent(conversationID string, isStart bool) (drop boo
 	return true
 }
 
+// isStopped reports whether a conversation is gated by a stop. Used to drop a
+// stopped turn's straggler output that isn't a content chunk (a Renderable), which
+// gateContent doesn't cover. A new turn's START lifts the gate via gateContent.
+func (t *turnTracker) isStopped(conversationID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stopped[conversationID]
+}
+
 // clear drops all state for a conversation's turn (called when a turn ends
 // normally so the maps don't grow unbounded).
 func (t *turnTracker) clear(conversationID string) {
@@ -363,7 +361,6 @@ func (t *turnTracker) enterAwaiting(conversationID string) {
 	if st == nil {
 		return
 	}
-	st.phase = phaseAwaiting
 	stopIdleLocked(st)
 }
 
@@ -375,7 +372,6 @@ func (t *turnTracker) resume(conversationID string) {
 	if st == nil {
 		return
 	}
-	st.phase = phaseStreaming
 	t.armIdleLocked(conversationID, st)
 }
 

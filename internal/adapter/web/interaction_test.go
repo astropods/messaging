@@ -192,6 +192,33 @@ func TestRenderable_EmitsInteraction(t *testing.T) {
 	}
 }
 
+// A stopped turn's straggler Renderable is dropped: it's neither emitted nor
+// persisted, so a stop can't be followed by an interaction on the cancelled turn.
+func TestRenderable_DroppedForStoppedTurn(t *testing.T) {
+	its := store.NewMemoryInteractionStore()
+	a, conn, _ := newTestAdapter(t, WithInteractionStore(its))
+	a.turns.startTurn("conv")
+	a.turns.stop("conv") // user stop; the gate lingers past the agent's straggler
+
+	if err := a.HandleAgentResponse(context.Background(), &pb.AgentResponse{
+		ConversationId: "conv",
+		Payload: &pb.AgentResponse_Renderable{
+			Renderable: testRenderable("i1",
+				pb.RenderableAction_RENDERABLE_ACTION_SUBMIT,
+				pb.RenderableAction_RENDERABLE_ACTION_CANCEL),
+		},
+	}); err != nil {
+		t.Fatalf("HandleAgentResponse: %v", err)
+	}
+
+	if hasEvent(drainSSE(conn), EventInteraction) {
+		t.Fatal("a stopped turn's straggler Renderable must not emit an interaction")
+	}
+	if _, found, _ := its.GetInteraction(context.Background(), "conv", "i1"); found {
+		t.Fatal("a stopped turn's straggler Renderable must not be persisted")
+	}
+}
+
 // A malformed data schema is dropped, not emitted or persisted.
 func TestRenderable_MalformedSchemaDropped(t *testing.T) {
 	a, conn, _ := newTestAdapter(t)
