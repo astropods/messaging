@@ -24,7 +24,7 @@ const (
 	EventPrompts        = "prompts"
 	EventTranscript     = "transcript"
 	EventInteraction    = "interaction"
-	EventNote           = "note"
+	EventInjected       = "injected"
 )
 
 // SSEEvent represents a Server-Sent Event
@@ -69,28 +69,30 @@ type ChunkEventData struct {
 	Attachments []chatAttachment `json:"attachments,omitempty"`
 }
 
-// NoteEventData is a server-injected note marking a resolved interaction: the record of what the user answered and the boundary that starts the continuation's own bubble.
-type NoteEventData struct {
+// InjectedMessageData is a server-injected thread row the client didn't send — a resolved-interaction note (role "note", a grey line) or a "write your own reply" (role "user", a bubble) — and the boundary that starts the continuation's own bubble.
+type InjectedMessageData struct {
 	Type      string `json:"type"`
 	ID        string `json:"id"`
+	Role      string `json:"role"`
 	Content   string `json:"content"`
 	Timestamp string `json:"timestamp"`
 }
 
-// NewNoteEvent creates a note SSE event; the id matches the persisted row so a reload reconciles to the same message.
-func NewNoteEvent(messageID, content, timestamp string) SSEEvent {
-	data := NoteEventData{
-		Type:      "note",
+// NewInjectedMessageEvent creates an injected-message SSE event; the id matches the persisted row so a reload reconciles to the same message.
+func NewInjectedMessageEvent(messageID, role, content, timestamp string) SSEEvent {
+	data := InjectedMessageData{
+		Type:      "injected",
 		ID:        messageID,
+		Role:      role,
 		Content:   content,
 		Timestamp: timestamp,
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		slog.Error("[Web] marshal note event failed", "err", err)
-		return SSEEvent{Event: EventNote, Data: "{}"}
+		slog.Error("[Web] marshal injected message event failed", "err", err)
+		return SSEEvent{Event: EventInjected, Data: "{}"}
 	}
-	return SSEEvent{Event: EventNote, Data: string(jsonData)}
+	return SSEEvent{Event: EventInjected, Data: string(jsonData)}
 }
 
 // StatusEventData represents the data for a status update event

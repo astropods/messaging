@@ -98,21 +98,29 @@ func attachConn(cm *ConnectionManager) *SSEConnection {
 	return conn
 }
 
-// noteEventContent returns the content of the first note event, or ("", false)
-// when none was broadcast.
-func noteEventContent(t *testing.T, events []SSEEvent) (string, bool) {
-	t.Helper()
-	for _, e := range events {
-		if e.Event != EventNote {
-			continue
-		}
-		var d NoteEventData
-		if err := json.Unmarshal([]byte(e.Data), &d); err != nil {
-			t.Fatalf("unmarshal note event: %v", err)
-		}
+// injectedContent returns the content of the first injected-message event, or
+// ("", false) when none was broadcast.
+func injectedContent(t *testing.T, events []SSEEvent) (string, bool) {
+	if d, ok := injectedMessage(t, events); ok {
 		return d.Content, true
 	}
 	return "", false
+}
+
+// injectedMessage returns the first injected-message event's data (role/content).
+func injectedMessage(t *testing.T, events []SSEEvent) (InjectedMessageData, bool) {
+	t.Helper()
+	for _, e := range events {
+		if e.Event != EventInjected {
+			continue
+		}
+		var d InjectedMessageData
+		if err := json.Unmarshal([]byte(e.Data), &d); err != nil {
+			t.Fatalf("unmarshal injected message event: %v", err)
+		}
+		return d, true
+	}
+	return InjectedMessageData{}, false
 }
 
 func newTestAdapter(t *testing.T, opts ...WebAdapterOption) (*WebAdapter, *SSEConnection, *feedbackCapture) {
@@ -452,9 +460,9 @@ func TestHandleInteractionResponse_RespondNoTurnForwardsImmediately(t *testing.T
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d body=%q", w.Code, w.Body.String())
 	}
-	content, ok := noteEventContent(t, drainSSE(conn))
-	if !ok || content != "Tuesday at 2pm" {
-		t.Fatalf("respond note: got (%q, %v), want the trimmed prose", content, ok)
+	msg, ok := injectedMessage(t, drainSSE(conn))
+	if !ok || msg.Role != "user" || msg.Content != "Tuesday at 2pm" {
+		t.Fatalf("respond message: got %+v (ok=%v), want a user message with the trimmed prose", msg, ok)
 	}
 	if forwarded != "Tuesday at 2pm" {
 		t.Fatalf("prose not forwarded as a fresh turn: %q", forwarded)
@@ -555,9 +563,9 @@ func TestHandleInteractionResponse_SubmitAndDeclineBroadcastNote(t *testing.T) {
 			if w.Code != http.StatusOK {
 				t.Fatalf("want 200, got %d body=%q", w.Code, w.Body.String())
 			}
-			content, ok := noteEventContent(t, drainSSE(conn))
-			if !ok || content != tc.want {
-				t.Fatalf("note: got (%q, %v), want (%q, true)", content, ok, tc.want)
+			msg, ok := injectedMessage(t, drainSSE(conn))
+			if !ok || msg.Role != "note" || msg.Content != tc.want {
+				t.Fatalf("note: got %+v (ok=%v), want a note %q", msg, ok, tc.want)
 			}
 		})
 	}
@@ -587,9 +595,9 @@ func TestHandleInteractionResponse_PermissionNoteWording(t *testing.T) {
 			if w.Code != http.StatusOK {
 				t.Fatalf("want 200, got %d body=%q", w.Code, w.Body.String())
 			}
-			content, ok := noteEventContent(t, drainSSE(conn))
-			if !ok || content != tc.want {
-				t.Fatalf("note: got (%q, %v), want (%q, true)", content, ok, tc.want)
+			msg, ok := injectedMessage(t, drainSSE(conn))
+			if !ok || msg.Role != "note" || msg.Content != tc.want {
+				t.Fatalf("note: got %+v (ok=%v), want a note %q", msg, ok, tc.want)
 			}
 		})
 	}
@@ -607,7 +615,7 @@ func TestHandleInteractionResponse_CancelBroadcastsNoNote(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d body=%q", w.Code, w.Body.String())
 	}
-	if content, ok := noteEventContent(t, drainSSE(conn)); ok {
+	if content, ok := injectedContent(t, drainSSE(conn)); ok {
 		t.Fatalf("cancel must not broadcast a note, got %q", content)
 	}
 }
@@ -629,7 +637,7 @@ func TestHandleInteractionResponse_RespondDefersNote(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d body=%q", w.Code, w.Body.String())
 	}
-	if content, ok := noteEventContent(t, drainSSE(conn)); ok {
+	if content, ok := injectedContent(t, drainSSE(conn)); ok {
 		t.Fatalf("respond must not broadcast a note at endpoint time, got %q", content)
 	}
 }
@@ -660,9 +668,9 @@ func TestSummarizeSubmission_NonObjectOrEmpty(t *testing.T) {
 	}
 }
 
-// injectRespond records the prose as the ghost note and forwards it to the agent
+// injectRespond records the prose as a user message and forwards it to the agent
 // as the follow-up turn.
-func TestInjectRespond_NotesProseAndForwards(t *testing.T) {
+func TestInjectRespond_RecordsUserMessageAndForwards(t *testing.T) {
 	h, _, _ := newEndpointHandlers(t)
 	h.turns = newTurnTracker()
 	conn := attachConn(h.connManager)
@@ -674,9 +682,9 @@ func TestInjectRespond_NotesProseAndForwards(t *testing.T) {
 
 	h.injectRespond(context.Background(), "conv", &pendingRespond{userID: "alice", text: "Tuesday at 2pm"})
 
-	content, ok := noteEventContent(t, drainSSE(conn))
-	if !ok || content != "Tuesday at 2pm" {
-		t.Fatalf("respond note: got (%q, %v), want the prose", content, ok)
+	msg, ok := injectedMessage(t, drainSSE(conn))
+	if !ok || msg.Role != "user" || msg.Content != "Tuesday at 2pm" {
+		t.Fatalf("respond message: got %+v (ok=%v), want a user message with the prose", msg, ok)
 	}
 	if forwarded != "Tuesday at 2pm" {
 		t.Fatalf("prose not forwarded to agent: %q", forwarded)
@@ -696,8 +704,8 @@ func TestInjectRespond_ForwardFailureSurfacesError(t *testing.T) {
 	h.injectRespond(context.Background(), "conv", &pendingRespond{userID: "alice", text: "Tuesday at 2pm"})
 
 	events := drainSSE(conn)
-	if content, ok := noteEventContent(t, events); !ok || content != "Tuesday at 2pm" {
-		t.Fatalf("respond note still recorded: got (%q, %v)", content, ok)
+	if msg, ok := injectedMessage(t, events); !ok || msg.Role != "user" || msg.Content != "Tuesday at 2pm" {
+		t.Fatalf("respond user message still recorded: got %+v (ok=%v)", msg, ok)
 	}
 	if !hasEvent(events, EventError) {
 		t.Fatalf("forward failure must broadcast an error event; got %+v", events)
@@ -723,8 +731,8 @@ func TestFailTurn_DeliversQueuedRespond(t *testing.T) {
 	a.failTurn(context.Background(), "conv", "The agent disconnected.")
 
 	events := drainSSE(conn)
-	if content, ok := noteEventContent(t, events); !ok || content != "Tuesday at 2pm" {
-		t.Fatalf("queued respond note: got (%q, %v), want the prose", content, ok)
+	if msg, ok := injectedMessage(t, events); !ok || msg.Role != "user" || msg.Content != "Tuesday at 2pm" {
+		t.Fatalf("queued respond user message: got %+v (ok=%v)", msg, ok)
 	}
 	if hasEvent(events, EventError) {
 		t.Fatal("a delivered respond must not also broadcast the stall error")
@@ -755,8 +763,8 @@ func TestAgentError_DeliversQueuedRespond(t *testing.T) {
 	}
 
 	events := drainSSE(conn)
-	if content, ok := noteEventContent(t, events); !ok || content != "Tuesday at 2pm" {
-		t.Fatalf("queued respond note: got (%q, %v), want the prose", content, ok)
+	if msg, ok := injectedMessage(t, events); !ok || msg.Role != "user" || msg.Content != "Tuesday at 2pm" {
+		t.Fatalf("queued respond user message: got %+v (ok=%v)", msg, ok)
 	}
 	if hasEvent(events, EventError) {
 		t.Fatal("a delivered respond must not also surface the agent error")

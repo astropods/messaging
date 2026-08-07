@@ -172,7 +172,7 @@ func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Requ
 		if h.turns != nil {
 			h.turns.startFreshBuffer(conversationID)
 		}
-		h.persistNote(ctx, conversationID, noteContent(action, it.Renderable, resp))
+		h.persistInjected(ctx, conversationID, "", "note", noteContent(action, it.Renderable, resp))
 		h.emitRenderableResponse(ctx, conversationID, session.UserID, resp)
 	default: // CANCEL — the turn aborts, no continuation and no record to keep.
 		h.emitRenderableResponse(ctx, conversationID, session.UserID, resp)
@@ -183,9 +183,9 @@ func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// injectRespond starts the follow-up turn for a "write your own reply": records the prose as a note, then forwards it as a fresh turn. Called from the END handler after the cancelled turn finalizes, so the two never overlap.
+// injectRespond starts the follow-up turn for a "write your own reply": records the prose as a user message, then forwards it as a fresh turn. Called from a terminal handler once the cancelled turn finalizes (or directly when no turn is live), so the two never overlap.
 func (h *Handlers) injectRespond(ctx context.Context, conversationID string, p *pendingRespond) {
-	h.persistNote(ctx, conversationID, p.text)
+	h.persistInjected(ctx, conversationID, p.userID, "user", p.text)
 	if h.msgHandler == nil {
 		slog.Warn("[Web] no message handler; respond not delivered", "conversation", conversationID)
 		return
@@ -225,27 +225,27 @@ func (h *Handlers) injectRespond(ctx context.Context, conversationID string, p *
 // intentToolPermission marks a tool-approval ask, which reads as Approved/Denied rather than Submitted/Declined.
 const intentToolPermission = "tool_permission"
 
-// persistNote records a resolved interaction as a ghost note and broadcasts it; the row and SSE event share an id so a reload reconciles. No-op for empty content.
-func (h *Handlers) persistNote(ctx context.Context, conversationID, content string) {
+// persistInjected records a server-injected thread row — a resolved-interaction note (role "note") or a "write your own reply" (role "user") — and broadcasts it; the row and SSE event share an id so a reload reconciles. No-op for empty content.
+func (h *Handlers) persistInjected(ctx context.Context, conversationID, userID, role, content string) {
 	if strings.TrimSpace(content) == "" {
 		return
 	}
 	messageID := uuid.NewString()
 	if h.chatStore != nil {
-		msg, err := h.chatStore.AppendMessage(ctx, conversationID, "", "note", content, "")
+		msg, err := h.chatStore.AppendMessage(ctx, conversationID, userID, role, content, "")
 		if err != nil {
-			// Don't broadcast a note that didn't persist: a reload wouldn't show it and the continuation would clobber the preamble row. The cap is expected — log at Debug, not ERROR.
+			// Don't broadcast a row that didn't persist: a reload wouldn't show it and the continuation would clobber the preamble row. The cap is expected — log at Debug, not ERROR.
 			if errors.Is(err, sqlite.ErrMessageLimitReached) {
-				slog.Debug("[Web] chat at message limit; note not persisted", "conversation", conversationID)
+				slog.Debug("[Web] chat at message limit; injected row not persisted", "conversation", conversationID)
 			} else {
-				slog.Error("[Web] persist note failed", "conversation", conversationID, "err", err)
+				slog.Error("[Web] persist injected row failed", "conversation", conversationID, "err", err)
 			}
 			return
 		}
 		messageID = msg.ID
 	}
 	if h.connManager != nil {
-		h.connManager.Broadcast(conversationID, NewNoteEvent(messageID, content, time.Now().UTC().Format(time.RFC3339)))
+		h.connManager.Broadcast(conversationID, NewInjectedMessageEvent(messageID, role, content, time.Now().UTC().Format(time.RFC3339)))
 	}
 }
 
