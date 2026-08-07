@@ -339,6 +339,15 @@ func (a *WebAdapter) HandleAgentDisconnect(ctx context.Context, conversationID s
 	}
 }
 
+// startPendingRespond delivers a queued "write your own reply" as its follow-up turn (returns whether one was queued) — the single point every terminal path routes through, so a queued respond is never dropped.
+func (a *WebAdapter) startPendingRespond(ctx context.Context, conversationID string, pending *pendingRespond) bool {
+	if pending == nil {
+		return false
+	}
+	a.handlers.injectRespond(ctx, conversationID, pending)
+	return true
+}
+
 // failTurn abnormally terminates an in-flight turn: finalize the store row (so it
 // stops deriving assistant_streaming), broadcast a retryable error, and close the
 // conversation's SSE connections. failActive claims the turn atomically, so this
@@ -347,8 +356,12 @@ func (a *WebAdapter) failTurn(ctx context.Context, conversationID, message strin
 	if a.turns == nil {
 		return
 	}
-	partial, ok := a.turns.failActive(conversationID)
+	pending, partial, ok := a.turns.failActive(conversationID)
 	if !ok {
+		return
+	}
+	// A queued "write your own reply" is delivered as its follow-up turn rather than dropped here (injectRespond surfaces AGENT_UNAVAILABLE if the agent is truly gone).
+	if a.startPendingRespond(ctx, conversationID, pending) {
 		return
 	}
 	// Log every surfaced abnormal termination; it reaches the client as an in-band
@@ -416,12 +429,6 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		event := NewChunkEvent(payload.Content, response.ResponseId, agentAttachments)
 		a.connManager.Broadcast(conversationID, event)
 
-		// Send finish event on END chunk
-		if payload.Content.Type == pb.ContentChunk_END {
-			finishEvent := NewFinishEvent(response.ResponseId)
-			a.connManager.Broadcast(conversationID, finishEvent)
-		}
-
 		// Store message content for thread history
 		if a.threadStore != nil && payload.Content.Type == pb.ContentChunk_END {
 			a.threadStore.AddMessage(conversationID, &pb.ThreadMessage{
@@ -452,7 +459,9 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 						content = buffered
 					}
 				}
-				if _, err := a.chatStore.UpsertAssistantProgress(ctx, conversationID, content, marshalAttachments(agentAttachments)); err != nil {
+				// A persisted note (non-assistant row) is the boundary, so this appends a new row for the continuation instead of updating the pre-interaction reply.
+				_, err := a.chatStore.UpsertAssistantProgress(ctx, conversationID, content, marshalAttachments(agentAttachments))
+				if err != nil {
 					if errors.Is(err, sqlite.ErrMessageLimitReached) {
 						// Terminal per-conversation state, not a real failure — don't
 						// spam ERROR on every throttled write near the cap.
@@ -464,9 +473,15 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 			}
 		}
 
-		// Turn completed normally — drop per-turn tracker state.
-		if payload.Content.Type == pb.ContentChunk_END && a.turns != nil {
-			a.turns.clear(conversationID)
+		// On END, deliver a queued respond (its follow-up keeps the stream open) or finish the turn.
+		if payload.Content.Type == pb.ContentChunk_END {
+			var pending *pendingRespond
+			if a.turns != nil {
+				pending = a.turns.endTurn(conversationID)
+			}
+			if !a.startPendingRespond(ctx, conversationID, pending) {
+				a.connManager.Broadcast(conversationID, NewFinishEvent(response.ResponseId))
+			}
 		}
 
 	case *pb.AgentResponse_Status:
@@ -501,15 +516,35 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 				}
 			}
 		}
-		// The error terminates the turn; drop the per-turn tracker state (also
-		// lifts any stop-gate — a no-op when the conversation isn't stopped).
+		// Deliver a queued respond as its follow-up turn; otherwise surface the agent's error.
+		var pending *pendingRespond
 		if a.turns != nil {
-			a.turns.clear(conversationID)
+			pending = a.turns.endTurn(conversationID)
 		}
-		event := NewErrorEvent(payload.Error)
-		a.connManager.Broadcast(conversationID, event)
+		if !a.startPendingRespond(ctx, conversationID, pending) {
+			a.connManager.Broadcast(conversationID, NewErrorEvent(payload.Error))
+		}
 
 	case *pb.AgentResponse_Renderable:
+		// Drop a stopped turn's straggler Renderable like its content — don't persist
+		// a pending interaction or transition a cancelled turn. A new turn's START
+		// lifts the gate before its own Renderable arrives.
+		if a.turns != nil && a.turns.isStopped(conversationID) {
+			return nil
+		}
+		// Pause the turn and flush the reply-so-far before emitting the interaction, so a reload while paused shows the full preamble rather than a throttle-lagged partial.
+		if a.turns != nil {
+			a.turns.enterAwaiting(conversationID)
+			if a.chatStore != nil {
+				if buffered := a.turns.content(conversationID); buffered != "" {
+					if _, err := a.chatStore.UpsertAssistantProgress(ctx, conversationID, buffered, ""); err != nil {
+						if !errors.Is(err, sqlite.ErrMessageLimitReached) {
+							log.Error("[Web] flush before interaction failed", "conversation", conversationID, "err", err)
+						}
+					}
+				}
+			}
+		}
 		a.handleRenderable(ctx, conversationID, payload.Renderable)
 
 	case *pb.AgentResponse_Transcript:

@@ -16,18 +16,20 @@ import (
 // dies mid-turn), so neither map can grow without bound over a long-lived process.
 const maxTrackedStops = 4096
 
-// turnState is the per-conversation streaming state for one in-flight turn: the
-// partial assistant text seen so far, the last time it was progressively
-// persisted (used to throttle mid-stream chat-store writes), and the idle
-// watchdog that reaps the turn if the agent goes silent.
+// pendingRespond is a queued "write your own reply", held on the turn so the fresh turn begins only after this one reaches idle (see endTurn / injectRespond).
+type pendingRespond struct {
+	userID string
+	text   string
+}
+
+// turnState is the per-conversation state for one in-flight turn: buffered assistant text, last progressive-persist time, and the idle watchdog.
 type turnState struct {
 	partial      strings.Builder
 	lastPersist  time.Time
 	idleTimer    *time.Timer
 	idleDeadline time.Time
-	// userStopped marks a turn the user stopped, so the idle watchdog and
-	// disconnect skip it. Per-turn and distinct from the conversation-level stopped
-	// drop-gate, so a fresh turn after a lingering gate is still reapable.
+	pending      *pendingRespond
+	// userStopped marks a user-stopped turn so the watchdog and disconnect skip it; per-turn, distinct from the conversation-level drop-gate.
 	userStopped bool
 }
 
@@ -156,24 +158,19 @@ func (t *turnTracker) touch(conversationID string) {
 	}
 }
 
-// failActive atomically ends a tracked turn for abnormal termination (idle
-// timeout or agent disconnect), returning the buffered partial. ok=false when no
-// turn is active or it was user-stopped, so a terminal event fires exactly once.
-// It also sets the stop gate (like a user stop) so a slow-but-alive reaped agent's
-// later output is dropped rather than resurrecting the finalized turn.
-func (t *turnTracker) failActive(conversationID string) (partial string, ok bool) {
+// failActive atomically ends a tracked turn for abnormal termination (idle timeout or disconnect), returning any queued respond and the buffered partial. ok=false for no active (non-user-stopped) turn, so a terminal event fires once. It sets the stop-gate so a slow reaped agent's later output is dropped rather than resurrecting the turn.
+func (t *turnTracker) failActive(conversationID string) (pending *pendingRespond, partial string, ok bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	st := t.turns[conversationID]
 	if st == nil || st.userStopped {
-		return "", false
+		return nil, "", false
 	}
+	pending = st.pending
 	stopIdleLocked(st)
 	partial = st.partial.String()
 	delete(t.turns, conversationID)
-	// Gate trailing output like stop() does; bounded the same way, lifted by the
-	// next START. failActive already returned above if the turn was gone or
-	// stopped, so this conversation isn't in the map yet.
+	// Gate trailing output like stop(); bounded the same way, lifted by the next START.
 	if len(t.stopped) >= maxTrackedStops {
 		for k := range t.stopped {
 			delete(t.stopped, k)
@@ -181,7 +178,7 @@ func (t *turnTracker) failActive(conversationID string) (partial string, ok bool
 		}
 	}
 	t.stopped[conversationID] = true
-	return partial, true
+	return pending, partial, true
 }
 
 // activeConversations lists conversations with a turn in flight (excluding turns
@@ -317,6 +314,15 @@ func (t *turnTracker) gateContent(conversationID string, isStart bool) (drop boo
 	return true
 }
 
+// isStopped reports whether a conversation is gated by a stop. Used to drop a
+// stopped turn's straggler output that isn't a content chunk (a Renderable), which
+// gateContent doesn't cover. A new turn's START lifts the gate via gateContent.
+func (t *turnTracker) isStopped(conversationID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stopped[conversationID]
+}
+
 // clear drops all state for a conversation's turn (called when a turn ends
 // normally so the maps don't grow unbounded).
 func (t *turnTracker) clear(conversationID string) {
@@ -345,4 +351,60 @@ func (t *turnTracker) clearStoppedTurn(conversationID string) {
 	}
 	delete(t.turns, conversationID)
 	delete(t.stopped, conversationID)
+}
+
+// enterAwaiting pauses an in-flight turn on a blocking interaction and suspends the idle watchdog (the agent is blocked on the user, not hung). No-op if no turn is tracked.
+func (t *turnTracker) enterAwaiting(conversationID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	st := t.turns[conversationID]
+	if st == nil {
+		return
+	}
+	stopIdleLocked(st)
+}
+
+// resume moves an awaiting turn back to streaming and re-arms the idle watchdog. No-op if no turn is tracked.
+func (t *turnTracker) resume(conversationID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	st := t.turns[conversationID]
+	if st == nil {
+		return
+	}
+	t.armIdleLocked(conversationID, st)
+}
+
+// setPendingRespond queues a "write your own reply" on the current turn, delivered when it finalizes (endTurn / failActive). Returns false when no turn is tracked, so the caller can forward the prose directly instead of dropping it.
+func (t *turnTracker) setPendingRespond(conversationID, userID, text string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if st := t.turns[conversationID]; st != nil {
+		st.pending = &pendingRespond{userID: userID, text: text}
+		return true
+	}
+	return false
+}
+
+// startFreshBuffer resets the partial buffer so a post-interaction continuation doesn't concatenate onto the flushed preamble. No-op if no turn is tracked.
+func (t *turnTracker) startFreshBuffer(conversationID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if st := t.turns[conversationID]; st != nil {
+		st.partial.Reset()
+	}
+}
+
+// endTurn clears a turn on its terminal (END) chunk and returns any queued "write your own reply" for the caller to start as a follow-up turn (nil if none).
+func (t *turnTracker) endTurn(conversationID string) *pendingRespond {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var pending *pendingRespond
+	if st := t.turns[conversationID]; st != nil {
+		pending = st.pending
+		stopIdleLocked(st)
+	}
+	delete(t.turns, conversationID)
+	delete(t.stopped, conversationID)
+	return pending
 }

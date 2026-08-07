@@ -236,6 +236,15 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One turn at a time: reject a send while a turn is in flight (streaming or paused on an interaction) — a guard against a racing client; the interaction-response path forwards directly, not through here.
+	if h.turns != nil && h.turns.isStreaming(conversationID) {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error":             "turn_in_progress",
+			"error_description": "a response is already in progress on this conversation",
+		})
+		return
+	}
+
 	// Bound the attachment count so a single send can't fan out into thousands
 	// of metadata reads + an oversized message/DB row (the proxy body cap alone
 	// would still allow that many keys).

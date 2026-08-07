@@ -24,6 +24,7 @@ const (
 	EventPrompts        = "prompts"
 	EventTranscript     = "transcript"
 	EventInteraction    = "interaction"
+	EventInjected       = "injected"
 )
 
 // SSEEvent represents a Server-Sent Event
@@ -66,6 +67,32 @@ type ChunkEventData struct {
 	PlatformMessageID string `json:"platform_message_id,omitempty"`
 	// Attachments carries agent-produced files, populated only on the END chunk.
 	Attachments []chatAttachment `json:"attachments,omitempty"`
+}
+
+// InjectedMessageData is a server-injected thread row the client didn't send — a resolved-interaction note (role "note", a grey line) or a "write your own reply" (role "user", a bubble) — and the boundary that starts the continuation's own bubble.
+type InjectedMessageData struct {
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Timestamp string `json:"timestamp"`
+}
+
+// NewInjectedMessageEvent creates an injected-message SSE event; the id matches the persisted row so a reload reconciles to the same message.
+func NewInjectedMessageEvent(messageID, role, content, timestamp string) SSEEvent {
+	data := InjectedMessageData{
+		Type:      "injected",
+		ID:        messageID,
+		Role:      role,
+		Content:   content,
+		Timestamp: timestamp,
+	}
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		slog.Error("[Web] marshal injected message event failed", "err", err)
+		return SSEEvent{Event: EventInjected, Data: "{}"}
+	}
+	return SSEEvent{Event: EventInjected, Data: string(jsonData)}
 }
 
 // StatusEventData represents the data for a status update event
