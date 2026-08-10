@@ -13,6 +13,10 @@ import (
 // rather than surfacing it to end users.
 var ErrNoAgentStream = errors.New("no active agent stream available")
 
+// ErrAgentUnreachable is returned when the agent runtime refused or rejected an
+// invocation.
+var ErrAgentUnreachable = errors.New("agent runtime unreachable")
+
 // AgentStreamID is the registration key for the single shared agent stream —
 // one stream that serves every conversation, used by the web/sidecar deployment.
 // Agents may instead register a stream per conversation under the conversation's

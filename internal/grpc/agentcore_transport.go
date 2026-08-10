@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/metrics"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
@@ -145,7 +146,7 @@ func (t *AgentCoreTransport) HandleIncomingMessage(ctx context.Context, msg *pb.
 	stream, err := t.invoker.Invoke(ctx, msg.ConversationId, body)
 	if err != nil {
 		metrics.MessagesDropped.WithLabelValues(msg.Platform, "invoke_error").Inc()
-		return fmt.Errorf("invoke runtime: %w", err)
+		return fmt.Errorf("%w: %w", adapter.ErrAgentUnreachable, err)
 	}
 	defer func() { _ = stream.Close() }()
 
