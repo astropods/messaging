@@ -19,10 +19,7 @@ Each attachment contributes a block labelled `[slack_attachment]`, with the
 author name when Slack supplies one:
 
 ```
-what do these close?
 
-[slack_attachment] from Rodric Rabbah
-astro-spec#5, astro-cli#11, agents#56
 ```
 
 The label matters because the quoted body is not what the user typed. An agent
