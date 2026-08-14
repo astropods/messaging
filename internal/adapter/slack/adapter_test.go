@@ -79,7 +79,7 @@ func TestHandleMessage_DMProcessed(t *testing.T) {
 
 	beforeEvent := testutil.ToFloat64(metrics.SlackEvents.WithLabelValues("dm"))
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
@@ -104,7 +104,7 @@ func TestHandleMessage_DMThreadReplyProcessed(t *testing.T) {
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
@@ -125,7 +125,7 @@ func TestHandleMessage_ChannelTopLevelIgnored(t *testing.T) {
 		TimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 0 {
 		t.Errorf("expected top-level channel message to be ignored, got %d messages", handler.count())
@@ -144,7 +144,7 @@ func TestHandleMessage_ObserveChannel_TopLevelForwarded(t *testing.T) {
 		Text:      "hello everyone",
 		TimeStamp: "9999999999.000001",
 	}
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("expected observed top-level to forward, got %d", handler.count())
@@ -183,7 +183,7 @@ func TestHandleMessage_ObserveChannel_BotMentionDropped(t *testing.T) {
 		Text:      "<@UBOTTEST> please help",
 		TimeStamp: "8888888888.000001",
 	}
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 0 {
 		t.Fatalf("expected bot-mention text to be skipped (app_mention will handle), got %d", handler.count())
@@ -204,8 +204,8 @@ func TestHandleMessage_ObserveChannel_DuplicateSuppressed(t *testing.T) {
 		Text:      "hi",
 		TimeStamp: "7777777777.000001",
 	}
-	a.handleMessage(t.Context(), ev, "")
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("expected dedup to drop second delivery, got %d", handler.count())
@@ -224,7 +224,7 @@ func TestHandleMessage_ChannelThreadReplyProcessed(t *testing.T) {
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("expected thread reply in channel to be processed, got %d messages", handler.count())
@@ -256,7 +256,7 @@ func TestHandleMessage_DM_EventKindAndThreadRoot(t *testing.T) {
 		ev := &slackevents.MessageEvent{
 			Channel: "D123", User: "U1", Text: "hi", TimeStamp: "11.000001",
 		}
-		a.handleMessage(t.Context(), ev, "")
+		a.handleMessage(t.Context(), ev, "", nil)
 		if handler.count() != 1 {
 			t.Fatalf("expected forward, got %d", handler.count())
 		}
@@ -275,7 +275,7 @@ func TestHandleMessage_DM_EventKindAndThreadRoot(t *testing.T) {
 			Channel: "D123", User: "U1", Text: "follow-up",
 			TimeStamp: "12.000001", ThreadTimeStamp: "11.000001",
 		}
-		a.handleMessage(t.Context(), ev, "")
+		a.handleMessage(t.Context(), ev, "", nil)
 		if handler.count() != 1 {
 			t.Fatalf("expected forward, got %d", handler.count())
 		}
@@ -302,7 +302,7 @@ func TestHandleMessage_BotMessageIgnored(t *testing.T) {
 
 	beforeDropped := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "bot_filtered"))
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 0 {
 		t.Errorf("expected bot message to be ignored, got %d messages", handler.count())
@@ -323,7 +323,7 @@ func TestHandleMessage_SubtypeIgnored(t *testing.T) {
 		TimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 0 {
 		t.Errorf("expected message_changed subtype to be ignored, got %d messages", handler.count())
@@ -342,7 +342,7 @@ func TestHandleMessage_ThreadBroadcastAllowed(t *testing.T) {
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("expected thread_broadcast to be processed, got %d messages", handler.count())
@@ -360,7 +360,7 @@ func TestHandleMessage_PlatformContext(t *testing.T) {
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
@@ -395,7 +395,7 @@ func TestHandleMessage_AllowedChannelIDs_DisallowedDoesNotInvokeHandler(t *testi
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 0 {
 		t.Errorf("disallowed event must not invoke msgHandler, got %d messages", handler.count())
@@ -417,7 +417,7 @@ func TestHandleMessage_AllowedChannelIDs_AllowedInvokesHandler(t *testing.T) {
 		ThreadTimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("allowed event must invoke msgHandler, got %d messages", handler.count())
@@ -438,7 +438,7 @@ func TestHandleMessage_AllowedUserIDs_DisallowedDoesNotInvokeHandler(t *testing.
 		TimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 0 {
 		t.Errorf("disallowed event must not invoke msgHandler, got %d messages", handler.count())
@@ -459,7 +459,7 @@ func TestHandleMessage_AllowedUserIDs_AllowedInvokesHandle(t *testing.T) {
 		TimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "")
+	a.handleMessage(t.Context(), ev, "", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("allowed event must invoke msgHandler, got %d messages", handler.count())
@@ -1105,7 +1105,7 @@ func TestHandleMessage_BlockKitContentReachesAgent(t *testing.T) {
 		Blocks:    blocks,
 	}
 
-	a.handleMessage(t.Context(), ev, "T1")
+	a.handleMessage(t.Context(), ev, "T1", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
@@ -1140,7 +1140,7 @@ func TestHandleMessage_UserRichTextNotDuplicated(t *testing.T) {
 		Blocks:    blocks,
 	}
 
-	a.handleMessage(t.Context(), ev, "T1")
+	a.handleMessage(t.Context(), ev, "T1", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
@@ -1212,7 +1212,7 @@ func TestHandleMessage_NoBlocksPreservesText(t *testing.T) {
 		TimeStamp: "1234567890.000001",
 	}
 
-	a.handleMessage(t.Context(), ev, "T1")
+	a.handleMessage(t.Context(), ev, "T1", nil)
 
 	if handler.count() != 1 {
 		t.Fatalf("expected 1 message, got %d", handler.count())
@@ -1657,5 +1657,74 @@ func TestThreadTranscript_IncludesForwardedMessageBody(t *testing.T) {
 	}
 	if !strings.Contains(got, "<@U999>") {
 		t.Errorf("transcript %q missing the author attribution", got)
+	}
+}
+
+// TestEventAttachments_ReadsForwardedBodyFromEnvelope covers the reason this
+// parse exists: slackevents.MessageEvent has no attachments field, so the only
+// copy of a forwarded body in a message event is the raw envelope.
+func TestEventAttachments_ReadsForwardedBodyFromEnvelope(t *testing.T) {
+	payload := json.RawMessage(`{
+		"type":"event_callback",
+		"event":{
+			"type":"message",
+			"channel":"D123456",
+			"user":"U123",
+			"text":"look at this",
+			"ts":"1234567890.000001",
+			"attachments":[
+				{"author_name":"Rodric","text":"the email copy is wrong","fallback":"[Aug 7] Rodric: the email copy is wrong"}
+			]
+		}
+	}`)
+
+	atts := eventAttachments(payload)
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(atts))
+	}
+	if atts[0].Text != "the email copy is wrong" {
+		t.Errorf("text mismatch: got %q", atts[0].Text)
+	}
+	if atts[0].AuthorName != "Rodric" {
+		t.Errorf("author mismatch: got %q", atts[0].AuthorName)
+	}
+}
+
+func TestEventAttachments_ToleratesMissingAndInvalidPayloads(t *testing.T) {
+	if got := eventAttachments(nil); got != nil {
+		t.Errorf("expected nil for empty payload, got %v", got)
+	}
+	if got := eventAttachments(json.RawMessage(`not json`)); got != nil {
+		t.Errorf("expected nil for invalid payload, got %v", got)
+	}
+	if got := eventAttachments(json.RawMessage(`{"event":{"text":"hi"}}`)); got != nil {
+		t.Errorf("expected nil when the event has no attachments, got %v", got)
+	}
+}
+
+// TestHandleMessage_ForwardWithCommentReachesAgent covers "look at this" plus a
+// forwarded message: the comment is in text, the substance is in attachments,
+// and the agent needs both.
+func TestHandleMessage_ForwardWithCommentReachesAgent(t *testing.T) {
+	a, handler := newTestAdapter()
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "D123456",
+		User:      "U123",
+		Text:      "look at this",
+		TimeStamp: "1234567890.000001",
+	}
+	atts := attachmentsFromJSON(t, `[{"author_name":"Rodric","text":"the email copy is wrong"}]`)
+
+	a.handleMessage(t.Context(), ev, "T1", atts)
+
+	if handler.count() != 1 {
+		t.Fatalf("expected 1 message, got %d", handler.count())
+	}
+	got := handler.last().Content
+	for _, want := range []string{"look at this", "the email copy is wrong", "Rodric"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("content %q missing %q", got, want)
+		}
 	}
 }

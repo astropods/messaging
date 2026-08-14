@@ -284,7 +284,11 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 			return
 		}
 
-		a.handleInnerEvent(ctx, eventsAPIEvent.InnerEvent, eventsAPIEvent.TeamID)
+		var payload json.RawMessage
+		if evt.Request != nil {
+			payload = evt.Request.Payload
+		}
+		a.handleInnerEvent(ctx, eventsAPIEvent.InnerEvent, eventsAPIEvent.TeamID, payload)
 
 	case socketmode.EventTypeInteractive:
 		// Handle block actions (feedback buttons, etc.) and view submissions
@@ -346,10 +350,10 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 // call so the server can resolve slack identities to WorkOS users —
 // individual event payloads (e.g. ReactionAddedEvent) don't always carry
 // the workspace id, so we use the envelope's value uniformly.
-func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackevents.EventsAPIInnerEvent, teamID string) {
+func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackevents.EventsAPIInnerEvent, teamID string, payload json.RawMessage) {
 	switch ev := innerEvent.Data.(type) {
 	case *slackevents.MessageEvent:
-		a.handleMessage(ctx, ev, teamID)
+		a.handleMessage(ctx, ev, teamID, eventAttachments(payload))
 
 	case *slackevents.AppMentionEvent:
 		a.handleAppMention(ctx, ev, teamID)
@@ -365,8 +369,31 @@ func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackeve
 	}
 }
 
-// handleMessage processes message events
-func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.MessageEvent, teamID string) {
+// eventAttachments reads message attachments straight from the events envelope.
+// slackevents.MessageEvent drops them: the struct has no field for them, and a
+// forwarded or unfurled message keeps its body there rather than in text. The
+// mention and reaction paths get attachments from their own payloads, so this is
+// only needed for message events.
+func eventAttachments(payload json.RawMessage) []slack.Attachment {
+	if len(payload) == 0 {
+		return nil
+	}
+	var envelope struct {
+		Event struct {
+			Attachments []slack.Attachment `json:"attachments"`
+		} `json:"event"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		slog.Debug("[Slack] Could not read attachments from event payload", "err", err)
+		return nil
+	}
+	return envelope.Event.Attachments
+}
+
+// handleMessage processes message events. attachments comes from the raw event
+// envelope: slackevents.MessageEvent has no field for them, and a forwarded or
+// unfurled message keeps its body there rather than in text.
+func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.MessageEvent, teamID string, attachments []slack.Attachment) {
 	// Filter out bot messages
 	if ev.BotID != "" {
 		metrics.MessagesDropped.WithLabelValues("slack", "bot_filtered").Inc()
@@ -451,22 +478,12 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		eventKind = pb.PlatformContext_EVENT_KIND_DM
 	}
 
-	// A message event carries no attachments, so a message whose body lives
-	// there (a forward, an unfurl) renders empty. Read the stored copy in that
-	// case, which does carry them, rather than delivering nothing at all.
-	content := renderBlocks(ev.Text, ev.Blocks)
-	if content == "" {
-		if res := a.lookupMessage(ctx, ev.Channel, ev.TimeStamp); res.found {
-			content = renderMessage(res.msg.Text, res.msg.Blocks, res.msg.Attachments)
-		}
-	}
-
 	// Convert to pb.Message
 	msg := &pb.Message{
 		Id:             uuid.NewString(),
 		Timestamp:      timestamppb.New(parseSlackTimestamp(ev.TimeStamp)),
 		Platform:       "slack",
-		Content:        content,
+		Content:        renderMessage(ev.Text, ev.Blocks, attachments),
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
 			MessageId:    ev.TimeStamp,

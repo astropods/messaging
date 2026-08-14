@@ -20,8 +20,8 @@ line at all: the agent had no way to know the message existed.
 
 `renderMessage(text, blocks, attachments)` now wraps `renderBlocks` and appends
 the attachment bodies. Mentions, reactions, thread summaries, and chat history
-call it directly, so those four paths share one rendering. Message events reach
-it through the lookup described below.
+call it, so every path that delivers Slack content to an agent shares one
+rendering.
 
 Each attachment contributes a block labelled `[slack_attachment]`, with the
 author name when Slack supplies one:
@@ -43,19 +43,37 @@ produce nothing, on purpose: an image-only attachment, which would otherwise add
 a label with nothing under it, and a body already contained in the message text,
 which is the shape of a link unfurl derived from that text.
 
-## Message events
+## Message events read the raw envelope
 
-`slackevents.MessageEvent` carries no attachments at all, so DMs, thread
-replies, and observed messages cannot read them from the event. When such an
-event renders to empty content, the adapter now resolves the stored message with
-the existing `lookupMessage` helper and renders that copy instead. The extra API
-call happens only where the alternative is delivering nothing.
+`slackevents.MessageEvent` has no attachments field, so DMs, thread replies, and
+observed messages cannot take them from the parsed event. `eventAttachments`
+reads them from the events envelope that socket mode already delivers alongside
+the parsed event, and `handleInnerEvent` passes them to `handleMessage`.
 
-A DM that combines typed text with a forward still loses the forwarded body,
-because the rendering is non-empty and no lookup runs. Closing that gap means
-one lookup per message event, which is not worth the request volume.
+Reading the envelope rather than re-fetching the message keeps the common shape
+working at no cost: "look at this" plus a forward carries the comment in `text`
+and the substance in `attachments`, and a fetch-only-when-empty rule would miss
+it, because the rendering is not empty. It also costs no extra Slack call, and
+avoids racing Slack: an unfurl is attached to the stored message a moment after
+the event arrives, so a fetch at event time can still come back without it.
+
+# Compatibility
+
+The change is additive for every agent already running against this container.
+
+- With no attachments, `renderMessage` returns exactly what `renderBlocks`
+  returned, which a test pins.
+- Content only grows, and only for messages that carry attachments. Nothing is
+  removed or reordered, and the existing markers (`[slack_meta]`,
+  `[reaction …]`, `[slack_thread_summary]`) stay where they were: the attachment
+  block is appended to the message body.
+- No proto, SDK, config, or scope change. `handleMessage`'s new parameter is
+  internal to the adapter package.
+- Observer agents that ingest bot posts will start seeing attachment bodies from
+  those bots, which were previously invisible. That is more input to the same
+  field, not a different shape. Where a bot repeats `text` in `fallback`, the
+  duplicate is dropped rather than delivered twice.
 
 # Migration
 
-None. The paths that read attachments already hold the scopes they need
-(`channels:history` / `groups:history` / `im:history` / `mpim:history`).
+None.
