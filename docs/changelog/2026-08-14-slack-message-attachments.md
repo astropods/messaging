@@ -19,8 +19,9 @@ line at all: the agent had no way to know the message existed.
 # Design
 
 `renderMessage(text, blocks, attachments)` now wraps `renderBlocks` and appends
-the attachment bodies. All five render call sites use it, so mentions,
-reactions, thread summaries, and chat history share one rendering.
+the attachment bodies. Mentions, reactions, thread summaries, and chat history
+call it directly, so those four paths share one rendering. Message events reach
+it through the lookup described below.
 
 Each attachment contributes a block labelled `[slack_attachment]`, with the
 author name when Slack supplies one:
