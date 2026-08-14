@@ -350,8 +350,11 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		// No agent connected is expected and transient (agent restarting/not up),
 		// so return 424, not 500 — a genuine forward error stays a 500.
 		noAgent := errors.Is(err, adapter.ErrNoAgentStream)
+		unreachable := errors.Is(err, adapter.ErrAgentUnreachable)
 		if noAgent {
 			slog.Warn("[Web] no agent connected; cannot forward message", "conversation", conversationID, "err", err)
+		} else if unreachable {
+			slog.Error("[Web] agent runtime unreachable; cannot forward message", "conversation", conversationID, "err", err)
 		} else {
 			slog.Error(fmt.Sprintf("[Web] Error forwarding message: %v", err))
 		}
@@ -371,6 +374,12 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		if noAgent {
 			h.sendErrorEvent(conversationID, "AGENT_UNAVAILABLE", "The agent is not available right now. You can try sending again.")
 			http.Error(w, "agent unavailable", http.StatusFailedDependency)
+			return
+		}
+		// A refused invocation is the deployment's fault; details stay in the log.
+		if unreachable {
+			h.sendErrorEvent(conversationID, "AGENT_UNREACHABLE", "The agent runtime did not accept the request. Check that the agent is running and serving its runtime contract.")
+			http.Error(w, "agent runtime unreachable", http.StatusFailedDependency)
 			return
 		}
 		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process message")

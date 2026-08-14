@@ -2,12 +2,14 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
@@ -138,5 +140,47 @@ func TestAgentCoreTransport_Non200IsError(t *testing.T) {
 	tx := NewAgentCoreTransport(srv, NewHTTPInvoker(ts.URL))
 	if err := tx.HandleIncomingMessage(context.Background(), testMessage()); err == nil {
 		t.Fatalf("expected error on non-200 invoke, got nil")
+	}
+}
+
+func TestAgentCoreTransport_UnreachableRuntimeIsAttributable(t *testing.T) {
+	tests := []struct {
+		name    string
+		invoker func(t *testing.T) AgentInvoker
+	}{
+		{
+			name: "connection refused",
+			invoker: func(t *testing.T) AgentInvoker {
+				ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+				url := ts.URL
+				ts.Close() // nothing listens, so the dial is refused
+				return NewHTTPInvoker(url)
+			},
+		},
+		{
+			name: "non-200 from the runtime",
+			invoker: func(t *testing.T) AgentInvoker {
+				ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusBadGateway)
+				}))
+				t.Cleanup(ts.Close)
+				return NewHTTPInvoker(ts.URL)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _ := newTestServer(t, "web")
+			tx := NewAgentCoreTransport(srv, tt.invoker(t))
+
+			err := tx.HandleIncomingMessage(context.Background(), testMessage())
+			if err == nil {
+				t.Fatalf("expected an error, got nil")
+			}
+			if !errors.Is(err, adapter.ErrAgentUnreachable) {
+				t.Errorf("error should wrap adapter.ErrAgentUnreachable, got %v", err)
+			}
+		})
 	}
 }
