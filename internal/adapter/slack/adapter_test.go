@@ -1036,6 +1036,9 @@ type fakeSlackServer struct {
 	*httptest.Server
 	postCount   int
 	postedTexts []string
+	// replyExtras merges extra fields into the stubbed conversations.replies
+	// message, for payload parts the plain-text stub leaves out.
+	replyExtras map[string]interface{}
 }
 
 func newFakeSlackServer(t *testing.T, replyText string) *fakeSlackServer {
@@ -1045,11 +1048,13 @@ func newFakeSlackServer(t *testing.T, replyText string) *fakeSlackServer {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, r *http.Request) {
+		msg := map[string]interface{}{"ts": r.FormValue("ts"), "text": replyText, "user": "U999"}
+		for k, v := range fs.replyExtras {
+			msg[k] = v
+		}
 		resp := map[string]interface{}{
-			"ok": true,
-			"messages": []map[string]interface{}{
-				{"ts": r.FormValue("ts"), "text": replyText, "user": "U999"},
-			},
+			"ok":       true,
+			"messages": []map[string]interface{}{msg},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -1565,5 +1570,92 @@ func TestConversationIDFromCallback(t *testing.T) {
 				t.Errorf("conversationIDFromCallback: expected %q, got %q", tt.want, got)
 			}
 		})
+	}
+}
+
+// TestHandleAppMention_AttachmentBodyReachesAgent covers an @-mention on a
+// message that forwards another one: the shared body arrives in attachments,
+// not in text.
+func TestHandleAppMention_AttachmentBodyReachesAgent(t *testing.T) {
+	a, handler := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	a.aiClient = &SlackAIClient{
+		botToken:   "xoxb-fake",
+		httpClient: srv.Client(),
+		baseURL:    srv.URL,
+	}
+
+	ev := &slackevents.AppMentionEvent{
+		Channel:     "C123456",
+		User:        "U123",
+		Text:        "<@UBOT> what do these close?",
+		TimeStamp:   "1234567890.000001",
+		Attachments: attachmentsFromJSON(t, `[{"author_name":"Rodric","text":"astro-spec#5 and astro-cli#11"}]`),
+	}
+
+	a.handleAppMention(t.Context(), ev, "T1")
+
+	if handler.count() != 1 {
+		t.Fatalf("expected 1 message, got %d", handler.count())
+	}
+	got := handler.last().Content
+	for _, want := range []string{"what do these close?", "astro-spec#5 and astro-cli#11", "Rodric"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("content %q missing %q", got, want)
+		}
+	}
+}
+
+// TestHandleReactionAdded_ForwardedMessageBodyReachesAgent covers a reaction on
+// a forwarded message. Its text is empty, so before attachments were read the
+// reaction was dropped as contentless.
+func TestHandleReactionAdded_ForwardedMessageBodyReachesAgent(t *testing.T) {
+	a, handler := newTestAdapterWithReactions([]string{"ticket"})
+	srv := newFakeSlackServer(t, "")
+	srv.replyExtras = map[string]interface{}{
+		"attachments": json.RawMessage(`[{"author_name":"Rodric","text":"the email copy is wrong"}]`),
+	}
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	ev := &slackevents.ReactionAddedEvent{
+		Reaction: "ticket",
+		User:     "U123",
+		Item: slackevents.Item{
+			Channel:   "C123456",
+			Timestamp: "1234567890.000001",
+		},
+	}
+
+	a.handleReactionAdded(t.Context(), ev, "")
+
+	if handler.count() != 1 {
+		t.Fatalf("expected the reaction to be forwarded, got %d messages", handler.count())
+	}
+	if got := handler.last().Content; !strings.Contains(got, "the email copy is wrong") {
+		t.Errorf("content %q missing the forwarded body", got)
+	}
+}
+
+// TestThreadTranscript_IncludesForwardedMessageBody covers the thread summary
+// prepended to in-thread @-mentions: a forwarded message in the thread has no
+// text of its own, and used to be skipped entirely.
+func TestThreadTranscript_IncludesForwardedMessageBody(t *testing.T) {
+	a, _ := newTestAdapter()
+	srv := newFakeSlackServer(t, "")
+	srv.replyExtras = map[string]interface{}{
+		"attachments": json.RawMessage(`[{"author_name":"Rodric","text":"astro-spec#5, astro-cli#11, agents#56"}]`),
+	}
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	got := a.threadTranscript(t.Context(), "C123456", "1234567890.000001")
+	if !strings.Contains(got, "astro-spec#5, astro-cli#11, agents#56") {
+		t.Errorf("transcript %q missing the forwarded body", got)
+	}
+	if !strings.Contains(got, "<@U999>") {
+		t.Errorf("transcript %q missing the author attribution", got)
 	}
 }

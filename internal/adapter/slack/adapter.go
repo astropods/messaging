@@ -451,12 +451,22 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		eventKind = pb.PlatformContext_EVENT_KIND_DM
 	}
 
+	// A message event carries no attachments, so a message whose body lives
+	// there (a forward, an unfurl) renders empty. Read the stored copy in that
+	// case, which does carry them, rather than delivering nothing at all.
+	content := renderBlocks(ev.Text, ev.Blocks)
+	if content == "" {
+		if res := a.lookupMessage(ctx, ev.Channel, ev.TimeStamp); res.found {
+			content = renderMessage(res.msg.Text, res.msg.Blocks, res.msg.Attachments)
+		}
+	}
+
 	// Convert to pb.Message
 	msg := &pb.Message{
 		Id:             uuid.NewString(),
 		Timestamp:      timestamppb.New(parseSlackTimestamp(ev.TimeStamp)),
 		Platform:       "slack",
-		Content:        renderBlocks(ev.Text, ev.Blocks),
+		Content:        content,
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
 			MessageId:    ev.TimeStamp,
@@ -1030,7 +1040,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 	// Render any Block Kit content into the merged text, then strip bot
 	// mentions from the combined string — rich_text user elements get
 	// rendered as <@U…> by renderBlocks, so the same regex handles them.
-	text := stripMentions(renderBlocks(ev.Text, ev.Blocks))
+	text := stripMentions(renderMessage(ev.Text, ev.Blocks, ev.Attachments))
 
 	// When the mention is a reply inside an existing thread, prepend the thread
 	// transcript so the agent sees the discussion it was summoned into — an
@@ -1173,7 +1183,7 @@ func (a *SlackAdapter) fetchReactionMessage(ctx context.Context, channelID, time
 	if m.ThreadTimestamp != "" && m.ThreadTimestamp != m.Timestamp {
 		parentThreadTs = m.ThreadTimestamp
 	}
-	return renderBlocks(m.Text, m.Blocks), parentThreadTs, m.Files, true
+	return renderMessage(m.Text, m.Blocks, m.Attachments), parentThreadTs, m.Files, true
 }
 
 // sendErrorMessage posts user-facing errors to Slack. Infrastructure errors
@@ -1324,7 +1334,7 @@ func (a *SlackAdapter) HydrateThread(ctx context.Context, conversationID string,
 				Id:       msg.User,
 				Username: msg.Username,
 			},
-			Content:   renderBlocks(msg.Text, msg.Blocks),
+			Content:   renderMessage(msg.Text, msg.Blocks, msg.Attachments),
 			Timestamp: timestamppb.New(parseSlackTimestamp(msg.Timestamp)),
 			WasEdited: msg.Edited != nil,
 			PlatformData: map[string]string{

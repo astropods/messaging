@@ -6,6 +6,67 @@ import (
 	"github.com/slack-go/slack"
 )
 
+// attachmentMarker labels quoted content so an agent can tell it apart from
+// what the user typed.
+const attachmentMarker = "[slack_attachment]"
+
+// renderMessage returns the message content the agent should receive: the
+// text and Block Kit rendering, plus the body of any message attachments.
+//
+// Slack keeps the body of a shared or forwarded message, and of a link
+// unfurl, in `attachments` rather than in `text` or `blocks`. Reading text
+// and blocks alone delivers those messages as empty, so the quoted content
+// the user is asking about never reaches the agent.
+func renderMessage(text string, blocks slack.Blocks, attachments []slack.Attachment) string {
+	rendered := renderBlocks(text, blocks)
+	parts := make([]string, 0, len(attachments)+1)
+	if rendered != "" {
+		parts = append(parts, rendered)
+	}
+	for _, att := range attachments {
+		if block := renderAttachment(att, rendered); block != "" {
+			parts = append(parts, block)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// renderAttachment renders one attachment, and returns "" when it carries no
+// text of its own. Content already present in rendered is dropped: an unfurl
+// commonly repeats the text it was derived from, and bot posts repeat `text`
+// in `fallback`.
+func renderAttachment(att slack.Attachment, rendered string) string {
+	body := renderBlocks(att.Text, att.Blocks)
+	if body == "" {
+		body = strings.TrimSpace(att.Fallback)
+	}
+	if body != "" && rendered != "" && strings.Contains(rendered, body) {
+		body = ""
+	}
+
+	lines := make([]string, 0, 3+len(att.Fields))
+	add := func(s string) {
+		if s = strings.TrimSpace(s); s != "" {
+			lines = append(lines, s)
+		}
+	}
+	add(att.Pretext)
+	add(att.Title)
+	add(body)
+	for _, f := range att.Fields {
+		add(strings.TrimSpace(f.Title + " " + f.Value))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+
+	header := attachmentMarker
+	if author := strings.TrimSpace(att.AuthorName); author != "" {
+		header += " from " + author
+	}
+	return header + "\n" + strings.Join(lines, "\n")
+}
+
 // renderBlocks returns the message content the agent should receive,
 // merging the plain-text fallback with any Block Kit content.
 //
