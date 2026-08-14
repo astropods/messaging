@@ -390,9 +390,8 @@ func eventAttachments(payload json.RawMessage) []slack.Attachment {
 	return envelope.Event.Attachments
 }
 
-// handleMessage processes message events. attachments comes from the raw event
-// envelope: slackevents.MessageEvent has no field for them, and a forwarded or
-// unfurled message keeps its body there rather than in text.
+// handleMessage processes message events. attachments comes from
+// eventAttachments, since the parsed event does not carry it.
 func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.MessageEvent, teamID string, attachments []slack.Attachment) {
 	// Filter out bot messages
 	if ev.BotID != "" {

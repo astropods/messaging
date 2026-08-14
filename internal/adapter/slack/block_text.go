@@ -14,9 +14,8 @@ const attachmentMarker = "[slack_attachment]"
 // text and Block Kit rendering, plus the body of any message attachments.
 //
 // Slack keeps the body of a shared or forwarded message, and of a link
-// unfurl, in `attachments` rather than in `text` or `blocks`. Reading text
-// and blocks alone delivers those messages as empty, so the quoted content
-// the user is asking about never reaches the agent.
+// unfurl, in `attachments` rather than in `text` or `blocks`, so text and
+// blocks alone render such a message as empty.
 func renderMessage(text string, blocks slack.Blocks, attachments []slack.Attachment) string {
 	rendered := renderBlocks(text, blocks)
 	parts := make([]string, 0, len(attachments)+1)

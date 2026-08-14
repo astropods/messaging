@@ -1609,8 +1609,8 @@ func TestHandleAppMention_AttachmentBodyReachesAgent(t *testing.T) {
 }
 
 // TestHandleReactionAdded_ForwardedMessageBodyReachesAgent covers a reaction on
-// a forwarded message. Its text is empty, so before attachments were read the
-// reaction was dropped as contentless.
+// a forwarded message, whose text is empty: the reacted content is entirely in
+// the attachment, and a contentless reaction is dropped.
 func TestHandleReactionAdded_ForwardedMessageBodyReachesAgent(t *testing.T) {
 	a, handler := newTestAdapterWithReactions([]string{"ticket"})
 	srv := newFakeSlackServer(t, "")
@@ -1640,8 +1640,8 @@ func TestHandleReactionAdded_ForwardedMessageBodyReachesAgent(t *testing.T) {
 }
 
 // TestThreadTranscript_IncludesForwardedMessageBody covers the thread summary
-// prepended to in-thread @-mentions: a forwarded message in the thread has no
-// text of its own, and used to be skipped entirely.
+// prepended to in-thread @-mentions. A forwarded message has no text of its own,
+// and the summary skips any message that renders to nothing.
 func TestThreadTranscript_IncludesForwardedMessageBody(t *testing.T) {
 	a, _ := newTestAdapter()
 	srv := newFakeSlackServer(t, "")
@@ -1660,9 +1660,9 @@ func TestThreadTranscript_IncludesForwardedMessageBody(t *testing.T) {
 	}
 }
 
-// TestEventAttachments_ReadsForwardedBodyFromEnvelope covers the reason this
-// parse exists: slackevents.MessageEvent has no attachments field, so the only
-// copy of a forwarded body in a message event is the raw envelope.
+// TestEventAttachments_ReadsForwardedBodyFromEnvelope pins the reason this parse
+// exists: slackevents.MessageEvent has no attachments field, so the envelope is
+// the only copy of a forwarded body a message event carries.
 func TestEventAttachments_ReadsForwardedBodyFromEnvelope(t *testing.T) {
 	payload := json.RawMessage(`{
 		"type":"event_callback",
