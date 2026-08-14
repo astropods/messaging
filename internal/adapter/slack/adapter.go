@@ -284,7 +284,11 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 			return
 		}
 
-		a.handleInnerEvent(ctx, eventsAPIEvent.InnerEvent, eventsAPIEvent.TeamID)
+		var payload json.RawMessage
+		if evt.Request != nil {
+			payload = evt.Request.Payload
+		}
+		a.handleInnerEvent(ctx, eventsAPIEvent.InnerEvent, eventsAPIEvent.TeamID, payload)
 
 	case socketmode.EventTypeInteractive:
 		// Handle block actions (feedback buttons, etc.) and view submissions
@@ -346,10 +350,10 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 // call so the server can resolve slack identities to WorkOS users —
 // individual event payloads (e.g. ReactionAddedEvent) don't always carry
 // the workspace id, so we use the envelope's value uniformly.
-func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackevents.EventsAPIInnerEvent, teamID string) {
+func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackevents.EventsAPIInnerEvent, teamID string, payload json.RawMessage) {
 	switch ev := innerEvent.Data.(type) {
 	case *slackevents.MessageEvent:
-		a.handleMessage(ctx, ev, teamID)
+		a.handleMessage(ctx, ev, teamID, eventAttachments(payload))
 
 	case *slackevents.AppMentionEvent:
 		a.handleAppMention(ctx, ev, teamID)
@@ -365,8 +369,30 @@ func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackeve
 	}
 }
 
-// handleMessage processes message events
-func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.MessageEvent, teamID string) {
+// eventAttachments reads message attachments straight from the events envelope.
+// slackevents.MessageEvent drops them: the struct has no field for them, and a
+// forwarded or unfurled message keeps its body there rather than in text. The
+// mention and reaction paths get attachments from their own payloads, so this is
+// only needed for message events.
+func eventAttachments(payload json.RawMessage) []slack.Attachment {
+	if len(payload) == 0 {
+		return nil
+	}
+	var envelope struct {
+		Event struct {
+			Attachments []slack.Attachment `json:"attachments"`
+		} `json:"event"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		slog.Debug("[Slack] Could not read attachments from event payload", "err", err)
+		return nil
+	}
+	return envelope.Event.Attachments
+}
+
+// handleMessage processes message events. attachments comes from
+// eventAttachments, since the parsed event does not carry it.
+func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.MessageEvent, teamID string, attachments []slack.Attachment) {
 	// Filter out bot messages
 	if ev.BotID != "" {
 		metrics.MessagesDropped.WithLabelValues("slack", "bot_filtered").Inc()
@@ -456,7 +482,7 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		Id:             uuid.NewString(),
 		Timestamp:      timestamppb.New(parseSlackTimestamp(ev.TimeStamp)),
 		Platform:       "slack",
-		Content:        renderBlocks(ev.Text, ev.Blocks),
+		Content:        renderMessage(ev.Text, ev.Blocks, attachments),
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
 			MessageId:    ev.TimeStamp,
@@ -1030,7 +1056,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 	// Render any Block Kit content into the merged text, then strip bot
 	// mentions from the combined string — rich_text user elements get
 	// rendered as <@U…> by renderBlocks, so the same regex handles them.
-	text := stripMentions(renderBlocks(ev.Text, ev.Blocks))
+	text := stripMentions(renderMessage(ev.Text, ev.Blocks, ev.Attachments))
 
 	// When the mention is a reply inside an existing thread, prepend the thread
 	// transcript so the agent sees the discussion it was summoned into — an
@@ -1173,7 +1199,7 @@ func (a *SlackAdapter) fetchReactionMessage(ctx context.Context, channelID, time
 	if m.ThreadTimestamp != "" && m.ThreadTimestamp != m.Timestamp {
 		parentThreadTs = m.ThreadTimestamp
 	}
-	return renderBlocks(m.Text, m.Blocks), parentThreadTs, m.Files, true
+	return renderMessage(m.Text, m.Blocks, m.Attachments), parentThreadTs, m.Files, true
 }
 
 // sendErrorMessage posts user-facing errors to Slack. Infrastructure errors
@@ -1324,7 +1350,7 @@ func (a *SlackAdapter) HydrateThread(ctx context.Context, conversationID string,
 				Id:       msg.User,
 				Username: msg.Username,
 			},
-			Content:   renderBlocks(msg.Text, msg.Blocks),
+			Content:   renderMessage(msg.Text, msg.Blocks, msg.Attachments),
 			Timestamp: timestamppb.New(parseSlackTimestamp(msg.Timestamp)),
 			WasEdited: msg.Edited != nil,
 			PlatformData: map[string]string{

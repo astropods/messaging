@@ -42,7 +42,7 @@ func (a *SlackAdapter) threadTranscript(ctx context.Context, channelID, threadTS
 		if m.BotID != "" && m.User == "" {
 			continue
 		}
-		text := strings.TrimSpace(renderBlocks(m.Text, m.Blocks))
+		text := strings.TrimSpace(renderMessage(m.Text, m.Blocks, m.Attachments))
 		if text == "" {
 			continue
 		}
