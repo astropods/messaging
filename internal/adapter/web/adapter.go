@@ -420,6 +420,22 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 			a.turns.record(conversationID, payload.Content)
 		}
 
+		// START means "create message" (ContentChunk.ChunkType in response.proto).
+		// Honor that for an agent-triggered message — content with no user turn
+		// ahead of it, such as a schedule firing or a background job reporting —
+		// which would otherwise land on the trailing assistant row and overwrite
+		// the previous reply. A no-op for a normal turn, whose START follows the
+		// user row that HandleSendMessage persists before dispatching.
+		if payload.Content.Type == pb.ContentChunk_START && a.chatStore != nil {
+			if _, err := a.chatStore.BeginAssistantMessage(ctx, conversationID); err != nil {
+				if errors.Is(err, sqlite.ErrMessageLimitReached) {
+					slog.Debug("[Web] chat at message limit; agent-triggered message not opened", "conversation", conversationID)
+				} else {
+					slog.Error("[Web] chat begin assistant message failed", "conversation", conversationID, "err", err)
+				}
+			}
+		}
+
 		// Resolve any agent-produced file attachments (present on the END chunk)
 		// to the canonical shape, attributing them to the conversation owner so
 		// per-user file access control applies to the agent's outputs too.

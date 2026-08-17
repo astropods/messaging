@@ -396,3 +396,111 @@ func TestAudit_FinalizeStoppedGrowsButNeverShrinks(t *testing.T) {
 		t.Fatalf("cancel shrank a finished reply: %+v", msgs)
 	}
 }
+
+// The regression BeginAssistantMessage exists to prevent: an agent-triggered
+// message (a schedule firing, a background job reporting, a webhook) arrives with
+// no user turn ahead of it, so UpsertAssistantProgress finds an assistant row
+// trailing and UPDATES it — silently replacing the previous reply instead of
+// adding a message. Opening a row on START must make each push its own message.
+func TestAudit_AgentTriggeredMessageDoesNotOverwritePreviousReply(t *testing.T) {
+	st := newTestStore(t)
+	ctx := t.Context()
+	if _, err := st.EnsureForSend(ctx, "c", "owner", "t"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "hi", ""); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	// A normal turn's reply.
+	if _, err := st.UpsertAssistantProgress(ctx, "c", "the reply", ""); err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+
+	// Two agent-triggered messages, each opened on its START.
+	for _, text := range []string{"first push", "second push"} {
+		if _, err := st.BeginAssistantMessage(ctx, "c"); err != nil {
+			t.Fatalf("begin (%s): %v", text, err)
+		}
+		if _, err := st.UpsertAssistantProgress(ctx, "c", text, ""); err != nil {
+			t.Fatalf("push (%s): %v", text, err)
+		}
+	}
+
+	msgs, _ := st.ListMessages(ctx, "c")
+	if len(msgs) != 4 {
+		t.Fatalf("agent-triggered messages collapsed into %d rows, want 4: %+v", len(msgs), msgs)
+	}
+	if msgs[1].Content != "the reply" {
+		t.Fatalf("an agent-triggered message overwrote the turn's reply: %q", msgs[1].Content)
+	}
+	if msgs[2].Content != "first push" || msgs[3].Content != "second push" {
+		t.Fatalf("pushes not stored in order as distinct messages: %+v", msgs[2:])
+	}
+}
+
+// BeginAssistantMessage must be inert for a normal streamed turn, whose START
+// follows the user row. If it opened a row there, every reply would be preceded by
+// an empty assistant bubble.
+func TestAudit_BeginAssistantMessageInertOnNormalTurn(t *testing.T) {
+	st := newTestStore(t)
+	ctx := t.Context()
+	if _, err := st.EnsureForSend(ctx, "c", "owner", "t"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// No messages at all: nothing to clobber, so nothing to open.
+	if id, err := st.BeginAssistantMessage(ctx, "c"); err != nil || id != "" {
+		t.Fatalf("opened a row on an empty conversation (id=%q err=%v)", id, err)
+	}
+
+	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "hi", ""); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	// Trailing row is the user's — the normal turn — so this must be a no-op and
+	// the streamed chunks must still produce exactly one assistant row.
+	if id, err := st.BeginAssistantMessage(ctx, "c"); err != nil || id != "" {
+		t.Fatalf("opened a row after a user turn (id=%q err=%v)", id, err)
+	}
+	if _, err := st.UpsertAssistantProgress(ctx, "c", "part", ""); err != nil {
+		t.Fatalf("progress: %v", err)
+	}
+	if _, err := st.UpsertAssistantProgress(ctx, "c", "part and rest", ""); err != nil {
+		t.Fatalf("progress: %v", err)
+	}
+
+	msgs, _ := st.ListMessages(ctx, "c")
+	if len(msgs) != 2 || msgs[1].Role != "assistant" || msgs[1].Content != "part and rest" {
+		t.Fatalf("normal turn changed shape: %+v", msgs)
+	}
+}
+
+// Opening a row must obey the same guards as the other assistant writes: a
+// missing or soft-deleted conversation is a no-op, never an orphan row.
+func TestAudit_BeginAssistantMessageNoOpOnMissingOrDeleted(t *testing.T) {
+	st := newTestStore(t)
+	ctx := t.Context()
+
+	if id, err := st.BeginAssistantMessage(ctx, "nope"); err != nil || id != "" {
+		t.Fatalf("opened a row for a missing conversation (id=%q err=%v)", id, err)
+	}
+
+	if _, err := st.EnsureForSend(ctx, "c", "owner", "t"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, "c", "owner", "user", "hi", ""); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := st.UpsertAssistantProgress(ctx, "c", "reply", ""); err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+	if _, _, err := st.SoftDelete(ctx, "c", "owner"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	if id, err := st.BeginAssistantMessage(ctx, "c"); err != nil || id != "" {
+		t.Fatalf("opened a row in a deleted conversation (id=%q err=%v)", id, err)
+	}
+	if conv, _ := st.Get(ctx, "c"); conv != nil {
+		t.Fatalf("opening a row revived a deleted conversation: %+v", conv)
+	}
+}
