@@ -16,6 +16,9 @@ from .astro.messaging.v1.response_pb2 import (
     SaveConversationRequest,
     SaveConversationResponse,
     SavedMessage,
+    ThreadHistoryRequest,
+    ThreadHistoryResponse,
+    ThreadMessage,
 )
 from .astro.messaging.v1.config_pb2 import AgentConfig, AgentToolConfig
 from .saved import derive_saved_conversation_id
@@ -43,6 +46,9 @@ __all__ = [
     "Attachment",
     "AgentResponse",
     "SaveConversationRequest",
+    "ThreadHistoryRequest",
+    "ThreadHistoryResponse",
+    "ThreadMessage",
     "SaveConversationResponse",
     "SavedMessage",
     "derive_saved_conversation_id",
