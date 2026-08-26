@@ -409,18 +409,21 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	topLevelInChannel := isChannel && ev.ThreadTimeStamp == ""
 	observe := topLevelInChannel && a.observeChannels[ev.Channel]
 
+	// Slack delivers both message.channels and app_mention for a mention, inside
+	// a thread as well as at top level, and app_mention handles both.
+	if isChannel && a.botUserID != "" && strings.Contains(ev.Text, "<@"+a.botUserID+">") {
+		slog.Debug("[Slack] Skipping channel message that mentions the bot (handled via app_mention)",
+			"channel_id", ev.Channel, "message_ts", ev.TimeStamp,
+			"thread_ts", ev.ThreadTimeStamp, "user_id", ev.User)
+		metrics.MessagesDropped.WithLabelValues("slack", "app_mention_dedup").Inc()
+		return
+	}
+
 	// In channels, top-level messages are usually dropped (handled via app_mention).
-	// Observe channels forward them, except when the text @-mentions the bot
-	// (those still flow through app_mention to avoid double-delivery).
+	// Observe channels forward them instead.
 	if topLevelInChannel {
 		if !observe {
 			slog.Debug(fmt.Sprintf("[Slack] Ignoring top-level message in channel %s (will handle via app_mention)", ev.Channel))
-			return
-		}
-		if a.botUserID != "" && strings.Contains(ev.Text, "<@"+a.botUserID+">") {
-			slog.Debug("[Slack] Skipping observed top-level message: contains bot mention (handled via app_mention)",
-				"channel_id", ev.Channel, "message_ts", ev.TimeStamp, "user_id", ev.User)
-			metrics.MessagesDropped.WithLabelValues("slack", "app_mention_dedup").Inc()
 			return
 		}
 		if a.msgDedup != nil {
