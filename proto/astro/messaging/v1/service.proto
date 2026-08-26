@@ -35,6 +35,12 @@ service AgentMessaging {
   rpc ProcessAudioStream(stream AudioStreamRequest)
       returns (stream AgentResponse);
 
+  // Copy a conversation from another system into a user's chat history.
+  // Unary rather than a stream payload because the agent has to see whether the
+  // copy diverged before deciding what to do next.
+  rpc SaveConversation(SaveConversationRequest)
+      returns (SaveConversationResponse);
+
   // Health check
   rpc HealthCheck(HealthCheckRequest)
       returns (HealthCheckResponse);

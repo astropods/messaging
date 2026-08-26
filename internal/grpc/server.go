@@ -568,12 +568,6 @@ func (s *Server) routeAgentResponse(ctx context.Context, response *pb.AgentRespo
 	responseType := agentResponseType(response)
 	metrics.AgentResponses.WithLabelValues(responseType).Inc()
 
-	// Not routed to an adapter: nothing reaches a platform, the copy only lands
-	// in its owner's chat history.
-	if save, ok := response.Payload.(*pb.AgentResponse_SaveConversation); ok {
-		return s.handleSaveConversation(ctx, save.SaveConversation)
-	}
-
 	// Try to find the platform from conversation cache
 	conv, err := s.conversationCache.Get(ctx, conversationID)
 	if err == nil {
@@ -655,8 +649,6 @@ func agentResponseType(r *pb.AgentResponse) string {
 		return "audio_chunk"
 	case *pb.AgentResponse_Feedback:
 		return "feedback"
-	case *pb.AgentResponse_SaveConversation:
-		return "save_conversation"
 	default:
 		return "unknown"
 	}

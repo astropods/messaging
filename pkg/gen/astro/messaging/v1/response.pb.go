@@ -199,6 +199,122 @@ func (ErrorResponse_ErrorCode) EnumDescriptor() ([]byte, []int) {
 	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{12, 0}
 }
 
+// What to do when the copy already exists. A copy the user has replied in is
+// never overwritten under SKIP: the platform will not destroy turns it did
+// not write, so choosing REPLACE there is the agent stating its intent.
+type SaveConversationRequest_OnConflict int32
+
+const (
+	SaveConversationRequest_ON_CONFLICT_UNSPECIFIED SaveConversationRequest_OnConflict = 0 // Same as SKIP
+	SaveConversationRequest_SKIP                    SaveConversationRequest_OnConflict = 1 // Refresh a pristine copy; leave a diverged one alone
+	SaveConversationRequest_REPLACE                 SaveConversationRequest_OnConflict = 2 // Overwrite, discarding the user's own turns
+	SaveConversationRequest_APPEND                  SaveConversationRequest_OnConflict = 3 // Add these messages to whatever is there
+)
+
+// Enum value maps for SaveConversationRequest_OnConflict.
+var (
+	SaveConversationRequest_OnConflict_name = map[int32]string{
+		0: "ON_CONFLICT_UNSPECIFIED",
+		1: "SKIP",
+		2: "REPLACE",
+		3: "APPEND",
+	}
+	SaveConversationRequest_OnConflict_value = map[string]int32{
+		"ON_CONFLICT_UNSPECIFIED": 0,
+		"SKIP":                    1,
+		"REPLACE":                 2,
+		"APPEND":                  3,
+	}
+)
+
+func (x SaveConversationRequest_OnConflict) Enum() *SaveConversationRequest_OnConflict {
+	p := new(SaveConversationRequest_OnConflict)
+	*p = x
+	return p
+}
+
+func (x SaveConversationRequest_OnConflict) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SaveConversationRequest_OnConflict) Descriptor() protoreflect.EnumDescriptor {
+	return file_astro_messaging_v1_response_proto_enumTypes[3].Descriptor()
+}
+
+func (SaveConversationRequest_OnConflict) Type() protoreflect.EnumType {
+	return &file_astro_messaging_v1_response_proto_enumTypes[3]
+}
+
+func (x SaveConversationRequest_OnConflict) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SaveConversationRequest_OnConflict.Descriptor instead.
+func (SaveConversationRequest_OnConflict) EnumDescriptor() ([]byte, []int) {
+	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{16, 0}
+}
+
+type SaveConversationResponse_Status int32
+
+const (
+	SaveConversationResponse_STATUS_UNSPECIFIED SaveConversationResponse_Status = 0
+	SaveConversationResponse_CREATED            SaveConversationResponse_Status = 1 // First save; the copy did not exist
+	SaveConversationResponse_REPLACED           SaveConversationResponse_Status = 2 // Existing copy refreshed
+	SaveConversationResponse_APPENDED           SaveConversationResponse_Status = 3 // Messages added to an existing copy
+	SaveConversationResponse_SKIPPED_DELETED    SaveConversationResponse_Status = 4 // The user deleted this copy
+	SaveConversationResponse_SKIPPED_DIVERGED   SaveConversationResponse_Status = 5 // The user has replied in it; SKIP left it alone
+	SaveConversationResponse_SKIPPED_CONFLICT   SaveConversationResponse_Status = 6 // The id belongs to another user
+)
+
+// Enum value maps for SaveConversationResponse_Status.
+var (
+	SaveConversationResponse_Status_name = map[int32]string{
+		0: "STATUS_UNSPECIFIED",
+		1: "CREATED",
+		2: "REPLACED",
+		3: "APPENDED",
+		4: "SKIPPED_DELETED",
+		5: "SKIPPED_DIVERGED",
+		6: "SKIPPED_CONFLICT",
+	}
+	SaveConversationResponse_Status_value = map[string]int32{
+		"STATUS_UNSPECIFIED": 0,
+		"CREATED":            1,
+		"REPLACED":           2,
+		"APPENDED":           3,
+		"SKIPPED_DELETED":    4,
+		"SKIPPED_DIVERGED":   5,
+		"SKIPPED_CONFLICT":   6,
+	}
+)
+
+func (x SaveConversationResponse_Status) Enum() *SaveConversationResponse_Status {
+	p := new(SaveConversationResponse_Status)
+	*p = x
+	return p
+}
+
+func (x SaveConversationResponse_Status) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SaveConversationResponse_Status) Descriptor() protoreflect.EnumDescriptor {
+	return file_astro_messaging_v1_response_proto_enumTypes[4].Descriptor()
+}
+
+func (SaveConversationResponse_Status) Type() protoreflect.EnumType {
+	return &file_astro_messaging_v1_response_proto_enumTypes[4]
+}
+
+func (x SaveConversationResponse_Status) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SaveConversationResponse_Status.Descriptor instead.
+func (SaveConversationResponse_Status) EnumDescriptor() ([]byte, []int) {
+	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{18, 0}
+}
+
 // Agent's streamed response (agent → platform)
 // Agent can send multiple AgentResponse messages in a stream
 // Also used by server to send incoming platform messages to agent
@@ -221,7 +337,6 @@ type AgentResponse struct {
 	//	*AgentResponse_AudioChunk
 	//	*AgentResponse_Feedback
 	//	*AgentResponse_Renderable
-	//	*AgentResponse_SaveConversation
 	Payload       isAgentResponse_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -393,15 +508,6 @@ func (x *AgentResponse) GetRenderable() *Renderable {
 	return nil
 }
 
-func (x *AgentResponse) GetSaveConversation() *SaveConversation {
-	if x != nil {
-		if x, ok := x.Payload.(*AgentResponse_SaveConversation); ok {
-			return x.SaveConversation
-		}
-	}
-	return nil
-}
-
 type isAgentResponse_Payload interface {
 	isAgentResponse_Payload()
 }
@@ -454,10 +560,6 @@ type AgentResponse_Renderable struct {
 	Renderable *Renderable `protobuf:"bytes,14,opt,name=renderable,proto3,oneof"` // Structured content to render (agent → platform)
 }
 
-type AgentResponse_SaveConversation struct {
-	SaveConversation *SaveConversation `protobuf:"bytes,16,opt,name=save_conversation,json=saveConversation,proto3,oneof"` // Copy an external conversation into a user's history (agent → platform)
-}
-
 func (*AgentResponse_IncomingMessage) isAgentResponse_Payload() {}
 
 func (*AgentResponse_Status) isAgentResponse_Payload() {}
@@ -481,8 +583,6 @@ func (*AgentResponse_AudioChunk) isAgentResponse_Payload() {}
 func (*AgentResponse_Feedback) isAgentResponse_Payload() {}
 
 func (*AgentResponse_Renderable) isAgentResponse_Payload() {}
-
-func (*AgentResponse_SaveConversation) isAgentResponse_Payload() {}
 
 // AI status indicators (loading states, typing)
 // Platform translation:
@@ -1583,35 +1683,36 @@ func (x *ThreadMessage) GetPlatformData() map[string]string {
 // Copies an external conversation into one user's private chat history as a
 // snapshot. A later edit at the source only lands if the agent saves again.
 //
-// The conversation id derives from user_id and idempotency_key, so a repeat save
-// replaces the same copy rather than appending. A copy the user deleted is never
-// recreated, which is how they stop an agent that saves on every message.
-type SaveConversation struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	UserId         string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                         // WorkOS user id that owns the copy
-	IdempotencyKey string                 `protobuf:"bytes,2,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"` // Stable per source conversation and user
-	Title          string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
-	SourceLabel    string                 `protobuf:"bytes,4,opt,name=source_label,json=sourceLabel,proto3" json:"source_label,omitempty"` // Shown with the copy, e.g. "#eng-support"
-	SourceUrl      string                 `protobuf:"bytes,5,opt,name=source_url,json=sourceUrl,proto3" json:"source_url,omitempty"`       // Deep link back to the source (optional)
-	Messages       []*SavedMessage        `protobuf:"bytes,6,rep,name=messages,proto3" json:"messages,omitempty"`
+// The conversation id derives from user_id and idempotency_key, so repeat saves
+// address the same copy. A copy the user deleted is never recreated, which is
+// how they stop an agent that saves on every source message.
+type SaveConversationRequest struct {
+	state          protoimpl.MessageState             `protogen:"open.v1"`
+	UserId         string                             `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                         // WorkOS user id that owns the copy
+	IdempotencyKey string                             `protobuf:"bytes,2,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"` // Stable per source conversation and user
+	Title          string                             `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
+	SourceLabel    string                             `protobuf:"bytes,4,opt,name=source_label,json=sourceLabel,proto3" json:"source_label,omitempty"` // Shown with the copy, e.g. "#eng-support"
+	SourceUrl      string                             `protobuf:"bytes,5,opt,name=source_url,json=sourceUrl,proto3" json:"source_url,omitempty"`       // Deep link back to the source (optional)
+	Messages       []*SavedMessage                    `protobuf:"bytes,6,rep,name=messages,proto3" json:"messages,omitempty"`
+	OnConflict     SaveConversationRequest_OnConflict `protobuf:"varint,7,opt,name=on_conflict,json=onConflict,proto3,enum=astro.messaging.v1.SaveConversationRequest_OnConflict" json:"on_conflict,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
 
-func (x *SaveConversation) Reset() {
-	*x = SaveConversation{}
+func (x *SaveConversationRequest) Reset() {
+	*x = SaveConversationRequest{}
 	mi := &file_astro_messaging_v1_response_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SaveConversation) String() string {
+func (x *SaveConversationRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SaveConversation) ProtoMessage() {}
+func (*SaveConversationRequest) ProtoMessage() {}
 
-func (x *SaveConversation) ProtoReflect() protoreflect.Message {
+func (x *SaveConversationRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_astro_messaging_v1_response_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1623,51 +1724,58 @@ func (x *SaveConversation) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SaveConversation.ProtoReflect.Descriptor instead.
-func (*SaveConversation) Descriptor() ([]byte, []int) {
+// Deprecated: Use SaveConversationRequest.ProtoReflect.Descriptor instead.
+func (*SaveConversationRequest) Descriptor() ([]byte, []int) {
 	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{16}
 }
 
-func (x *SaveConversation) GetUserId() string {
+func (x *SaveConversationRequest) GetUserId() string {
 	if x != nil {
 		return x.UserId
 	}
 	return ""
 }
 
-func (x *SaveConversation) GetIdempotencyKey() string {
+func (x *SaveConversationRequest) GetIdempotencyKey() string {
 	if x != nil {
 		return x.IdempotencyKey
 	}
 	return ""
 }
 
-func (x *SaveConversation) GetTitle() string {
+func (x *SaveConversationRequest) GetTitle() string {
 	if x != nil {
 		return x.Title
 	}
 	return ""
 }
 
-func (x *SaveConversation) GetSourceLabel() string {
+func (x *SaveConversationRequest) GetSourceLabel() string {
 	if x != nil {
 		return x.SourceLabel
 	}
 	return ""
 }
 
-func (x *SaveConversation) GetSourceUrl() string {
+func (x *SaveConversationRequest) GetSourceUrl() string {
 	if x != nil {
 		return x.SourceUrl
 	}
 	return ""
 }
 
-func (x *SaveConversation) GetMessages() []*SavedMessage {
+func (x *SaveConversationRequest) GetMessages() []*SavedMessage {
 	if x != nil {
 		return x.Messages
 	}
 	return nil
+}
+
+func (x *SaveConversationRequest) GetOnConflict() SaveConversationRequest_OnConflict {
+	if x != nil {
+		return x.OnConflict
+	}
+	return SaveConversationRequest_ON_CONFLICT_UNSPECIFIED
 }
 
 type SavedMessage struct {
@@ -1738,6 +1846,60 @@ func (x *SavedMessage) GetTimestamp() *timestamppb.Timestamp {
 	return nil
 }
 
+type SaveConversationResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Where the copy lives. Also derivable from user_id and idempotency_key, so an
+	// agent can build a link before the call returns.
+	ConversationId string                          `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
+	Status         SaveConversationResponse_Status `protobuf:"varint,2,opt,name=status,proto3,enum=astro.messaging.v1.SaveConversationResponse_Status" json:"status,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *SaveConversationResponse) Reset() {
+	*x = SaveConversationResponse{}
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveConversationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveConversationResponse) ProtoMessage() {}
+
+func (x *SaveConversationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveConversationResponse.ProtoReflect.Descriptor instead.
+func (*SaveConversationResponse) Descriptor() ([]byte, []int) {
+	return file_astro_messaging_v1_response_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *SaveConversationResponse) GetConversationId() string {
+	if x != nil {
+		return x.ConversationId
+	}
+	return ""
+}
+
+func (x *SaveConversationResponse) GetStatus() SaveConversationResponse_Status {
+	if x != nil {
+		return x.Status
+	}
+	return SaveConversationResponse_STATUS_UNSPECIFIED
+}
+
 type SuggestedPrompts_Prompt struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                   // Unique ID (for tracking selection)
@@ -1750,7 +1912,7 @@ type SuggestedPrompts_Prompt struct {
 
 func (x *SuggestedPrompts_Prompt) Reset() {
 	*x = SuggestedPrompts_Prompt{}
-	mi := &file_astro_messaging_v1_response_proto_msgTypes[18]
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1762,7 +1924,7 @@ func (x *SuggestedPrompts_Prompt) String() string {
 func (*SuggestedPrompts_Prompt) ProtoMessage() {}
 
 func (x *SuggestedPrompts_Prompt) ProtoReflect() protoreflect.Message {
-	mi := &file_astro_messaging_v1_response_proto_msgTypes[18]
+	mi := &file_astro_messaging_v1_response_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1810,7 +1972,7 @@ var File_astro_messaging_v1_response_proto protoreflect.FileDescriptor
 
 const file_astro_messaging_v1_response_proto_rawDesc = "" +
 	"\n" +
-	"!astro/messaging/v1/response.proto\x12\x12astro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a astro/messaging/v1/message.proto\x1a\x1eastro/messaging/v1/audio.proto\x1a!astro/messaging/v1/feedback.proto\x1a#astro/messaging/v1/renderable.proto\x1a\x1eastro/messaging/v1/trace.proto\"\xbc\b\n" +
+	"!astro/messaging/v1/response.proto\x12\x12astro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a astro/messaging/v1/message.proto\x1a\x1eastro/messaging/v1/audio.proto\x1a!astro/messaging/v1/feedback.proto\x1a#astro/messaging/v1/renderable.proto\x1a\x1eastro/messaging/v1/trace.proto\"\xe7\a\n" +
 	"\rAgentResponse\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x1f\n" +
 	"\vresponse_id\x18\x02 \x01(\tR\n" +
@@ -1833,8 +1995,7 @@ const file_astro_messaging_v1_response_proto_rawDesc = "" +
 	"\bfeedback\x18\r \x01(\v2$.astro.messaging.v1.PlatformFeedbackH\x00R\bfeedback\x12@\n" +
 	"\n" +
 	"renderable\x18\x0e \x01(\v2\x1e.astro.messaging.v1.RenderableH\x00R\n" +
-	"renderable\x12S\n" +
-	"\x11save_conversation\x18\x10 \x01(\v2$.astro.messaging.v1.SaveConversationH\x00R\x10saveConversationB\t\n" +
+	"renderableB\t\n" +
 	"\apayload\"\x86\x02\n" +
 	"\fStatusUpdate\x12?\n" +
 	"\x06status\x18\x01 \x01(\x0e2'.astro.messaging.v1.StatusUpdate.StatusR\x06status\x12%\n" +
@@ -1958,20 +2119,40 @@ const file_astro_messaging_v1_response_proto_rawDesc = "" +
 	"\rplatform_data\x18\v \x03(\v23.astro.messaging.v1.ThreadMessage.PlatformDataEntryR\fplatformData\x1a?\n" +
 	"\x11PlatformDataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xea\x01\n" +
-	"\x10SaveConversation\x12\x17\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x98\x03\n" +
+	"\x17SaveConversationRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12'\n" +
 	"\x0fidempotency_key\x18\x02 \x01(\tR\x0eidempotencyKey\x12\x14\n" +
 	"\x05title\x18\x03 \x01(\tR\x05title\x12!\n" +
 	"\fsource_label\x18\x04 \x01(\tR\vsourceLabel\x12\x1d\n" +
 	"\n" +
 	"source_url\x18\x05 \x01(\tR\tsourceUrl\x12<\n" +
-	"\bmessages\x18\x06 \x03(\v2 .astro.messaging.v1.SavedMessageR\bmessages\"\x8e\x01\n" +
+	"\bmessages\x18\x06 \x03(\v2 .astro.messaging.v1.SavedMessageR\bmessages\x12W\n" +
+	"\von_conflict\x18\a \x01(\x0e26.astro.messaging.v1.SaveConversationRequest.OnConflictR\n" +
+	"onConflict\"L\n" +
+	"\n" +
+	"OnConflict\x12\x1b\n" +
+	"\x17ON_CONFLICT_UNSPECIFIED\x10\x00\x12\b\n" +
+	"\x04SKIP\x10\x01\x12\v\n" +
+	"\aREPLACE\x10\x02\x12\n" +
+	"\n" +
+	"\x06APPEND\x10\x03\"\x8e\x01\n" +
 	"\fSavedMessage\x12\x12\n" +
 	"\x04role\x18\x01 \x01(\tR\x04role\x12\x16\n" +
 	"\x06author\x18\x02 \x01(\tR\x06author\x12\x18\n" +
 	"\acontent\x18\x03 \x01(\tR\acontent\x128\n" +
-	"\ttimestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestampB3Z1github.com/postman/astro/messaging/v1;messagingv1b\x06proto3"
+	"\ttimestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\x9d\x02\n" +
+	"\x18SaveConversationResponse\x12'\n" +
+	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12K\n" +
+	"\x06status\x18\x02 \x01(\x0e23.astro.messaging.v1.SaveConversationResponse.StatusR\x06status\"\x8a\x01\n" +
+	"\x06Status\x12\x16\n" +
+	"\x12STATUS_UNSPECIFIED\x10\x00\x12\v\n" +
+	"\aCREATED\x10\x01\x12\f\n" +
+	"\bREPLACED\x10\x02\x12\f\n" +
+	"\bAPPENDED\x10\x03\x12\x13\n" +
+	"\x0fSKIPPED_DELETED\x10\x04\x12\x14\n" +
+	"\x10SKIPPED_DIVERGED\x10\x05\x12\x14\n" +
+	"\x10SKIPPED_CONFLICT\x10\x06B3Z1github.com/postman/astro/messaging/v1;messagingv1b\x06proto3"
 
 var (
 	file_astro_messaging_v1_response_proto_rawDescOnce sync.Once
@@ -1985,82 +2166,86 @@ func file_astro_messaging_v1_response_proto_rawDescGZIP() []byte {
 	return file_astro_messaging_v1_response_proto_rawDescData
 }
 
-var file_astro_messaging_v1_response_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_astro_messaging_v1_response_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_astro_messaging_v1_response_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_astro_messaging_v1_response_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_astro_messaging_v1_response_proto_goTypes = []any{
-	(StatusUpdate_Status)(0),        // 0: astro.messaging.v1.StatusUpdate.Status
-	(ContentChunk_ChunkType)(0),     // 1: astro.messaging.v1.ContentChunk.ChunkType
-	(ErrorResponse_ErrorCode)(0),    // 2: astro.messaging.v1.ErrorResponse.ErrorCode
-	(*AgentResponse)(nil),           // 3: astro.messaging.v1.AgentResponse
-	(*StatusUpdate)(nil),            // 4: astro.messaging.v1.StatusUpdate
-	(*ContentChunk)(nil),            // 5: astro.messaging.v1.ContentChunk
-	(*ResponseAttachment)(nil),      // 6: astro.messaging.v1.ResponseAttachment
-	(*ImageAttachment)(nil),         // 7: astro.messaging.v1.ImageAttachment
-	(*FileAttachment)(nil),          // 8: astro.messaging.v1.FileAttachment
-	(*CardAttachment)(nil),          // 9: astro.messaging.v1.CardAttachment
-	(*LinkPreview)(nil),             // 10: astro.messaging.v1.LinkPreview
-	(*MessageOptions)(nil),          // 11: astro.messaging.v1.MessageOptions
-	(*SuggestedPrompts)(nil),        // 12: astro.messaging.v1.SuggestedPrompts
-	(*ThreadMetadata)(nil),          // 13: astro.messaging.v1.ThreadMetadata
-	(*Transcript)(nil),              // 14: astro.messaging.v1.Transcript
-	(*ErrorResponse)(nil),           // 15: astro.messaging.v1.ErrorResponse
-	(*ThreadHistoryRequest)(nil),    // 16: astro.messaging.v1.ThreadHistoryRequest
-	(*ThreadHistoryResponse)(nil),   // 17: astro.messaging.v1.ThreadHistoryResponse
-	(*ThreadMessage)(nil),           // 18: astro.messaging.v1.ThreadMessage
-	(*SaveConversation)(nil),        // 19: astro.messaging.v1.SaveConversation
-	(*SavedMessage)(nil),            // 20: astro.messaging.v1.SavedMessage
-	(*SuggestedPrompts_Prompt)(nil), // 21: astro.messaging.v1.SuggestedPrompts.Prompt
-	nil,                             // 22: astro.messaging.v1.ThreadMessage.PlatformDataEntry
-	(*TraceContext)(nil),            // 23: astro.messaging.v1.TraceContext
-	(*Message)(nil),                 // 24: astro.messaging.v1.Message
-	(*AudioStreamConfig)(nil),       // 25: astro.messaging.v1.AudioStreamConfig
-	(*AudioChunk)(nil),              // 26: astro.messaging.v1.AudioChunk
-	(*PlatformFeedback)(nil),        // 27: astro.messaging.v1.PlatformFeedback
-	(*Renderable)(nil),              // 28: astro.messaging.v1.Renderable
-	(*timestamppb.Timestamp)(nil),   // 29: google.protobuf.Timestamp
-	(*User)(nil),                    // 30: astro.messaging.v1.User
-	(*Attachment)(nil),              // 31: astro.messaging.v1.Attachment
+	(StatusUpdate_Status)(0),                // 0: astro.messaging.v1.StatusUpdate.Status
+	(ContentChunk_ChunkType)(0),             // 1: astro.messaging.v1.ContentChunk.ChunkType
+	(ErrorResponse_ErrorCode)(0),            // 2: astro.messaging.v1.ErrorResponse.ErrorCode
+	(SaveConversationRequest_OnConflict)(0), // 3: astro.messaging.v1.SaveConversationRequest.OnConflict
+	(SaveConversationResponse_Status)(0),    // 4: astro.messaging.v1.SaveConversationResponse.Status
+	(*AgentResponse)(nil),                   // 5: astro.messaging.v1.AgentResponse
+	(*StatusUpdate)(nil),                    // 6: astro.messaging.v1.StatusUpdate
+	(*ContentChunk)(nil),                    // 7: astro.messaging.v1.ContentChunk
+	(*ResponseAttachment)(nil),              // 8: astro.messaging.v1.ResponseAttachment
+	(*ImageAttachment)(nil),                 // 9: astro.messaging.v1.ImageAttachment
+	(*FileAttachment)(nil),                  // 10: astro.messaging.v1.FileAttachment
+	(*CardAttachment)(nil),                  // 11: astro.messaging.v1.CardAttachment
+	(*LinkPreview)(nil),                     // 12: astro.messaging.v1.LinkPreview
+	(*MessageOptions)(nil),                  // 13: astro.messaging.v1.MessageOptions
+	(*SuggestedPrompts)(nil),                // 14: astro.messaging.v1.SuggestedPrompts
+	(*ThreadMetadata)(nil),                  // 15: astro.messaging.v1.ThreadMetadata
+	(*Transcript)(nil),                      // 16: astro.messaging.v1.Transcript
+	(*ErrorResponse)(nil),                   // 17: astro.messaging.v1.ErrorResponse
+	(*ThreadHistoryRequest)(nil),            // 18: astro.messaging.v1.ThreadHistoryRequest
+	(*ThreadHistoryResponse)(nil),           // 19: astro.messaging.v1.ThreadHistoryResponse
+	(*ThreadMessage)(nil),                   // 20: astro.messaging.v1.ThreadMessage
+	(*SaveConversationRequest)(nil),         // 21: astro.messaging.v1.SaveConversationRequest
+	(*SavedMessage)(nil),                    // 22: astro.messaging.v1.SavedMessage
+	(*SaveConversationResponse)(nil),        // 23: astro.messaging.v1.SaveConversationResponse
+	(*SuggestedPrompts_Prompt)(nil),         // 24: astro.messaging.v1.SuggestedPrompts.Prompt
+	nil,                                     // 25: astro.messaging.v1.ThreadMessage.PlatformDataEntry
+	(*TraceContext)(nil),                    // 26: astro.messaging.v1.TraceContext
+	(*Message)(nil),                         // 27: astro.messaging.v1.Message
+	(*AudioStreamConfig)(nil),               // 28: astro.messaging.v1.AudioStreamConfig
+	(*AudioChunk)(nil),                      // 29: astro.messaging.v1.AudioChunk
+	(*PlatformFeedback)(nil),                // 30: astro.messaging.v1.PlatformFeedback
+	(*Renderable)(nil),                      // 31: astro.messaging.v1.Renderable
+	(*timestamppb.Timestamp)(nil),           // 32: google.protobuf.Timestamp
+	(*User)(nil),                            // 33: astro.messaging.v1.User
+	(*Attachment)(nil),                      // 34: astro.messaging.v1.Attachment
 }
 var file_astro_messaging_v1_response_proto_depIdxs = []int32{
-	23, // 0: astro.messaging.v1.AgentResponse.trace_context:type_name -> astro.messaging.v1.TraceContext
-	24, // 1: astro.messaging.v1.AgentResponse.incoming_message:type_name -> astro.messaging.v1.Message
-	4,  // 2: astro.messaging.v1.AgentResponse.status:type_name -> astro.messaging.v1.StatusUpdate
-	5,  // 3: astro.messaging.v1.AgentResponse.content:type_name -> astro.messaging.v1.ContentChunk
-	12, // 4: astro.messaging.v1.AgentResponse.prompts:type_name -> astro.messaging.v1.SuggestedPrompts
-	13, // 5: astro.messaging.v1.AgentResponse.thread_metadata:type_name -> astro.messaging.v1.ThreadMetadata
-	15, // 6: astro.messaging.v1.AgentResponse.error:type_name -> astro.messaging.v1.ErrorResponse
-	16, // 7: astro.messaging.v1.AgentResponse.context_request:type_name -> astro.messaging.v1.ThreadHistoryRequest
-	14, // 8: astro.messaging.v1.AgentResponse.transcript:type_name -> astro.messaging.v1.Transcript
-	25, // 9: astro.messaging.v1.AgentResponse.audio_config:type_name -> astro.messaging.v1.AudioStreamConfig
-	26, // 10: astro.messaging.v1.AgentResponse.audio_chunk:type_name -> astro.messaging.v1.AudioChunk
-	27, // 11: astro.messaging.v1.AgentResponse.feedback:type_name -> astro.messaging.v1.PlatformFeedback
-	28, // 12: astro.messaging.v1.AgentResponse.renderable:type_name -> astro.messaging.v1.Renderable
-	19, // 13: astro.messaging.v1.AgentResponse.save_conversation:type_name -> astro.messaging.v1.SaveConversation
-	0,  // 14: astro.messaging.v1.StatusUpdate.status:type_name -> astro.messaging.v1.StatusUpdate.Status
-	1,  // 15: astro.messaging.v1.ContentChunk.type:type_name -> astro.messaging.v1.ContentChunk.ChunkType
-	6,  // 16: astro.messaging.v1.ContentChunk.attachments:type_name -> astro.messaging.v1.ResponseAttachment
-	11, // 17: astro.messaging.v1.ContentChunk.options:type_name -> astro.messaging.v1.MessageOptions
-	7,  // 18: astro.messaging.v1.ResponseAttachment.image:type_name -> astro.messaging.v1.ImageAttachment
-	8,  // 19: astro.messaging.v1.ResponseAttachment.file:type_name -> astro.messaging.v1.FileAttachment
-	9,  // 20: astro.messaging.v1.ResponseAttachment.card:type_name -> astro.messaging.v1.CardAttachment
-	10, // 21: astro.messaging.v1.ResponseAttachment.link:type_name -> astro.messaging.v1.LinkPreview
-	21, // 22: astro.messaging.v1.SuggestedPrompts.prompts:type_name -> astro.messaging.v1.SuggestedPrompts.Prompt
-	2,  // 23: astro.messaging.v1.ErrorResponse.code:type_name -> astro.messaging.v1.ErrorResponse.ErrorCode
-	18, // 24: astro.messaging.v1.ThreadHistoryResponse.messages:type_name -> astro.messaging.v1.ThreadMessage
-	29, // 25: astro.messaging.v1.ThreadHistoryResponse.fetched_at:type_name -> google.protobuf.Timestamp
-	30, // 26: astro.messaging.v1.ThreadMessage.user:type_name -> astro.messaging.v1.User
-	31, // 27: astro.messaging.v1.ThreadMessage.attachments:type_name -> astro.messaging.v1.Attachment
-	29, // 28: astro.messaging.v1.ThreadMessage.timestamp:type_name -> google.protobuf.Timestamp
-	29, // 29: astro.messaging.v1.ThreadMessage.edited_at:type_name -> google.protobuf.Timestamp
-	29, // 30: astro.messaging.v1.ThreadMessage.deleted_at:type_name -> google.protobuf.Timestamp
-	22, // 31: astro.messaging.v1.ThreadMessage.platform_data:type_name -> astro.messaging.v1.ThreadMessage.PlatformDataEntry
-	20, // 32: astro.messaging.v1.SaveConversation.messages:type_name -> astro.messaging.v1.SavedMessage
-	29, // 33: astro.messaging.v1.SavedMessage.timestamp:type_name -> google.protobuf.Timestamp
-	34, // [34:34] is the sub-list for method output_type
-	34, // [34:34] is the sub-list for method input_type
-	34, // [34:34] is the sub-list for extension type_name
-	34, // [34:34] is the sub-list for extension extendee
-	0,  // [0:34] is the sub-list for field type_name
+	26, // 0: astro.messaging.v1.AgentResponse.trace_context:type_name -> astro.messaging.v1.TraceContext
+	27, // 1: astro.messaging.v1.AgentResponse.incoming_message:type_name -> astro.messaging.v1.Message
+	6,  // 2: astro.messaging.v1.AgentResponse.status:type_name -> astro.messaging.v1.StatusUpdate
+	7,  // 3: astro.messaging.v1.AgentResponse.content:type_name -> astro.messaging.v1.ContentChunk
+	14, // 4: astro.messaging.v1.AgentResponse.prompts:type_name -> astro.messaging.v1.SuggestedPrompts
+	15, // 5: astro.messaging.v1.AgentResponse.thread_metadata:type_name -> astro.messaging.v1.ThreadMetadata
+	17, // 6: astro.messaging.v1.AgentResponse.error:type_name -> astro.messaging.v1.ErrorResponse
+	18, // 7: astro.messaging.v1.AgentResponse.context_request:type_name -> astro.messaging.v1.ThreadHistoryRequest
+	16, // 8: astro.messaging.v1.AgentResponse.transcript:type_name -> astro.messaging.v1.Transcript
+	28, // 9: astro.messaging.v1.AgentResponse.audio_config:type_name -> astro.messaging.v1.AudioStreamConfig
+	29, // 10: astro.messaging.v1.AgentResponse.audio_chunk:type_name -> astro.messaging.v1.AudioChunk
+	30, // 11: astro.messaging.v1.AgentResponse.feedback:type_name -> astro.messaging.v1.PlatformFeedback
+	31, // 12: astro.messaging.v1.AgentResponse.renderable:type_name -> astro.messaging.v1.Renderable
+	0,  // 13: astro.messaging.v1.StatusUpdate.status:type_name -> astro.messaging.v1.StatusUpdate.Status
+	1,  // 14: astro.messaging.v1.ContentChunk.type:type_name -> astro.messaging.v1.ContentChunk.ChunkType
+	8,  // 15: astro.messaging.v1.ContentChunk.attachments:type_name -> astro.messaging.v1.ResponseAttachment
+	13, // 16: astro.messaging.v1.ContentChunk.options:type_name -> astro.messaging.v1.MessageOptions
+	9,  // 17: astro.messaging.v1.ResponseAttachment.image:type_name -> astro.messaging.v1.ImageAttachment
+	10, // 18: astro.messaging.v1.ResponseAttachment.file:type_name -> astro.messaging.v1.FileAttachment
+	11, // 19: astro.messaging.v1.ResponseAttachment.card:type_name -> astro.messaging.v1.CardAttachment
+	12, // 20: astro.messaging.v1.ResponseAttachment.link:type_name -> astro.messaging.v1.LinkPreview
+	24, // 21: astro.messaging.v1.SuggestedPrompts.prompts:type_name -> astro.messaging.v1.SuggestedPrompts.Prompt
+	2,  // 22: astro.messaging.v1.ErrorResponse.code:type_name -> astro.messaging.v1.ErrorResponse.ErrorCode
+	20, // 23: astro.messaging.v1.ThreadHistoryResponse.messages:type_name -> astro.messaging.v1.ThreadMessage
+	32, // 24: astro.messaging.v1.ThreadHistoryResponse.fetched_at:type_name -> google.protobuf.Timestamp
+	33, // 25: astro.messaging.v1.ThreadMessage.user:type_name -> astro.messaging.v1.User
+	34, // 26: astro.messaging.v1.ThreadMessage.attachments:type_name -> astro.messaging.v1.Attachment
+	32, // 27: astro.messaging.v1.ThreadMessage.timestamp:type_name -> google.protobuf.Timestamp
+	32, // 28: astro.messaging.v1.ThreadMessage.edited_at:type_name -> google.protobuf.Timestamp
+	32, // 29: astro.messaging.v1.ThreadMessage.deleted_at:type_name -> google.protobuf.Timestamp
+	25, // 30: astro.messaging.v1.ThreadMessage.platform_data:type_name -> astro.messaging.v1.ThreadMessage.PlatformDataEntry
+	22, // 31: astro.messaging.v1.SaveConversationRequest.messages:type_name -> astro.messaging.v1.SavedMessage
+	3,  // 32: astro.messaging.v1.SaveConversationRequest.on_conflict:type_name -> astro.messaging.v1.SaveConversationRequest.OnConflict
+	32, // 33: astro.messaging.v1.SavedMessage.timestamp:type_name -> google.protobuf.Timestamp
+	4,  // 34: astro.messaging.v1.SaveConversationResponse.status:type_name -> astro.messaging.v1.SaveConversationResponse.Status
+	35, // [35:35] is the sub-list for method output_type
+	35, // [35:35] is the sub-list for method input_type
+	35, // [35:35] is the sub-list for extension type_name
+	35, // [35:35] is the sub-list for extension extendee
+	0,  // [0:35] is the sub-list for field type_name
 }
 
 func init() { file_astro_messaging_v1_response_proto_init() }
@@ -2086,7 +2271,6 @@ func file_astro_messaging_v1_response_proto_init() {
 		(*AgentResponse_AudioChunk)(nil),
 		(*AgentResponse_Feedback)(nil),
 		(*AgentResponse_Renderable)(nil),
-		(*AgentResponse_SaveConversation)(nil),
 	}
 	file_astro_messaging_v1_response_proto_msgTypes[3].OneofWrappers = []any{
 		(*ResponseAttachment_Image)(nil),
@@ -2099,8 +2283,8 @@ func file_astro_messaging_v1_response_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_astro_messaging_v1_response_proto_rawDesc), len(file_astro_messaging_v1_response_proto_rawDesc)),
-			NumEnums:      3,
-			NumMessages:   20,
+			NumEnums:      5,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

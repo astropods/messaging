@@ -586,13 +586,14 @@ const file_astro_messaging_v1_service_proto_rawDesc = "" +
 	"\aUNKNOWN\x10\x00\x12\v\n" +
 	"\aHEALTHY\x10\x01\x12\f\n" +
 	"\bDEGRADED\x10\x02\x12\r\n" +
-	"\tUNHEALTHY\x10\x032\xf7\x04\n" +
+	"\tUNHEALTHY\x10\x032\xe6\x05\n" +
 	"\x0eAgentMessaging\x12e\n" +
 	"\x13ProcessConversation\x12'.astro.messaging.v1.ConversationRequest\x1a!.astro.messaging.v1.AgentResponse(\x010\x01\x12R\n" +
 	"\x0eProcessMessage\x12\x1b.astro.messaging.v1.Message\x1a!.astro.messaging.v1.AgentResponse0\x01\x12g\n" +
 	"\x10GetThreadHistory\x12(.astro.messaging.v1.ThreadHistoryRequest\x1a).astro.messaging.v1.ThreadHistoryResponse\x12|\n" +
 	"\x17GetConversationMetadata\x12/.astro.messaging.v1.ConversationMetadataRequest\x1a0.astro.messaging.v1.ConversationMetadataResponse\x12c\n" +
-	"\x12ProcessAudioStream\x12&.astro.messaging.v1.AudioStreamRequest\x1a!.astro.messaging.v1.AgentResponse(\x010\x01\x12^\n" +
+	"\x12ProcessAudioStream\x12&.astro.messaging.v1.AudioStreamRequest\x1a!.astro.messaging.v1.AgentResponse(\x010\x01\x12m\n" +
+	"\x10SaveConversation\x12+.astro.messaging.v1.SaveConversationRequest\x1a,.astro.messaging.v1.SaveConversationResponse\x12^\n" +
 	"\vHealthCheck\x12&.astro.messaging.v1.HealthCheckRequest\x1a'.astro.messaging.v1.HealthCheckResponseB3Z1github.com/postman/astro/messaging/v1;messagingv1b\x06proto3"
 
 var (
@@ -626,7 +627,9 @@ var file_astro_messaging_v1_service_proto_goTypes = []any{
 	(*timestamppb.Timestamp)(nil),        // 13: google.protobuf.Timestamp
 	(*ThreadHistoryRequest)(nil),         // 14: astro.messaging.v1.ThreadHistoryRequest
 	(*AudioStreamRequest)(nil),           // 15: astro.messaging.v1.AudioStreamRequest
-	(*ThreadHistoryResponse)(nil),        // 16: astro.messaging.v1.ThreadHistoryResponse
+	(*SaveConversationRequest)(nil),      // 16: astro.messaging.v1.SaveConversationRequest
+	(*ThreadHistoryResponse)(nil),        // 17: astro.messaging.v1.ThreadHistoryResponse
+	(*SaveConversationResponse)(nil),     // 18: astro.messaging.v1.SaveConversationResponse
 }
 var file_astro_messaging_v1_service_proto_depIdxs = []int32{
 	7,  // 0: astro.messaging.v1.ConversationRequest.message:type_name -> astro.messaging.v1.Message
@@ -643,15 +646,17 @@ var file_astro_messaging_v1_service_proto_depIdxs = []int32{
 	14, // 11: astro.messaging.v1.AgentMessaging.GetThreadHistory:input_type -> astro.messaging.v1.ThreadHistoryRequest
 	2,  // 12: astro.messaging.v1.AgentMessaging.GetConversationMetadata:input_type -> astro.messaging.v1.ConversationMetadataRequest
 	15, // 13: astro.messaging.v1.AgentMessaging.ProcessAudioStream:input_type -> astro.messaging.v1.AudioStreamRequest
-	5,  // 14: astro.messaging.v1.AgentMessaging.HealthCheck:input_type -> astro.messaging.v1.HealthCheckRequest
-	10, // 15: astro.messaging.v1.AgentMessaging.ProcessConversation:output_type -> astro.messaging.v1.AgentResponse
-	10, // 16: astro.messaging.v1.AgentMessaging.ProcessMessage:output_type -> astro.messaging.v1.AgentResponse
-	16, // 17: astro.messaging.v1.AgentMessaging.GetThreadHistory:output_type -> astro.messaging.v1.ThreadHistoryResponse
-	4,  // 18: astro.messaging.v1.AgentMessaging.GetConversationMetadata:output_type -> astro.messaging.v1.ConversationMetadataResponse
-	10, // 19: astro.messaging.v1.AgentMessaging.ProcessAudioStream:output_type -> astro.messaging.v1.AgentResponse
-	6,  // 20: astro.messaging.v1.AgentMessaging.HealthCheck:output_type -> astro.messaging.v1.HealthCheckResponse
-	15, // [15:21] is the sub-list for method output_type
-	9,  // [9:15] is the sub-list for method input_type
+	16, // 14: astro.messaging.v1.AgentMessaging.SaveConversation:input_type -> astro.messaging.v1.SaveConversationRequest
+	5,  // 15: astro.messaging.v1.AgentMessaging.HealthCheck:input_type -> astro.messaging.v1.HealthCheckRequest
+	10, // 16: astro.messaging.v1.AgentMessaging.ProcessConversation:output_type -> astro.messaging.v1.AgentResponse
+	10, // 17: astro.messaging.v1.AgentMessaging.ProcessMessage:output_type -> astro.messaging.v1.AgentResponse
+	17, // 18: astro.messaging.v1.AgentMessaging.GetThreadHistory:output_type -> astro.messaging.v1.ThreadHistoryResponse
+	4,  // 19: astro.messaging.v1.AgentMessaging.GetConversationMetadata:output_type -> astro.messaging.v1.ConversationMetadataResponse
+	10, // 20: astro.messaging.v1.AgentMessaging.ProcessAudioStream:output_type -> astro.messaging.v1.AgentResponse
+	18, // 21: astro.messaging.v1.AgentMessaging.SaveConversation:output_type -> astro.messaging.v1.SaveConversationResponse
+	6,  // 22: astro.messaging.v1.AgentMessaging.HealthCheck:output_type -> astro.messaging.v1.HealthCheckResponse
+	16, // [16:23] is the sub-list for method output_type
+	9,  // [9:16] is the sub-list for method input_type
 	9,  // [9:9] is the sub-list for extension type_name
 	9,  // [9:9] is the sub-list for extension extendee
 	0,  // [0:9] is the sub-list for field type_name

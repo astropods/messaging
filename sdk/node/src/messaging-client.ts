@@ -116,7 +116,6 @@ export interface AgentResponse {
   audioChunk?: AudioChunk;
   feedback?: PlatformFeedback;
   renderable?: Renderable;
-  saveConversation?: SaveConversation;
 }
 
 /**
@@ -156,7 +155,7 @@ export function deriveSavedConversationId(
   ].join('-');
 }
 
-export interface SaveConversation {
+export interface SaveConversationRequest {
   /** WorkOS user id that owns the copy. Must start with `user_`. */
   userId: string;
   /** Stable per source conversation and user. */
@@ -167,6 +166,25 @@ export interface SaveConversation {
   /** Deep link back to the source. */
   sourceUrl?: string;
   messages: SavedMessage[];
+  /**
+   * What to do when the copy already exists. A copy the user has replied in is
+   * never overwritten under SKIP: the platform will not destroy turns it did not
+   * write, so choosing REPLACE there is the agent stating its intent.
+   */
+  onConflict?: 'SKIP' | 'REPLACE' | 'APPEND';
+}
+
+export type SaveConversationStatus =
+  | 'CREATED'
+  | 'REPLACED'
+  | 'APPENDED'
+  | 'SKIPPED_DELETED'
+  | 'SKIPPED_DIVERGED'
+  | 'SKIPPED_CONFLICT';
+
+export interface SaveConversationResponse {
+  conversationId: string;
+  status: SaveConversationStatus;
 }
 
 export interface SavedMessage {
@@ -622,6 +640,31 @@ export class MessagingClient extends EventEmitter {
   /**
    * Check service health
    */
+  /**
+   * Copy a conversation from another system into a user's chat history.
+   *
+   * The response status is the point of the call: the copy may have been
+   * deleted, or the user may have replied in it, and only the agent can decide
+   * how to react.
+   */
+  async saveConversation(
+    request: SaveConversationRequest
+  ): Promise<SaveConversationResponse> {
+    if (!this.isConnected) {
+      throw new Error('Client not connected. Call connect() first.');
+    }
+
+    return new Promise((resolve, reject) => {
+      this.client.SaveConversation(
+        request,
+        (error: any, response: SaveConversationResponse) => {
+          if (error) reject(error);
+          else resolve(response);
+        }
+      );
+    });
+  }
+
   async healthCheck(): Promise<{ status: string }> {
     if (!this.isConnected) {
       throw new Error('Client not connected. Call connect() first.');
@@ -849,21 +892,6 @@ export class ConversationStream extends EventEmitter {
       ...response,
       transcript: { text, messageId, language },
     });
-  }
-
-  /**
-   * Copy an external conversation into a user's private chat history.
-   *
-   * Returns the conversation id the copy lands on, derived locally, so the agent
-   * can link to it without waiting for a round trip. The send is fire-and-forget:
-   * the sidecar logs and drops a save it rejects rather than failing the stream.
-   */
-  sendSaveConversation(save: SaveConversation): string {
-    this.sendAgentResponse({
-      conversationId: '',
-      saveConversation: save,
-    });
-    return deriveSavedConversationId(save.userId, save.idempotencyKey);
   }
 
   // --- Audio support ---

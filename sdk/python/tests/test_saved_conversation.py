@@ -25,20 +25,29 @@ def test_derive_scopes_the_copy_to_one_user():
     )
 
 
-def test_save_conversation_roundtrip():
-    resp = response_pb2.AgentResponse(
-        save_conversation=response_pb2.SaveConversation(
-            user_id="user_1",
-            idempotency_key="slack:C1:111.0001",
-            title="Thread",
-            source_label="#eng",
-            messages=[
-                response_pb2.SavedMessage(role="user", author="Ada", content="hello"),
-                response_pb2.SavedMessage(role="assistant", content="hi"),
-            ],
-        )
+def test_save_conversation_request_roundtrip():
+    req = response_pb2.SaveConversationRequest(
+        user_id="user_1",
+        idempotency_key="slack:C1:111.0001",
+        title="Thread",
+        source_label="#eng",
+        on_conflict=response_pb2.SaveConversationRequest.APPEND,
+        messages=[
+            response_pb2.SavedMessage(role="user", author="Ada", content="hello"),
+            response_pb2.SavedMessage(role="assistant", content="hi"),
+        ],
     )
-    decoded = response_pb2.AgentResponse()
+    decoded = response_pb2.SaveConversationRequest()
+    decoded.ParseFromString(req.SerializeToString())
+    assert decoded.messages[0].author == "Ada"
+    assert decoded.on_conflict == response_pb2.SaveConversationRequest.APPEND
+
+
+def test_save_conversation_response_carries_status():
+    resp = response_pb2.SaveConversationResponse(
+        conversation_id="abc",
+        status=response_pb2.SaveConversationResponse.SKIPPED_DIVERGED,
+    )
+    decoded = response_pb2.SaveConversationResponse()
     decoded.ParseFromString(resp.SerializeToString())
-    assert decoded.WhichOneof("payload") == "save_conversation"
-    assert decoded.save_conversation.messages[0].author == "Ada"
+    assert decoded.status == response_pb2.SaveConversationResponse.SKIPPED_DIVERGED

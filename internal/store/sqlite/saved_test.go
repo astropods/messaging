@@ -17,6 +17,34 @@ func savedMsgs(contents ...string) []SavedMessage {
 	return out
 }
 
+func save(t *testing.T, st *Store, req SaveRequest) (string, SaveStatus) {
+	t.Helper()
+	if req.UserID == "" {
+		req.UserID = "user_1"
+	}
+	if req.IdempotencyKey == "" {
+		req.IdempotencyKey = "k1"
+	}
+	id, status, err := st.SaveConversation(t.Context(), req)
+	if err != nil {
+		t.Fatalf("SaveConversation: %v", err)
+	}
+	return id, status
+}
+
+func contents(t *testing.T, st *Store, id string) []string {
+	t.Helper()
+	msgs, err := st.ListMessages(t.Context(), id)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	out := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, m.Content)
+	}
+	return out
+}
+
 func TestDeriveSavedConversationID_StableAndScopedToUser(t *testing.T) {
 	a := DeriveSavedConversationID("user_1", "slack:C1:111.0001")
 	if a != DeriveSavedConversationID("user_1", "slack:C1:111.0001") {
@@ -33,10 +61,12 @@ func TestDeriveSavedConversationID_StableAndScopedToUser(t *testing.T) {
 func TestSaveConversation_CreatesOwnedConversation(t *testing.T) {
 	st := newTestStore(t)
 
-	id, saved, err := st.SaveConversation(t.Context(), "user_1", "k1", "Thread", "#eng", "https://slack/x",
-		savedMsgs("hello", "hi back"))
-	if err != nil || !saved {
-		t.Fatalf("SaveConversation: saved=%v err=%v", saved, err)
+	id, status := save(t, st, SaveRequest{
+		Title: "Thread", SourceLabel: "#eng", SourceURL: "https://slack/x",
+		Messages: savedMsgs("hello", "hi back"),
+	})
+	if status != SaveCreated {
+		t.Fatalf("status = %q, want created", status)
 	}
 
 	conv, err := st.Get(t.Context(), id)
@@ -50,11 +80,8 @@ func TestSaveConversation_CreatesOwnedConversation(t *testing.T) {
 		t.Fatalf("source not persisted: %+v", conv)
 	}
 
-	msgs, err := st.ListMessages(t.Context(), id)
-	if err != nil {
-		t.Fatalf("ListMessages: %v", err)
-	}
-	if len(msgs) != 2 || msgs[0].Content != "hello" || msgs[1].Role != "assistant" {
+	msgs, _ := st.ListMessages(t.Context(), id)
+	if len(msgs) != 2 || msgs[1].Role != "assistant" {
 		t.Fatalf("messages wrong: %+v", msgs)
 	}
 	if msgs[0].Author != "Ada" {
@@ -63,41 +90,116 @@ func TestSaveConversation_CreatesOwnedConversation(t *testing.T) {
 
 	// The copy has to reach the sidebar, which excludes conversations with no
 	// messages and orders by recency.
-	list, err := st.ListByUser(t.Context(), "user_1")
-	if err != nil || len(list) != 1 {
+	if list, err := st.ListByUser(t.Context(), "user_1"); err != nil || len(list) != 1 {
 		t.Fatalf("ListByUser: %d %v", len(list), err)
 	}
 }
 
-// A re-save under the same key replaces the copy rather than appending, so an
-// agent that re-reads its source and re-sends the whole thread propagates edits
-// and deletions instead of accumulating duplicates.
-func TestSaveConversation_RepeatKeyReplacesContents(t *testing.T) {
+// Re-saving a copy the user has not touched refreshes it, so an agent that
+// re-reads its source and re-sends the whole thread propagates edits and
+// deletions instead of accumulating duplicates.
+func TestSaveConversation_RefreshesAPristineCopy(t *testing.T) {
 	st := newTestStore(t)
 
-	first, _, err := st.SaveConversation(t.Context(), "user_1", "k1", "Thread", "#eng", "", savedMsgs("one", "two"))
-	if err != nil {
-		t.Fatalf("first save: %v", err)
-	}
-	second, saved, err := st.SaveConversation(t.Context(), "user_1", "k1", "Thread edited", "#eng", "",
-		savedMsgs("one edited"))
-	if err != nil || !saved {
-		t.Fatalf("second save: saved=%v err=%v", saved, err)
+	first, _ := save(t, st, SaveRequest{Title: "Thread", Messages: savedMsgs("one", "two")})
+	second, status := save(t, st, SaveRequest{Title: "Thread edited", Messages: savedMsgs("one edited")})
+
+	if status != SaveReplaced {
+		t.Fatalf("status = %q, want replaced", status)
 	}
 	if first != second {
 		t.Fatalf("same key must resolve to the same conversation: %s vs %s", first, second)
 	}
-
+	if got := contents(t, st, first); len(got) != 1 || got[0] != "one edited" {
+		t.Fatalf("expected the copy refreshed, got %v", got)
+	}
 	msgs, _ := st.ListMessages(t.Context(), first)
-	if len(msgs) != 1 || msgs[0].Content != "one edited" {
-		t.Fatalf("expected the copy replaced, got %+v", msgs)
-	}
 	if msgs[0].Seq != 1 {
-		t.Fatalf("replaced copy must restart at seq 1, got %d", msgs[0].Seq)
+		t.Fatalf("a refreshed copy must restart at seq 1, got %d", msgs[0].Seq)
 	}
-	conv, _ := st.Get(t.Context(), first)
-	if conv.Title != "Thread edited" {
+	if conv, _ := st.Get(t.Context(), first); conv.Title != "Thread edited" {
 		t.Fatalf("title not refreshed: %q", conv.Title)
+	}
+}
+
+// A saved copy is an ordinary conversation, so the user can chat in it. The next
+// save must not throw their turns away without the agent asking for that.
+func TestSaveConversation_SkipsACopyTheUserRepliedIn(t *testing.T) {
+	st := newTestStore(t)
+
+	id, _ := save(t, st, SaveRequest{Title: "Thread", Messages: savedMsgs("slack one")})
+	if _, err := st.AppendMessage(t.Context(), id, "user_1", "user", "summarise this", ""); err != nil {
+		t.Fatalf("user turn: %v", err)
+	}
+	if _, err := st.UpsertAssistantProgress(t.Context(), id, "here you go", ""); err != nil {
+		t.Fatalf("assistant turn: %v", err)
+	}
+
+	_, status := save(t, st, SaveRequest{Title: "Thread", Messages: savedMsgs("slack one", "slack two")})
+	if status != SaveSkippedDiverged {
+		t.Fatalf("status = %q, want skipped_diverged", status)
+	}
+
+	got := contents(t, st, id)
+	if len(got) != 3 || got[1] != "summarise this" || got[2] != "here you go" {
+		t.Fatalf("the user's own turns must survive, got %v", got)
+	}
+}
+
+// An answered form is the user's work too, even when they typed no message.
+func TestSaveConversation_InteractionsCountAsDivergence(t *testing.T) {
+	st := newTestStore(t)
+
+	id, _ := save(t, st, SaveRequest{Messages: savedMsgs("slack one")})
+	if _, err := st.AppendInteraction(t.Context(), id, "user_1", nil); err != nil {
+		t.Fatalf("interaction: %v", err)
+	}
+
+	if _, status := save(t, st, SaveRequest{Messages: savedMsgs("slack two")}); status != SaveSkippedDiverged {
+		t.Fatalf("status = %q, want skipped_diverged", status)
+	}
+}
+
+// REPLACE is the agent stating it means to discard the user's turns, so the
+// platform stops protecting them. Nothing reaches this path by default.
+func TestSaveConversation_ReplaceOverwritesADivergedCopy(t *testing.T) {
+	st := newTestStore(t)
+
+	id, _ := save(t, st, SaveRequest{Messages: savedMsgs("slack one")})
+	if _, err := st.AppendMessage(t.Context(), id, "user_1", "user", "my own note", ""); err != nil {
+		t.Fatalf("user turn: %v", err)
+	}
+
+	_, status := save(t, st, SaveRequest{
+		Messages: savedMsgs("slack one", "slack two"), OnConflict: OnConflictReplace,
+	})
+	if status != SaveReplaced {
+		t.Fatalf("status = %q, want replaced", status)
+	}
+	if got := contents(t, st, id); len(got) != 2 || got[0] != "slack one" {
+		t.Fatalf("expected an overwrite, got %v", got)
+	}
+}
+
+// APPEND is how an agent syncs incrementally: it sends only the new turns and
+// they land after whatever the user has written.
+func TestSaveConversation_AppendAddsAfterTheUsersTurns(t *testing.T) {
+	st := newTestStore(t)
+
+	id, _ := save(t, st, SaveRequest{Messages: savedMsgs("slack one")})
+	if _, err := st.AppendMessage(t.Context(), id, "user_1", "user", "my own note", ""); err != nil {
+		t.Fatalf("user turn: %v", err)
+	}
+
+	_, status := save(t, st, SaveRequest{
+		Messages: savedMsgs("slack two"), OnConflict: OnConflictAppend,
+	})
+	if status != SaveAppended {
+		t.Fatalf("status = %q, want appended", status)
+	}
+	got := contents(t, st, id)
+	if len(got) != 3 || got[0] != "slack one" || got[1] != "my own note" || got[2] != "slack two" {
+		t.Fatalf("expected the new turn appended in order, got %v", got)
 	}
 }
 
@@ -106,23 +208,19 @@ func TestSaveConversation_RepeatKeyReplacesContents(t *testing.T) {
 func TestSaveConversation_DeletedCopyIsNeverRecreated(t *testing.T) {
 	st := newTestStore(t)
 
-	id, _, err := st.SaveConversation(t.Context(), "user_1", "k1", "Thread", "#eng", "", savedMsgs("one"))
-	if err != nil {
-		t.Fatalf("save: %v", err)
-	}
+	id, _ := save(t, st, SaveRequest{Messages: savedMsgs("one")})
 	if _, deleted, err := st.SoftDelete(t.Context(), id, "user_1"); err != nil || !deleted {
 		t.Fatalf("SoftDelete: deleted=%v err=%v", deleted, err)
 	}
 
-	gotID, saved, err := st.SaveConversation(t.Context(), "user_1", "k1", "Thread", "#eng", "", savedMsgs("two"))
-	if err != nil {
-		t.Fatalf("resave: %v", err)
-	}
-	if saved {
-		t.Fatal("a deleted copy must not be resurrected by the next save")
-	}
-	if gotID != id {
-		t.Fatalf("expected the same derived id back, got %s", gotID)
+	for _, mode := range []OnConflict{OnConflictSkip, OnConflictReplace, OnConflictAppend} {
+		gotID, status := save(t, st, SaveRequest{Messages: savedMsgs("two"), OnConflict: mode})
+		if status != SaveSkippedDeleted {
+			t.Fatalf("mode %v: status = %q, want skipped_deleted", mode, status)
+		}
+		if gotID != id {
+			t.Fatalf("expected the same derived id back, got %s", gotID)
+		}
 	}
 	if conv, _ := st.Get(t.Context(), id); conv != nil {
 		t.Fatal("conversation should still read as deleted")
@@ -137,8 +235,8 @@ func TestSaveConversation_RefusesForeignConversation(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	if _, saved, err := st.SaveConversation(t.Context(), "user_1", "k1", "Thread", "#eng", "", savedMsgs("x")); err != nil || saved {
-		t.Fatalf("expected refusal, saved=%v err=%v", saved, err)
+	if _, status := save(t, st, SaveRequest{Messages: savedMsgs("x"), OnConflict: OnConflictReplace}); status != SaveSkippedConflict {
+		t.Fatalf("status = %q, want skipped_conflict", status)
 	}
 	conv, _ := st.Get(t.Context(), id)
 	if conv == nil || conv.Title != "someone else's chat" || conv.UserID != "user_2" {
@@ -155,25 +253,22 @@ func TestSaveConversation_KeepsNewestWithinTheMessageCap(t *testing.T) {
 	}
 	msgs[len(msgs)-1].Content = "newest"
 
-	id, saved, err := st.SaveConversation(t.Context(), "user_1", "k1", "Long", "", "", msgs)
-	if err != nil || !saved {
-		t.Fatalf("save: saved=%v err=%v", saved, err)
-	}
-	stored, _ := st.ListMessages(t.Context(), id)
+	id, _ := save(t, st, SaveRequest{Title: "Long", Messages: msgs})
+	stored := contents(t, st, id)
 	if len(stored) != MaxMessagesPerConversation {
 		t.Fatalf("expected %d messages, got %d", MaxMessagesPerConversation, len(stored))
 	}
-	if stored[len(stored)-1].Content != "newest" {
+	if stored[len(stored)-1] != "newest" {
 		t.Fatal("truncation must drop the oldest turns, not the newest")
 	}
 }
 
 func TestSaveConversation_RequiresUserAndKey(t *testing.T) {
 	st := newTestStore(t)
-	if _, _, err := st.SaveConversation(t.Context(), "", "k1", "t", "", "", nil); err == nil {
+	if _, _, err := st.SaveConversation(t.Context(), SaveRequest{IdempotencyKey: "k1"}); err == nil {
 		t.Fatal("expected an error for an empty user id")
 	}
-	if _, _, err := st.SaveConversation(t.Context(), "user_1", "", "t", "", "", nil); err == nil {
+	if _, _, err := st.SaveConversation(t.Context(), SaveRequest{UserID: "user_1"}); err == nil {
 		t.Fatal("expected an error for an empty idempotency key")
 	}
 }
@@ -182,11 +277,9 @@ func TestSaveConversation_UsesSourceTimestamps(t *testing.T) {
 	st := newTestStore(t)
 	when := time.Now().Add(-72 * time.Hour).Truncate(time.Millisecond)
 
-	id, _, err := st.SaveConversation(t.Context(), "user_1", "k1", "t", "", "",
-		[]SavedMessage{{Role: "user", Content: "old", Timestamp: when}})
-	if err != nil {
-		t.Fatalf("save: %v", err)
-	}
+	id, _ := save(t, st, SaveRequest{
+		Messages: []SavedMessage{{Role: "user", Content: "old", Timestamp: when}},
+	})
 
 	var createdMs int64
 	if err := st.db.QueryRowContext(t.Context(),

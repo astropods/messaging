@@ -154,6 +154,7 @@ CREATE INDEX IF NOT EXISTS idx_interactions_pending
 		{"conversations", "source_label"},
 		{"conversations", "source_url"},
 		{"messages", "author"},
+		{"messages", "origin"},
 	} {
 		if err := ensureColumn(db, c.table, c.column, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err

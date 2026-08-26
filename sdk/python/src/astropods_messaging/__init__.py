@@ -13,7 +13,8 @@ from .astro.messaging.v1.response_pb2 import (
     SuggestedPrompts,
     ThreadMetadata,
     Transcript,
-    SaveConversation,
+    SaveConversationRequest,
+    SaveConversationResponse,
     SavedMessage,
 )
 from .astro.messaging.v1.config_pb2 import AgentConfig, AgentToolConfig
@@ -41,7 +42,8 @@ __all__ = [
     "User",
     "Attachment",
     "AgentResponse",
-    "SaveConversation",
+    "SaveConversationRequest",
+    "SaveConversationResponse",
     "SavedMessage",
     "derive_saved_conversation_id",
     "StatusUpdate",
