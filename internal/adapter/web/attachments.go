@@ -169,14 +169,8 @@ func toProtoAttachment(att chatAttachment) *pb.Attachment {
 	}
 }
 
-// Spent across the whole message, not per image: maxAttachmentsPerMessage
-// images under a per-image cap would overrun the 4 MiB gRPC frame. Base64
-// inflates by ~33%, so a full budget lands near 2.7 MiB.
 const maxInlineImageBytes = 2 * 1024 * 1024
 
-// An agent sees an attachment as visual content only when it is typed IMAGE
-// and carries the bytes in a data URI. nil is always safe: the caller has
-// already emitted the FILE attachment.
 func inlineImageAttachment(ctx context.Context, fileStore files.FileStore, att chatAttachment, remaining int64) *pb.Attachment {
 	if fileStore == nil || remaining <= 0 || !strings.HasPrefix(att.ContentType, "image/") {
 		return nil
@@ -193,8 +187,6 @@ func inlineImageAttachment(ctx context.Context, fileStore files.FileStore, att c
 	}
 	defer func() { _ = rc.Close() }()
 
-	// Metadata and blob are written separately, so the declared size above is
-	// not a bound on what the blob actually holds.
 	raw, err := io.ReadAll(io.LimitReader(rc, remaining+1))
 	if err != nil {
 		slog.Warn("[Web] read image blob failed; forwarding as a file only", "key", att.Key, "err", err)
@@ -206,8 +198,6 @@ func inlineImageAttachment(ctx context.Context, fileStore files.FileStore, att c
 		return nil
 	}
 
-	// Content-Type comes from the browser, and the model rejects a data URI
-	// whose label disagrees with its bytes.
 	mediaType := http.DetectContentType(raw)
 	if j := strings.IndexByte(mediaType, ';'); j >= 0 {
 		mediaType = mediaType[:j]

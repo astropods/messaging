@@ -11,7 +11,6 @@ import (
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
-// onePixelPNG is a minimal valid PNG; http.DetectContentType sniffs it as image/png.
 const onePixelPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
 func storeFile(t *testing.T, fs files.FileStore, key, name, contentType string, body []byte) {
@@ -57,8 +56,6 @@ func onlyOfType(atts []*pb.Attachment, typ pb.Attachment_Type) []*pb.Attachment 
 	return out
 }
 
-// adapter-core drops anything that is not type IMAGE with a non-empty url, so
-// without the inline copy the model never sees the image.
 func TestSendMessage_ImageForwardedInline(t *testing.T) {
 	raw, err := base64.StdEncoding.DecodeString(onePixelPNG)
 	if err != nil {
@@ -109,7 +106,6 @@ func TestSendMessage_NonImageNotInlined(t *testing.T) {
 	}
 }
 
-// The model rejects a data URI whose label disagrees with its bytes.
 func TestSendMessage_MislabelledImageNotInlined(t *testing.T) {
 	fs, err := files.NewFSStore(t.TempDir())
 	if err != nil {
@@ -126,7 +122,6 @@ func TestSendMessage_MislabelledImageNotInlined(t *testing.T) {
 	}
 }
 
-// Without a message-wide budget these two would overrun the gRPC frame.
 func TestSendMessage_InlineBudgetSpansMessage(t *testing.T) {
 	fs, err := files.NewFSStore(t.TempDir())
 	if err != nil {
@@ -136,7 +131,6 @@ func TestSendMessage_InlineBudgetSpansMessage(t *testing.T) {
 	if derr != nil {
 		t.Fatalf("decode fixture: %v", derr)
 	}
-	// Two images that each fit alone but cannot both fit the budget.
 	padded := append(raw, make([]byte, (maxInlineImageBytes/2)+1)...)
 	storeFile(t, fs, "img-a", "a.png", "image/png", padded)
 	storeFile(t, fs, "img-b", "b.png", "image/png", padded)
