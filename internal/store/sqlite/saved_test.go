@@ -290,3 +290,42 @@ func TestSaveConversation_UsesSourceTimestamps(t *testing.T) {
 		t.Fatalf("expected the source timestamp %d, got %d", when.UnixMilli(), createdMs)
 	}
 }
+
+// A Slack thread ends on a human turn, so a naive "last message is the user's"
+// test reads every copy as a turn in flight and the UI spins forever.
+func TestSaveConversation_CopyDoesNotReadAsAnInFlightTurn(t *testing.T) {
+	st := newTestStore(t)
+
+	id, _ := save(t, st, SaveRequest{Title: "Thread", Messages: savedMsgs("only a user turn")})
+
+	list, err := st.ListByUser(t.Context(), "user_1")
+	if err != nil || len(list) != 1 {
+		t.Fatalf("ListByUser: %d %v", len(list), err)
+	}
+	if list[0].AssistantStreaming {
+		t.Error("a saved copy must not report an assistant reply in flight")
+	}
+	if _, _, _, lastRole, err := st.PageMessages(t.Context(), id, 10, 0); err != nil || lastRole == "user" {
+		t.Errorf("PageMessages lastRole = %q, want it blanked for a copy (%v)", lastRole, err)
+	}
+}
+
+// The startup reaper appends a terminal empty assistant row to conversations
+// whose last message is the user's. Left unguarded it would do that to every
+// saved copy on every restart.
+func TestSaveConversation_StartupReaperLeavesCopiesAlone(t *testing.T) {
+	st := newTestStore(t)
+
+	id, _ := save(t, st, SaveRequest{Title: "Thread", Messages: savedMsgs("only a user turn")})
+
+	n, err := st.ReapDanglingUserTurns(t.Context())
+	if err != nil {
+		t.Fatalf("reap: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("reaped %d conversations, want 0", n)
+	}
+	if got := contents(t, st, id); len(got) != 1 {
+		t.Errorf("copy gained a row: %v", got)
+	}
+}

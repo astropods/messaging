@@ -22,6 +22,8 @@ This also fixes a live double-delivery: an `@`-mention posted inside a channel t
 
 - **`user_id` must carry the `user_` prefix.** A raw Slack id or an arbitrary string would write a conversation no session can ever open. Validation failures return `InvalidArgument` rather than being swallowed: on a unary call the agent can see and handle them, which was not true of the stream payload.
 
+- **A copy never reads as a turn in flight.** A Slack thread ends on a human turn, and `assistant_streaming` is derived from "the last message is the user's". Without a guard every saved copy would spin in the sidebar forever, and the startup reaper would append a terminal empty assistant row to each one on every restart. Both now skip rows written by a save.
+
 - **Four additive columns**, all via `ensureColumn` on existing volumes: `conversations.source_label`, `conversations.source_url`, `messages.author`, and `messages.origin`. `author` matters because every human turn in a copied-in multi-party thread is role `user`, so without it the transcript reads as though one person said everything. All three are surfaced on the chat JSON as `source_label`, `source_url`, and `author`.
 
 - **Threaded mentions no longer double-deliver.** Slack sends both `message.channels` and `app_mention` for a mention. The guard that left mentions to the `app_mention` path only ran for top-level posts, so a mention inside a thread fell through as an ordinary thread reply and dispatched a second time, with both turns sharing one entry in `contentBuffers`. The guard now covers any channel message. DMs are deliberately excluded: a DM mention has no `app_mention` counterpart to fall back on.

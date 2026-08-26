@@ -315,7 +315,8 @@ func (s *Store) ListByUser(ctx context.Context, userID string) ([]Conversation, 
 		SELECT c.conversation_id, c.user_id, c.title, c.created_at, c.updated_at,
 			c.source_label, c.source_url,
 			COALESCE((
-				SELECT m.role FROM messages m
+				SELECT CASE WHEN m.origin = 'save' THEN '' ELSE m.role END
+				FROM messages m
 				WHERE m.conversation_id = c.conversation_id
 				ORDER BY m.seq DESC LIMIT 1
 			), '') AS last_role
@@ -515,8 +516,12 @@ func (s *Store) PageMessages(ctx context.Context, conversationID string, limit, 
 
 	// The newest message's role drives assistant_streaming and is independent of
 	// the returned page (which may be an older window).
+	// A copied-in conversation ends on a user turn by nature, and no reply is
+	// coming. Blanking the role here keeps every caller's "last role is the
+	// user's, so a turn is in flight" test true for chats but not for copies.
 	err = s.db.QueryRowContext(ctx,
-		`SELECT role FROM messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1`,
+		`SELECT CASE WHEN origin = 'save' THEN '' ELSE role END
+		 FROM messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1`,
 		conversationID,
 	).Scan(&lastRole)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -825,7 +830,8 @@ func (s *Store) ReapDanglingUserTurns(ctx context.Context) (int, error) {
 		FROM conversations c
 		WHERE c.deleted_at IS NULL
 			AND (
-				SELECT role FROM messages m
+				SELECT CASE WHEN m.origin = 'save' THEN '' ELSE m.role END
+				FROM messages m
 				WHERE m.conversation_id = c.conversation_id
 				ORDER BY m.seq DESC LIMIT 1
 			) = 'user'`)
