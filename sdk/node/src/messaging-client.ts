@@ -2,6 +2,7 @@ import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import { join } from 'path';
 import { EventEmitter } from 'events';
+import { createHash } from 'crypto';
 
 // google.protobuf.Timestamp as deserialized by @grpc/proto-loader (default opts).
 // seconds is encoded as a string because the value can exceed JS's safe-integer range.
@@ -115,6 +116,65 @@ export interface AgentResponse {
   audioChunk?: AudioChunk;
   feedback?: PlatformFeedback;
   renderable?: Renderable;
+  saveConversation?: SaveConversation;
+}
+
+/**
+ * Copies an external conversation into one user's private chat history as a
+ * snapshot. A later edit at the source only lands if the agent saves again.
+ *
+ * The conversation id derives from userId and idempotencyKey, so a repeat save
+ * replaces the same copy rather than appending. A copy the user deleted is never
+ * recreated, which is how they stop an agent that saves on every message.
+ */
+/**
+ * Namespace for the conversation ids SaveConversation writes to. Must stay
+ * byte-identical to savedConversationNamespace in the sidecar: the two derive
+ * the same id independently, and a mismatch orphans every copy.
+ */
+const SAVED_CONVERSATION_NAMESPACE = '8f2b0a54-6d31-4c9e-9a77-1f0c5b83e2d1';
+
+/** UUIDv5 over `userId + NUL + idempotencyKey`, matching the sidecar. */
+export function deriveSavedConversationId(
+  userId: string,
+  idempotencyKey: string
+): string {
+  const ns = Buffer.from(SAVED_CONVERSATION_NAMESPACE.replace(/-/g, ''), 'hex');
+  const h = createHash('sha1')
+    .update(ns)
+    .update(Buffer.from(`${userId}\0${idempotencyKey}`, 'utf8'))
+    .digest();
+  h[6] = (h[6] & 0x0f) | 0x50;
+  h[8] = (h[8] & 0x3f) | 0x80;
+  const hex = h.subarray(0, 16).toString('hex');
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join('-');
+}
+
+export interface SaveConversation {
+  /** WorkOS user id that owns the copy. Must start with `user_`. */
+  userId: string;
+  /** Stable per source conversation and user. */
+  idempotencyKey: string;
+  title?: string;
+  /** Shown with the copy, e.g. "#eng-support". */
+  sourceLabel?: string;
+  /** Deep link back to the source. */
+  sourceUrl?: string;
+  messages: SavedMessage[];
+}
+
+export interface SavedMessage {
+  role: 'user' | 'assistant';
+  /** Original sender's display name. */
+  author?: string;
+  content: string;
+  timestamp?: Date | string;
 }
 
 // Inbound platform feedback. Mirrors astro.messaging.v1.PlatformFeedback —
@@ -789,6 +849,21 @@ export class ConversationStream extends EventEmitter {
       ...response,
       transcript: { text, messageId, language },
     });
+  }
+
+  /**
+   * Copy an external conversation into a user's private chat history.
+   *
+   * Returns the conversation id the copy lands on, derived locally, so the agent
+   * can link to it without waiting for a round trip. The send is fire-and-forget:
+   * the sidecar logs and drops a save it rejects rather than failing the stream.
+   */
+  sendSaveConversation(save: SaveConversation): string {
+    this.sendAgentResponse({
+      conversationId: '',
+      saveConversation: save,
+    });
+    return deriveSavedConversationId(save.userId, save.idempotencyKey);
   }
 
   // --- Audio support ---
