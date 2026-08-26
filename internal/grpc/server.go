@@ -12,6 +12,7 @@ import (
 	"github.com/astropods/messaging/internal/logctx"
 	"github.com/astropods/messaging/internal/metrics"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/sqlite"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/astropods/messaging/pkg/types"
 	"google.golang.org/grpc"
@@ -34,6 +35,10 @@ type Server struct {
 
 	// Conversation metadata cache
 	conversationCache store.ConversationStore
+
+	// Chat store for conversations an agent copies in from an external system.
+	// nil when chat persistence is disabled.
+	chatStore *sqlite.Store
 
 	// Active streams (for bidirectional communication)
 	streams   map[string]*conversationStream
@@ -61,6 +66,11 @@ func NewServer(listenAddr string, threadStore *store.ThreadHistoryStore, convSto
 		streams:           make(map[string]*conversationStream),
 		listenAddr:        listenAddr,
 	}
+}
+
+// SetChatStore wires the sidecar-local chat store. nil disables SaveConversation.
+func (s *Server) SetChatStore(cs *sqlite.Store) {
+	s.chatStore = cs
 }
 
 // RegisterAdapter registers a platform adapter
@@ -558,6 +568,12 @@ func (s *Server) routeAgentResponse(ctx context.Context, response *pb.AgentRespo
 	responseType := agentResponseType(response)
 	metrics.AgentResponses.WithLabelValues(responseType).Inc()
 
+	// Not routed to an adapter: nothing reaches a platform, the copy only lands
+	// in its owner's chat history.
+	if save, ok := response.Payload.(*pb.AgentResponse_SaveConversation); ok {
+		return s.handleSaveConversation(ctx, save.SaveConversation)
+	}
+
 	// Try to find the platform from conversation cache
 	conv, err := s.conversationCache.Get(ctx, conversationID)
 	if err == nil {
@@ -639,6 +655,8 @@ func agentResponseType(r *pb.AgentResponse) string {
 		return "audio_chunk"
 	case *pb.AgentResponse_Feedback:
 		return "feedback"
+	case *pb.AgentResponse_SaveConversation:
+		return "save_conversation"
 	default:
 		return "unknown"
 	}

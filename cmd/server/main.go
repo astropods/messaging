@@ -189,6 +189,7 @@ func main() {
 	if cfg.GRPC.Enabled {
 		slog.Info("Initializing gRPC server...")
 		grpcServer = grpc.NewServer(cfg.GRPC.ListenAddr, threadStore, conversationStore, agentConfigStore)
+		grpcServer.SetChatStore(chatStore)
 		slog.Info("gRPC server initialized", "addr", cfg.GRPC.ListenAddr)
 	}
 

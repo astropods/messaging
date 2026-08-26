@@ -32,6 +32,7 @@ message AgentResponse {
     AudioChunk audio_chunk = 12;          // Audio data (server → agent)
     PlatformFeedback feedback = 13;       // Incoming platform feedback (server → agent)
     Renderable renderable = 14;           // Structured content to render (agent → platform)
+    SaveConversation save_conversation = 16;   // Copy an external conversation into a user's history (agent → platform)
   }
 }
 
@@ -214,4 +215,26 @@ message ThreadMessage {
 
   // Platform-specific data
   map<string, string> platform_data = 11;
+}
+
+// Copies an external conversation into one user's private chat history as a
+// snapshot. A later edit at the source only lands if the agent saves again.
+//
+// The conversation id derives from user_id and idempotency_key, so a repeat save
+// replaces the same copy rather than appending. A copy the user deleted is never
+// recreated, which is how they stop an agent that saves on every message.
+message SaveConversation {
+  string user_id = 1;                     // WorkOS user id that owns the copy
+  string idempotency_key = 2;             // Stable per source conversation and user
+  string title = 3;
+  string source_label = 4;                // Shown with the copy, e.g. "#eng-support"
+  string source_url = 5;                  // Deep link back to the source (optional)
+  repeated SavedMessage messages = 6;
+}
+
+message SavedMessage {
+  string role = 1;                        // "user" or "assistant"
+  string author = 2;                      // Original sender's display name (optional)
+  string content = 3;
+  google.protobuf.Timestamp timestamp = 4;
 }

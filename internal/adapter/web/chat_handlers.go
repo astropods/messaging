@@ -30,6 +30,9 @@ type chatMessageResponse struct {
 	Role        string           `json:"role"`
 	Content     string           `json:"content"`
 	Attachments []chatAttachment `json:"attachments,omitempty"`
+	// Names the original sender on a copied-in conversation, where every human
+	// turn is role "user" but only some are the owner's.
+	Author string `json:"author,omitempty"`
 }
 
 type chatConversationSummary struct {
@@ -37,6 +40,8 @@ type chatConversationSummary struct {
 	Title              string    `json:"title"`
 	UpdatedAt          time.Time `json:"updated_at"`
 	AssistantStreaming bool      `json:"assistant_streaming,omitempty"`
+	SourceLabel        string    `json:"source_label,omitempty"`
+	SourceURL          string    `json:"source_url,omitempty"`
 }
 
 type listChatConversationsResponse struct {
@@ -48,6 +53,8 @@ type getChatConversationResponse struct {
 	Title               string                 `json:"title"`
 	UpdatedAt           time.Time              `json:"updated_at"`
 	Messages            []chatMessageResponse  `json:"messages"`
+	SourceLabel         string                 `json:"source_label,omitempty"`
+	SourceURL           string                 `json:"source_url,omitempty"`
 	AssistantStreaming  bool                   `json:"assistant_streaming"`
 	HasMore             bool                   `json:"has_more,omitempty"`
 	OldestSeq           int                    `json:"oldest_seq,omitempty"`
@@ -87,6 +94,8 @@ func (h *Handlers) HandleListChatConversations(w http.ResponseWriter, r *http.Re
 			Title:              c.Title,
 			UpdatedAt:          c.UpdatedAt,
 			AssistantStreaming: streaming,
+			SourceLabel:        c.SourceLabel,
+			SourceURL:          c.SourceURL,
 		})
 	}
 	writeJSON(w, http.StatusOK, listChatConversationsResponse{Conversations: out})
@@ -151,6 +160,7 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 			Role:        m.Role,
 			Content:     m.Content,
 			Attachments: unmarshalAttachments(m.Attachments),
+			Author:      m.Author,
 		})
 	}
 
@@ -165,6 +175,8 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 		Title:               conv.Title,
 		UpdatedAt:           conv.UpdatedAt,
 		Messages:            messages,
+		SourceLabel:         conv.SourceLabel,
+		SourceURL:           conv.SourceURL,
 		AssistantStreaming:  assistantStreaming,
 		HasMore:             hasMore,
 		OldestSeq:           oldestSeq,
