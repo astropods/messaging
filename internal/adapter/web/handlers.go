@@ -257,8 +257,9 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	// scoped to the sender: an unknown key OR a key owned by another user is
 	// rejected (a stale/forged chip, or an attempt to attach someone else's file).
 	var (
-		attachments []chatAttachment
-		protoAtts   []*pb.Attachment
+		attachments  []chatAttachment
+		protoAtts    []*pb.Attachment
+		inlineBudget int64 = maxInlineImageBytes
 	)
 	for _, in := range req.Attachments {
 		att, ok := resolveAttachment(ctx, h.fileStore, in.Key, session.UserID)
@@ -268,6 +269,10 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		attachments = append(attachments, att)
 		protoAtts = append(protoAtts, toProtoAttachment(att))
+		if img := inlineImageAttachment(ctx, h.fileStore, att, inlineBudget); img != nil {
+			protoAtts = append(protoAtts, img)
+			inlineBudget -= img.SizeBytes
+		}
 	}
 
 	// Create message
