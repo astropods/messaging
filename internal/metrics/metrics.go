@@ -32,6 +32,13 @@ var (
 		Help: "Total Slack events received, by type: dm, thread_reply, mention, reaction, observed_top.",
 	}, []string{"event_type"})
 
+	// SaveConversations counts conversations agents copied in, by outcome:
+	// created, replaced, appended, skipped_deleted, skipped_diverged, skipped_conflict.
+	SaveConversations = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "messaging_save_conversations_total",
+		Help: "Total SaveConversation calls, by outcome.",
+	}, []string{"status"})
+
 	// AgentResponses counts responses routed from agents, labelled by payload type.
 	AgentResponses = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "messaging_agent_responses_total",

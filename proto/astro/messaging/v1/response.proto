@@ -215,3 +215,53 @@ message ThreadMessage {
   // Platform-specific data
   map<string, string> platform_data = 11;
 }
+
+// Copies an external conversation into one user's private chat history as a
+// snapshot. A later edit at the source only lands if the agent saves again.
+//
+// The conversation id derives from user_id and idempotency_key, so repeat saves
+// address the same copy. A copy the user deleted is never recreated, which is
+// how they stop an agent that saves on every source message.
+message SaveConversationRequest {
+  string user_id = 1;                     // WorkOS user id that owns the copy
+  string idempotency_key = 2;             // Stable per source conversation and user
+  string title = 3;
+  string source_label = 4;                // Shown with the copy, e.g. "#eng-support"
+  string source_url = 5;                  // Deep link back to the source (optional)
+  repeated SavedMessage messages = 6;
+
+  // What to do when the copy already exists. A copy the user has replied in is
+  // never overwritten under SKIP: the platform will not destroy turns it did
+  // not write, so choosing REPLACE there is the agent stating its intent.
+  enum OnConflict {
+    ON_CONFLICT_UNSPECIFIED = 0;          // Same as SKIP
+    SKIP = 1;                             // Refresh a pristine copy; leave a diverged one alone
+    REPLACE = 2;                          // Overwrite, discarding the user's own turns
+    APPEND = 3;                           // Add these messages to whatever is there
+  }
+  OnConflict on_conflict = 7;
+}
+
+message SavedMessage {
+  string role = 1;                        // "user" or "assistant"
+  string author = 2;                      // Original sender's display name (optional)
+  string content = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message SaveConversationResponse {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    CREATED = 1;                          // First save; the copy did not exist
+    REPLACED = 2;                         // Existing copy refreshed
+    APPENDED = 3;                         // Messages added to an existing copy
+    SKIPPED_DELETED = 4;                  // The user deleted this copy
+    SKIPPED_DIVERGED = 5;                 // The user has replied in it; SKIP left it alone
+    SKIPPED_CONFLICT = 6;                 // The id belongs to another user
+  }
+
+  // Where the copy lives. Also derivable from user_id and idempotency_key, so an
+  // agent can build a link before the call returns.
+  string conversation_id = 1;
+  Status status = 2;
+}

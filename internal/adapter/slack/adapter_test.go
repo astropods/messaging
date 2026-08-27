@@ -1728,3 +1728,68 @@ func TestHandleMessage_ForwardWithCommentReachesAgent(t *testing.T) {
 		}
 	}
 }
+
+// Slack delivers both message.channels and app_mention for a mention. The
+// app_mention path handles it, so the message.channels copy must be dropped in
+// a thread exactly as it is at top level; otherwise one Slack message reaches
+// the agent twice and both turns share a content buffer.
+func TestHandleMessage_ThreadReplyMentioningBot_Dropped(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.botUserID = "UBOTTEST"
+	before := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "app_mention_dedup"))
+
+	a.handleMessage(t.Context(), &slackevents.MessageEvent{
+		Channel:         "C123456",
+		User:            "U123",
+		Text:            "<@UBOTTEST> what about this",
+		TimeStamp:       "8888888888.000002",
+		ThreadTimeStamp: "8888888888.000001",
+	}, "", nil)
+
+	if handler.count() != 0 {
+		t.Fatalf("expected the mention to be left to app_mention, got %d deliveries", handler.count())
+	}
+	if got := testutil.ToFloat64(metrics.MessagesDropped.WithLabelValues("slack", "app_mention_dedup")) - before; got != 1 {
+		t.Errorf("expected app_mention_dedup +1, got +%v", got)
+	}
+}
+
+// The dedup keys on the bot mention, not on being in a thread: an ordinary
+// reply is the main way users talk to the agent and must still be delivered.
+func TestHandleMessage_ThreadReplyWithoutMention_StillDelivered(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.botUserID = "UBOTTEST"
+
+	a.handleMessage(t.Context(), &slackevents.MessageEvent{
+		Channel:         "C123456",
+		User:            "U123",
+		Text:            "plain reply",
+		TimeStamp:       "8888888888.000003",
+		ThreadTimeStamp: "8888888888.000001",
+	}, "", nil)
+
+	if handler.count() != 1 {
+		t.Fatalf("expected 1 delivery, got %d", handler.count())
+	}
+	if got := handler.last().ConversationId; got != "C123456-8888888888.000001" {
+		t.Errorf("conversation id should stay the thread root, got %q", got)
+	}
+}
+
+// A DM that mentions the bot has no app_mention counterpart to fall back on, so
+// the channel-only guard must not swallow it.
+func TestHandleMessage_DMMentioningBot_StillDelivered(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.botUserID = "UBOTTEST"
+
+	a.handleMessage(t.Context(), &slackevents.MessageEvent{
+		Channel:   "D123456",
+		User:      "U123",
+		Text:      "<@UBOTTEST> hello",
+		TimeStamp: "8888888888.000004",
+	}, "", nil)
+
+	if handler.count() != 1 {
+		t.Fatalf("expected the DM delivered, got %d", handler.count())
+	}
+}

@@ -2,6 +2,7 @@ import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import { join } from 'path';
 import { EventEmitter } from 'events';
+import { createHash } from 'crypto';
 
 // google.protobuf.Timestamp as deserialized by @grpc/proto-loader (default opts).
 // seconds is encoded as a string because the value can exceed JS's safe-integer range.
@@ -115,6 +116,83 @@ export interface AgentResponse {
   audioChunk?: AudioChunk;
   feedback?: PlatformFeedback;
   renderable?: Renderable;
+}
+
+/**
+ * Copies an external conversation into one user's private chat history as a
+ * snapshot. A later edit at the source only lands if the agent saves again.
+ *
+ * The conversation id derives from userId and idempotencyKey, so a repeat save
+ * replaces the same copy rather than appending. A copy the user deleted is never
+ * recreated, which is how they stop an agent that saves on every message.
+ */
+/**
+ * Namespace for the conversation ids SaveConversation writes to. Must stay
+ * byte-identical to savedConversationNamespace in the sidecar: the two derive
+ * the same id independently, and a mismatch orphans every copy.
+ */
+const SAVED_CONVERSATION_NAMESPACE = '8f2b0a54-6d31-4c9e-9a77-1f0c5b83e2d1';
+
+/** UUIDv5 over `userId + NUL + idempotencyKey`, matching the sidecar. */
+export function deriveSavedConversationId(
+  userId: string,
+  idempotencyKey: string
+): string {
+  const ns = Buffer.from(SAVED_CONVERSATION_NAMESPACE.replace(/-/g, ''), 'hex');
+  const h = createHash('sha1')
+    .update(ns)
+    .update(Buffer.from(`${userId}\0${idempotencyKey}`, 'utf8'))
+    .digest();
+  h[6] = (h[6] & 0x0f) | 0x50;
+  h[8] = (h[8] & 0x3f) | 0x80;
+  const hex = h.subarray(0, 16).toString('hex');
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join('-');
+}
+
+export interface SaveConversationRequest {
+  /** WorkOS user id that owns the copy. Must start with `user_`. */
+  userId: string;
+  /** Stable per source conversation and user. */
+  idempotencyKey: string;
+  title?: string;
+  /** Shown with the copy, e.g. "#eng-support". */
+  sourceLabel?: string;
+  /** Deep link back to the source. */
+  sourceUrl?: string;
+  messages: SavedMessage[];
+  /**
+   * What to do when the copy already exists. A copy the user has replied in is
+   * never overwritten under SKIP: the platform will not destroy turns it did not
+   * write, so choosing REPLACE there is the agent stating its intent.
+   */
+  onConflict?: 'SKIP' | 'REPLACE' | 'APPEND';
+}
+
+export type SaveConversationStatus =
+  | 'CREATED'
+  | 'REPLACED'
+  | 'APPENDED'
+  | 'SKIPPED_DELETED'
+  | 'SKIPPED_DIVERGED'
+  | 'SKIPPED_CONFLICT';
+
+export interface SaveConversationResponse {
+  conversationId: string;
+  status: SaveConversationStatus;
+}
+
+export interface SavedMessage {
+  role: 'user' | 'assistant';
+  /** Original sender's display name. */
+  author?: string;
+  content: string;
+  timestamp?: Date | string;
 }
 
 // Inbound platform feedback. Mirrors astro.messaging.v1.PlatformFeedback —
@@ -562,6 +640,31 @@ export class MessagingClient extends EventEmitter {
   /**
    * Check service health
    */
+  /**
+   * Copy a conversation from another system into a user's chat history.
+   *
+   * The response status is the point of the call: the copy may have been
+   * deleted, or the user may have replied in it, and only the agent can decide
+   * how to react.
+   */
+  async saveConversation(
+    request: SaveConversationRequest
+  ): Promise<SaveConversationResponse> {
+    if (!this.isConnected) {
+      throw new Error('Client not connected. Call connect() first.');
+    }
+
+    return new Promise((resolve, reject) => {
+      this.client.SaveConversation(
+        request,
+        (error: any, response: SaveConversationResponse) => {
+          if (error) reject(error);
+          else resolve(response);
+        }
+      );
+    });
+  }
+
   async healthCheck(): Promise<{ status: string }> {
     if (!this.isConnected) {
       throw new Error('Client not connected. Call connect() first.');

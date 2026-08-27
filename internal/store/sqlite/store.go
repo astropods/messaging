@@ -42,6 +42,9 @@ type Conversation struct {
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 	AssistantStreaming bool // derived: the latest message is from the user (turn in flight)
+	// Empty on conversations started here; set only by SaveConversation.
+	SourceLabel string
+	SourceURL   string
 }
 
 // Message is one chat turn row.
@@ -53,6 +56,9 @@ type Message struct {
 	// Attachments is the JSON-encoded array of file attachments on this turn
 	// (user uploads or agent-produced files). Empty string means none.
 	Attachments string
+	// Original sender's display name on a copied-in conversation, where every
+	// human turn is role "user" but not every one is the owner's.
+	Author string
 }
 
 // Store wraps the SQLite database. A single connection serializes writes, which
@@ -143,6 +149,17 @@ CREATE INDEX IF NOT EXISTS idx_interactions_pending
 	// SQLite has no ADD COLUMN IF NOT EXISTS, so add it only when absent.
 	if err := ensureColumn(db, "messages", "attachments", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
+	}
+	for _, c := range []struct{ table, column string }{
+		{"conversations", "source_label"},
+		{"conversations", "source_url"},
+		{"messages", "author"},
+		{"messages", "origin"},
+		{"conversations", "saved_title"},
+	} {
+		if err := ensureColumn(db, c.table, c.column, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -268,7 +285,7 @@ func (s *Store) EnsureForSend(ctx context.Context, conversationID, userID, title
 // Get returns one active conversation, or nil if it does not exist or is deleted.
 func (s *Store) Get(ctx context.Context, conversationID string) (*Conversation, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT conversation_id, user_id, title, created_at, updated_at
+		SELECT conversation_id, user_id, title, created_at, updated_at, source_label, source_url
 		FROM conversations
 		WHERE conversation_id = ? AND deleted_at IS NULL`,
 		conversationID,
@@ -277,7 +294,7 @@ func (s *Store) Get(ctx context.Context, conversationID string) (*Conversation, 
 		conv             Conversation
 		createdMs, updMs int64
 	)
-	err := row.Scan(&conv.ConversationID, &conv.UserID, &conv.Title, &createdMs, &updMs)
+	err := row.Scan(&conv.ConversationID, &conv.UserID, &conv.Title, &createdMs, &updMs, &conv.SourceLabel, &conv.SourceURL)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -297,8 +314,10 @@ func (s *Store) Get(ctx context.Context, conversationID string) (*Conversation, 
 func (s *Store) ListByUser(ctx context.Context, userID string) ([]Conversation, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.conversation_id, c.user_id, c.title, c.created_at, c.updated_at,
+			c.source_label, c.source_url,
 			COALESCE((
-				SELECT m.role FROM messages m
+				SELECT CASE WHEN m.origin = 'save' THEN '' ELSE m.role END
+				FROM messages m
 				WHERE m.conversation_id = c.conversation_id
 				ORDER BY m.seq DESC LIMIT 1
 			), '') AS last_role
@@ -321,7 +340,8 @@ func (s *Store) ListByUser(ctx context.Context, userID string) ([]Conversation, 
 			createdMs, updMs int64
 			lastRole         string
 		)
-		if err := rows.Scan(&conv.ConversationID, &conv.UserID, &conv.Title, &createdMs, &updMs, &lastRole); err != nil {
+		if err := rows.Scan(&conv.ConversationID, &conv.UserID, &conv.Title, &createdMs, &updMs,
+			&conv.SourceLabel, &conv.SourceURL, &lastRole); err != nil {
 			return nil, fmt.Errorf("chatstore list scan: %w", err)
 		}
 		conv.CreatedAt = time.UnixMilli(createdMs)
@@ -407,7 +427,7 @@ func (s *Store) SoftDelete(ctx context.Context, conversationID, userID string) (
 // ListMessages returns the full ordered thread for one conversation.
 func (s *Store) ListMessages(ctx context.Context, conversationID string) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, role, content, seq, attachments
+		SELECT id, role, content, seq, attachments, author
 		FROM messages
 		WHERE conversation_id = ?
 		ORDER BY seq ASC`,
@@ -421,7 +441,7 @@ func (s *Store) ListMessages(ctx context.Context, conversationID string) ([]Mess
 	out := make([]Message, 0, 32)
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Seq, &m.Attachments); err != nil {
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Seq, &m.Attachments, &m.Author); err != nil {
 			return nil, fmt.Errorf("chatstore list messages scan: %w", err)
 		}
 		out = append(out, m)
@@ -460,7 +480,7 @@ func (s *Store) PageMessages(ctx context.Context, conversationID string, limit, 
 	}
 	// Fetch the newest `limit` rows (optionally strictly older than beforeSeq)
 	// descending, then reverse to ascending for the caller.
-	query := `SELECT id, role, content, seq, attachments FROM messages WHERE conversation_id = ?`
+	query := `SELECT id, role, content, seq, attachments, author FROM messages WHERE conversation_id = ?`
 	args := []any{conversationID}
 	if beforeSeq > 0 {
 		query += ` AND seq < ?`
@@ -476,7 +496,7 @@ func (s *Store) PageMessages(ctx context.Context, conversationID string, limit, 
 	defer rows.Close() //nolint:errcheck
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Seq, &m.Attachments); err != nil {
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Seq, &m.Attachments, &m.Author); err != nil {
 			return nil, false, 0, "", fmt.Errorf("chatstore page messages scan: %w", err)
 		}
 		msgs = append(msgs, m)
@@ -497,8 +517,12 @@ func (s *Store) PageMessages(ctx context.Context, conversationID string, limit, 
 
 	// The newest message's role drives assistant_streaming and is independent of
 	// the returned page (which may be an older window).
+	// A copied-in conversation ends on a user turn by nature, and no reply is
+	// coming. Blanking the role here keeps every caller's "last role is the
+	// user's, so a turn is in flight" test true for chats but not for copies.
 	err = s.db.QueryRowContext(ctx,
-		`SELECT role FROM messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1`,
+		`SELECT CASE WHEN origin = 'save' THEN '' ELSE role END
+		 FROM messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1`,
 		conversationID,
 	).Scan(&lastRole)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -807,7 +831,8 @@ func (s *Store) ReapDanglingUserTurns(ctx context.Context) (int, error) {
 		FROM conversations c
 		WHERE c.deleted_at IS NULL
 			AND (
-				SELECT role FROM messages m
+				SELECT CASE WHEN m.origin = 'save' THEN '' ELSE m.role END
+				FROM messages m
 				WHERE m.conversation_id = c.conversation_id
 				ORDER BY m.seq DESC LIMIT 1
 			) = 'user'`)

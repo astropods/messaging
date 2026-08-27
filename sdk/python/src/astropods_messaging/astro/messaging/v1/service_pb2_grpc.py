@@ -63,6 +63,11 @@ class AgentMessagingStub:
                 request_serializer=astro_dot_messaging_dot_v1_dot_audio__pb2.AudioStreamRequest.SerializeToString,
                 response_deserializer=astro_dot_messaging_dot_v1_dot_response__pb2.AgentResponse.FromString,
                 _registered_method=True)
+        self.SaveConversation = channel.unary_unary(
+                '/astro.messaging.v1.AgentMessaging/SaveConversation',
+                request_serializer=astro_dot_messaging_dot_v1_dot_response__pb2.SaveConversationRequest.SerializeToString,
+                response_deserializer=astro_dot_messaging_dot_v1_dot_response__pb2.SaveConversationResponse.FromString,
+                _registered_method=True)
         self.HealthCheck = channel.unary_unary(
                 '/astro.messaging.v1.AgentMessaging/HealthCheck',
                 request_serializer=astro_dot_messaging_dot_v1_dot_service__pb2.HealthCheckRequest.SerializeToString,
@@ -111,6 +116,15 @@ class AgentMessagingServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SaveConversation(self, request, context):
+        """Copy a conversation from another system into a user's chat history.
+        Unary rather than a stream payload because the agent has to see whether the
+        copy diverged before deciding what to do next.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def HealthCheck(self, request, context):
         """Health check
         """
@@ -145,6 +159,11 @@ def add_AgentMessagingServicer_to_server(servicer, server):
                     servicer.ProcessAudioStream,
                     request_deserializer=astro_dot_messaging_dot_v1_dot_audio__pb2.AudioStreamRequest.FromString,
                     response_serializer=astro_dot_messaging_dot_v1_dot_response__pb2.AgentResponse.SerializeToString,
+            ),
+            'SaveConversation': grpc.unary_unary_rpc_method_handler(
+                    servicer.SaveConversation,
+                    request_deserializer=astro_dot_messaging_dot_v1_dot_response__pb2.SaveConversationRequest.FromString,
+                    response_serializer=astro_dot_messaging_dot_v1_dot_response__pb2.SaveConversationResponse.SerializeToString,
             ),
             'HealthCheck': grpc.unary_unary_rpc_method_handler(
                     servicer.HealthCheck,
@@ -288,6 +307,33 @@ class AgentMessaging:
             '/astro.messaging.v1.AgentMessaging/ProcessAudioStream',
             astro_dot_messaging_dot_v1_dot_audio__pb2.AudioStreamRequest.SerializeToString,
             astro_dot_messaging_dot_v1_dot_response__pb2.AgentResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SaveConversation(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/astro.messaging.v1.AgentMessaging/SaveConversation',
+            astro_dot_messaging_dot_v1_dot_response__pb2.SaveConversationRequest.SerializeToString,
+            astro_dot_messaging_dot_v1_dot_response__pb2.SaveConversationResponse.FromString,
             options,
             channel_credentials,
             insecure,
