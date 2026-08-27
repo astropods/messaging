@@ -60,6 +60,9 @@ type SlackAdapter struct {
 	// msgDedup suppresses duplicate top-level deliveries (Slack retries) in
 	// observe channels.
 	msgDedup *slackMsgDedup
+
+	// directory resolves user and channel ids to display names.
+	directory *slackDirectory
 }
 
 // SetAuthorizer wires the authorizer used to gate every incoming slack
@@ -110,6 +113,10 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 	// present on observed and unauthz'd paths too.
 	if msg != nil && msg.User != nil && msg.PlatformContext != nil {
 		msg.PlatformContext.UserId = msg.User.Id
+	}
+	// Named here rather than at each ingress point so no new path forgets it.
+	if msg != nil && msg.PlatformContext != nil && msg.PlatformContext.ChannelName == "" {
+		msg.PlatformContext.ChannelName = a.directory.channelName(ctx, msg.PlatformContext.ChannelId)
 	}
 
 	// Observe channels are passive watch channels — the user didn't address the
@@ -193,6 +200,7 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 	)
 
 	a.aiClient = NewSlackAIClient(config.BotToken, config.DevMode, config.AgentID)
+	a.directory = newSlackDirectory(a.client)
 
 	a.actionableReactions = make(map[string]bool, len(config.ActionableReactions))
 	for _, r := range config.ActionableReactions {
@@ -1347,11 +1355,15 @@ func (a *SlackAdapter) HydrateThread(ctx context.Context, conversationID string,
 			continue
 		}
 
+		username := msg.Username
+		if username == "" {
+			username = a.directory.userName(ctx, msg.User)
+		}
 		threadMsg := &pb.ThreadMessage{
 			MessageId: msg.Timestamp,
 			User: &pb.User{
 				Id:       msg.User,
-				Username: msg.Username,
+				Username: username,
 			},
 			Content:   renderMessage(msg.Text, msg.Blocks, msg.Attachments),
 			Timestamp: timestamppb.New(parseSlackTimestamp(msg.Timestamp)),

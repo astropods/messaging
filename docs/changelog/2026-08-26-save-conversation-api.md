@@ -28,6 +28,8 @@ This also fixes a live double-delivery: an `@`-mention posted inside a channel t
 
 - **Threaded mentions no longer double-deliver.** Slack sends both `message.channels` and `app_mention` for a mention. The guard that left mentions to the `app_mention` path only ran for top-level posts, so a mention inside a thread fell through as an ordinary thread reply and dispatched a second time, with both turns sharing one entry in `contentBuffers`. The guard now covers any channel message. DMs are deliberately excluded: a DM mention has no `app_mention` counterpart to fall back on.
 
+- **Slack ids are resolved to names.** `conversations.replies` leaves `username` empty on ordinary messages and `PlatformContext.channel_name` was never populated, so a copied thread rendered every author as `U0…` and took its title from `C0…`. A per-pod directory now resolves both, caching misses as well as hits: the lookups need `users:read` and `channels:read`, and an app without them must fall back to the raw id rather than re-asking Slack on every message. The channel is named in `dispatch`, the single path every Slack ingress takes, so a new ingress point cannot ship without it.
+
 # Migration
 
 Additive. Existing volumes gain the three columns on next start, and conversations created before this change read back with the new fields empty.
