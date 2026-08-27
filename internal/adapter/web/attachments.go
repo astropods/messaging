@@ -2,9 +2,14 @@ package web
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"strings"
 
 	"github.com/astropods/messaging/internal/store/files"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
@@ -160,6 +165,55 @@ func toProtoAttachment(att chatAttachment) *pb.Attachment {
 		Filename:   att.Name,
 		SizeBytes:  att.Size,
 		MimeType:   att.ContentType,
+		StorageKey: att.Key,
+	}
+}
+
+const maxInlineImageBytes = 2 * 1024 * 1024
+
+func inlineImageAttachment(ctx context.Context, fileStore files.FileStore, att chatAttachment, remaining int64) *pb.Attachment {
+	if fileStore == nil || remaining <= 0 || !strings.HasPrefix(att.ContentType, "image/") {
+		return nil
+	}
+	if att.Size > remaining {
+		slog.Warn("[Web] image does not fit the message's inline budget; forwarding as a file only",
+			"key", att.Key, "size", att.Size, "remaining", remaining)
+		return nil
+	}
+	rc, err := fileStore.OpenBlob(ctx, att.Key)
+	if err != nil {
+		slog.Warn("[Web] open image blob failed; forwarding as a file only", "key", att.Key, "err", err)
+		return nil
+	}
+	defer func() { _ = rc.Close() }()
+
+	raw, err := io.ReadAll(io.LimitReader(rc, remaining+1))
+	if err != nil {
+		slog.Warn("[Web] read image blob failed; forwarding as a file only", "key", att.Key, "err", err)
+		return nil
+	}
+	if int64(len(raw)) > remaining {
+		slog.Warn("[Web] image blob exceeds the message's inline budget; forwarding as a file only",
+			"key", att.Key, "remaining", remaining)
+		return nil
+	}
+
+	mediaType := http.DetectContentType(raw)
+	if j := strings.IndexByte(mediaType, ';'); j >= 0 {
+		mediaType = mediaType[:j]
+	}
+	if !strings.HasPrefix(mediaType, "image/") {
+		slog.Warn("[Web] uploaded file is not an image despite its content type; forwarding as a file only",
+			"key", att.Key, "declared", att.ContentType, "detected", mediaType)
+		return nil
+	}
+
+	return &pb.Attachment{
+		Type:       pb.Attachment_IMAGE,
+		Url:        fmt.Sprintf("data:%s;base64,%s", mediaType, base64.StdEncoding.EncodeToString(raw)),
+		Filename:   att.Name,
+		MimeType:   mediaType,
+		SizeBytes:  int64(len(raw)),
 		StorageKey: att.Key,
 	}
 }
