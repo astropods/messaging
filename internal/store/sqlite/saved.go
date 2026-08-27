@@ -101,9 +101,11 @@ func (s *Store) SaveConversation(ctx context.Context, req SaveRequest) (string, 
 	case errors.Is(err, sql.ErrNoRows):
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO conversations
-				(conversation_id, user_id, title, created_at, updated_at, source_label, source_url)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			conversationID, req.UserID, req.Title, now, now, req.SourceLabel, req.SourceURL,
+				(conversation_id, user_id, title, created_at, updated_at,
+				 source_label, source_url, saved_title)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			conversationID, req.UserID, req.Title, now, now,
+			req.SourceLabel, req.SourceURL, req.Title,
 		); err != nil {
 			return "", "", fmt.Errorf("chatstore save insert: %w", err)
 		}
@@ -165,14 +167,24 @@ func (s *Store) resolveExisting(
 	return SaveReplaced, s.touchSaved(ctx, tx, conversationID, req, now)
 }
 
+// touchSaved refreshes the copy's metadata. The title is left alone when the
+// user has renamed it, and an empty title never blanks one that exists: a save
+// must not undo the user's own edit any more than it may delete their turns.
 func (s *Store) touchSaved(
 	ctx context.Context, tx *sql.Tx, conversationID string, req SaveRequest, now int64,
 ) error {
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE conversations
-		SET title = ?, updated_at = ?, source_label = ?, source_url = ?
+		SET title = CASE
+				WHEN ? = '' THEN title
+				WHEN title <> COALESCE(saved_title, '') THEN title
+				ELSE ?
+			END,
+			saved_title = CASE WHEN ? = '' THEN saved_title ELSE ? END,
+			updated_at = ?, source_label = ?, source_url = ?
 		WHERE conversation_id = ?`,
-		req.Title, now, req.SourceLabel, req.SourceURL, conversationID,
+		req.Title, req.Title, req.Title, req.Title,
+		now, req.SourceLabel, req.SourceURL, conversationID,
 	); err != nil {
 		return fmt.Errorf("chatstore save update: %w", err)
 	}

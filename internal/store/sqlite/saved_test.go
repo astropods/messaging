@@ -329,3 +329,48 @@ func TestSaveConversation_StartupReaperLeavesCopiesAlone(t *testing.T) {
 		t.Errorf("copy gained a row: %v", got)
 	}
 }
+
+// A saved copy is an ordinary conversation, so the user can rename it. An agent
+// that re-saves on every source message must not undo that.
+func TestSaveConversation_UserRenameSurvivesAResave(t *testing.T) {
+	st := newTestStore(t)
+
+	id, _ := save(t, st, SaveRequest{Title: "Slack thread", Messages: savedMsgs("one")})
+	if ok, err := st.SetTitle(t.Context(), id, "user_1", "Deploy incident, Aug 27"); err != nil || !ok {
+		t.Fatalf("SetTitle: %v", err)
+	}
+
+	save(t, st, SaveRequest{Title: "Slack thread", Messages: savedMsgs("one", "two")})
+
+	conv, _ := st.Get(t.Context(), id)
+	if conv.Title != "Deploy incident, Aug 27" {
+		t.Fatalf("title = %q, want the user's rename kept", conv.Title)
+	}
+}
+
+// Title is optional. Omitting it on a refresh must not blank the one already there.
+func TestSaveConversation_EmptyTitleNeverBlanksAnExistingOne(t *testing.T) {
+	st := newTestStore(t)
+
+	id, _ := save(t, st, SaveRequest{Title: "Slack thread", Messages: savedMsgs("one")})
+	save(t, st, SaveRequest{Messages: savedMsgs("one", "two")})
+
+	conv, _ := st.Get(t.Context(), id)
+	if conv.Title != "Slack thread" {
+		t.Fatalf("title = %q, want it preserved", conv.Title)
+	}
+}
+
+// The agent still owns the title while the user has not touched it, so a thread
+// whose subject changes can be re-titled.
+func TestSaveConversation_AgentCanRetitleAnUntouchedCopy(t *testing.T) {
+	st := newTestStore(t)
+
+	id, _ := save(t, st, SaveRequest{Title: "Slack thread", Messages: savedMsgs("one")})
+	save(t, st, SaveRequest{Title: "#eng-support: deploy failure", Messages: savedMsgs("one", "two")})
+
+	conv, _ := st.Get(t.Context(), id)
+	if conv.Title != "#eng-support: deploy failure" {
+		t.Fatalf("title = %q, want the agent's new title", conv.Title)
+	}
+}
