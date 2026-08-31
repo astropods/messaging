@@ -25,6 +25,9 @@ var ErrAgentUnreachable = errors.New("agent runtime unreachable")
 // conversation's stream ended".
 const AgentStreamID = "agent-stream"
 
+// AgentReadiness reports whether an agent has registered its stream.
+type AgentReadiness func() bool
+
 // Adapter is the interface that all platform adapters must implement
 type Adapter interface {
 	// Lifecycle
