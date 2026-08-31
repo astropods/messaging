@@ -700,6 +700,75 @@ func (s *Store) UpsertAssistantProgress(ctx context.Context, conversationID, con
 	return id, nil
 }
 
+// BeginAssistantMessage opens a row for an agent-triggered message: assistant
+// content that does not follow a user turn, such as a schedule firing, a
+// background job reporting completion, or a webhook. Callers invoke it on a START
+// chunk, which the wire contract defines as "create message" (see
+// ContentChunk.ChunkType in response.proto).
+//
+// It appends an empty assistant row only when the trailing row is already an
+// assistant message, so the chunks that follow fill the new row through
+// UpsertAssistantProgress instead of overwriting the previous reply. Returns the
+// new row's id.
+//
+// A no-op returning "" in every other case: when the latest row is the user's
+// (the normal streamed turn, where UpsertAssistantProgress already appends), when
+// the conversation has no messages yet, and for a missing or deleted
+// conversation. That is what keeps a normal turn's behavior unchanged.
+//
+// The conversation-exists check, the trailing-role read, and the append run in one
+// transaction, mirroring UpsertAssistantProgress: with MaxOpenConns(1) this tx
+// holds the only connection, so a concurrent streamed chunk cannot read the same
+// trailing row and open a second one.
+func (s *Store) BeginAssistantMessage(ctx context.Context, conversationID string) (string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("chatstore begin assistant begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful commit
+
+	var one int
+	err = tx.QueryRowContext(ctx,
+		`SELECT 1 FROM conversations WHERE conversation_id = ? AND deleted_at IS NULL`,
+		conversationID,
+	).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("chatstore begin assistant conv check: %w", err)
+	}
+
+	var lastRole string
+	err = tx.QueryRowContext(ctx, `
+		SELECT role FROM messages
+		WHERE conversation_id = ?
+		ORDER BY seq DESC LIMIT 1`,
+		conversationID,
+	).Scan(&lastRole)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("chatstore begin assistant read: %w", err)
+	}
+	if lastRole != "assistant" {
+		return "", nil
+	}
+
+	msg, err := appendMessageTx(ctx, tx, conversationID, "", "assistant", "", "")
+	if err != nil {
+		return "", err
+	}
+	if err := touchConversationTx(ctx, tx, conversationID); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("chatstore begin assistant commit: %w", err)
+	}
+	return msg.ID, nil
+}
+
 // FinalizeStopped makes an interrupted turn terminal for a conversation owned by
 // userID, using `partial` — the full text the client saw at stop time. If no
 // assistant row exists yet (latest message is the user's), it appends one so
