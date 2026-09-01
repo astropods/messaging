@@ -30,6 +30,7 @@ type Handlers struct {
 	audioForwarder   adapter.AudioForwarder
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
+	agentReadiness   adapter.AgentReadiness
 	// chatStore persists the platform chat UI thread (sidebar + bodies) in
 	// the sidecar-local SQLite database on a shared persistent volume.
 	chatStore *sqlite.Store
@@ -833,6 +834,25 @@ func (h *Handlers) HandleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleAgentConfig handles GET /api/agent/config
+// HandleReady reports whether the deployment will accept a send. An agent
+// registers its stream some seconds after its container reports ready, and a
+// send in that window fails with 424, so a client polls this to know when to
+// enable its composer.
+//
+// Reports true when this sidecar has no way to observe the stream, so an
+// unwired build can never be the reason a client keeps chat disabled.
+func (h *Handlers) HandleReady(w http.ResponseWriter, r *http.Request) {
+	if h.authenticate(w, r) == nil {
+		return
+	}
+
+	connected := h.agentReadiness == nil || h.agentReadiness()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]bool{"agent_connected": connected}); err != nil {
+		slog.Error("[Web] Error encoding readiness response", "err", err)
+	}
+}
+
 func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	// Authenticate the request (session) and authorize against this
 	// deployment's grants. The agent config exposes the system prompt and

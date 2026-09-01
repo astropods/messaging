@@ -260,6 +260,7 @@ func main() {
 			// Wire audio forwarder for adapters that support it
 			if wa, ok := adpt.(*web.WebAdapter); ok {
 				wa.SetAudioForwarder(grpcServer)
+				wa.SetAgentReadiness(grpcServer.AgentConnected)
 				slog.Info("Registered audio forwarder for adapter", "adapter", name)
 			}
 		}

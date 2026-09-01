@@ -543,6 +543,16 @@ func (s *Server) unregisterStream(conversationID string, cs *conversationStream)
 //
 // This matches the same lookup pattern used by HandleIncomingMessage for text messages,
 // ensuring audio and text are routed to the same agent.
+// AgentConnected reports whether an agent has registered the shared stream that
+// a send with no conversation-specific stream falls back to. Sends return
+// adapter.ErrNoAgentStream until it has.
+func (s *Server) AgentConnected() bool {
+	s.streamsMu.RLock()
+	defer s.streamsMu.RUnlock()
+	_, ok := s.streams[adapter.AgentStreamID]
+	return ok
+}
+
 func (s *Server) findStreamForConversation(conversationID string) *conversationStream {
 	s.streamsMu.RLock()
 	defer s.streamsMu.RUnlock()

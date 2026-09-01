@@ -39,6 +39,7 @@ type WebAdapter struct {
 	sessionManager   SessionManager
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
+	agentReadiness   adapter.AgentReadiness
 	chatStore        *sqlite.Store
 	fileStore        files.FileStore
 	interactions     store.InteractionStore
@@ -177,6 +178,7 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/conversations/{id}/stream", a.handlers.HandleStream)
 	mux.HandleFunc("GET /api/conversations/{id}/history", a.handlers.HandleHistory)
 	mux.HandleFunc("GET /api/agent/config", a.handlers.HandleAgentConfig)
+	mux.HandleFunc("GET /api/ready", a.handlers.HandleReady)
 
 	// Platform chat-page contract (served via astro-server /chat/* proxy).
 	mux.HandleFunc("GET /api/chat/conversations", a.handlers.HandleListChatConversations)
@@ -599,6 +601,15 @@ func (a *WebAdapter) SetAgentConfigStore(s *store.AgentConfigStore) {
 	a.agentConfigStore = s
 	if a.handlers != nil {
 		a.handlers.agentConfigStore = s
+	}
+}
+
+// SetAgentReadiness wires the check for a registered agent stream. Unset, the
+// readiness endpoint reports connected.
+func (a *WebAdapter) SetAgentReadiness(fn adapter.AgentReadiness) {
+	a.agentReadiness = fn
+	if a.handlers != nil {
+		a.handlers.agentReadiness = fn
 	}
 }
 
