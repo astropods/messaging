@@ -245,9 +245,9 @@ func (a *SlackAdapter) startSocketMode(ctx context.Context) error {
 
 	// Start socket mode client in background (this initializes the Events channel)
 	go func() {
-		if err := a.socketClient.RunContext(ctx); err != nil {
-			slog.Error(fmt.Sprintf("[Slack] Socket mode client error: %v", err))
-		}
+		// RunContext never returns nil, so a nil check here is always true.
+		err := a.socketClient.RunContext(ctx)
+		slog.Error(fmt.Sprintf("[Slack] Socket mode client error: %v", err))
 	}()
 
 	// Listen for events from the now-initialized channel
