@@ -1,9 +1,22 @@
 name: Publish PyPI package
 
+# Publishes the version in sdk/python/pyproject.toml once it is not on PyPI.
+# No next channel: PyPI has no dist-tags.
+
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'sdk/python/**'
+      - 'proto/**'
+      - '.github/workflows/publish-pypi.yml'
   release:
     types: [published]
   workflow_dispatch:
+
+concurrency:
+  group: publish-pypi
+  cancel-in-progress: false
 
 jobs:
   publish:
