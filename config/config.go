@@ -18,6 +18,9 @@ type Config struct {
 	// Slack configuration
 	Slack SlackConfig
 
+	// Teams configuration
+	Teams TeamsConfig
+
 	// Web configuration
 	Web WebConfig
 
@@ -175,6 +178,19 @@ type SlackConfig struct {
 	Config        adapter.Config
 }
 
+// TeamsCredentials holds secret tokens parsed from individual env vars.
+type TeamsCredentials struct {
+	AppID       string
+	AppPassword string
+}
+
+// TeamsConfig holds Teams-specific configuration.
+type TeamsConfig struct {
+	Enabled     bool
+	Credentials TeamsCredentials
+	Config      adapter.Config
+}
+
 // WebConfig holds web adapter configuration
 type WebConfig struct {
 	Enabled        bool
@@ -273,6 +289,20 @@ func Load() (*Config, error) {
 			RequestsPerSecond: getEnvFloat("SLACK_RATE_LIMIT_RPS", 3.0),
 			BurstSize:         getEnvInt("SLACK_RATE_LIMIT_BURST", 10),
 		},
+	}
+
+	// Empty credentials run the connector unauthenticated — safe only for
+	// local dev via Microsoft 365 Agents Playground, never a real Teams tenant.
+	cfg.Teams.Enabled = getEnvBool("TEAMS_ENABLED", false)
+	cfg.Teams.Credentials = TeamsCredentials{
+		AppID:       getEnv("TEAMS_APP_ID", ""),
+		AppPassword: getEnv("TEAMS_APP_PASSWORD", ""),
+	}
+	cfg.Teams.Config = adapter.Config{
+		TeamsAppID:           cfg.Teams.Credentials.AppID,
+		TeamsAppPassword:     cfg.Teams.Credentials.AppPassword,
+		TeamsListenAddr:      getEnv("TEAMS_LISTEN_ADDR", ":3978"),
+		TeamsDevHostOverride: getEnv("TEAMS_DEV_HOST_OVERRIDE", ""),
 	}
 
 	// Web configuration

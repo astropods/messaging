@@ -110,7 +110,16 @@ type Config struct {
 	SocketMode bool
 	WebhookURL string
 	AutoThread bool
-	DevMode    bool // When true, messages include a "sent from dev" context
+
+	// Teams (Bot Framework) credentials; empty TeamsAppID runs the connector
+	// unauthenticated, local dev only (see config.Load).
+	TeamsAppID       string
+	TeamsAppPassword string
+	TeamsListenAddr  string // HTTP address serving /api/messages
+	// TeamsDevHostOverride rewrites localhost/127.0.0.1 in outbound replies
+	// (see teams.noAuthClient.devHostOverride).
+	TeamsDevHostOverride string
+	DevMode              bool // When true, messages include a "sent from dev" context
 	// AgentID is the value of ASTRO_AGENT_ID at startup. When non-empty it is
 	// rendered in the Slack message footer so users know which agent replied.
 	AgentID             string

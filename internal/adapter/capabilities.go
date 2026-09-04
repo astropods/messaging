@@ -40,6 +40,22 @@ func SlackCapabilities(aiFeatures bool) AdapterCapabilities {
 	}
 }
 
+// TeamsCapabilities returns capabilities for Microsoft Teams
+func TeamsCapabilities() AdapterCapabilities {
+	return AdapterCapabilities{
+		SupportsStreaming:        false,
+		SupportsStatusUpdates:    false,
+		SupportsSuggestedPrompts: false,
+		SupportsThreads:          true,
+		SupportsTypingIndicator:  false,
+		MaxUpdateRateHz:          0,
+		MaxContentLength:         0,
+		SupportsReactions:        false,
+		SupportsCards:            false, // Adaptive Cards not implemented (future)
+		SupportsAudioInput:       false,
+	}
+}
+
 // WebCapabilities returns capabilities for web browser clients via HTTP + SSE
 func WebCapabilities() AdapterCapabilities {
 	return AdapterCapabilities{

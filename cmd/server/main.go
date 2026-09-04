@@ -13,6 +13,7 @@ import (
 	"github.com/astropods/messaging/config"
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/adapter/slack"
+	"github.com/astropods/messaging/internal/adapter/teams"
 	"github.com/astropods/messaging/internal/adapter/web"
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/grpc"
@@ -349,6 +350,18 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			slackAdapter.SetInternalFeedbackHandler(internalFeedbackHandler)
 			adapters["slack"] = slackAdapter
 			slog.Info("Slack adapter initialized")
+		}
+	}
+
+	// Initialize Teams adapter if enabled
+	if cfg.Teams.Enabled {
+		slog.Info("Initializing Teams adapter...")
+		teamsAdapter := teams.New()
+		if err := teamsAdapter.Initialize(ctx, cfg.Teams.Config); err != nil {
+			slog.Error("Error initializing Teams adapter", "err", err)
+		} else {
+			adapters["teams"] = teamsAdapter
+			slog.Info("Teams adapter initialized")
 		}
 	}
 
