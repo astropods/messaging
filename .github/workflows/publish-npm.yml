@@ -51,7 +51,7 @@ jobs:
             echo "::error::Could not read version from sdk/node/package.json"
             exit 1
           fi
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "::notice::Publishing @astropods/messaging@$VERSION"
 
       - name: Install dependencies
@@ -70,10 +70,10 @@ jobs:
         id: check-published
         run: |
           if npm view "@astropods/messaging@${{ env.VERSION }}" version 2>/dev/null; then
-            echo "published=true" >> $GITHUB_OUTPUT
+            echo "published=true" >> "$GITHUB_OUTPUT"
             echo "::notice::v${{ env.VERSION }} is already published on npm — nothing to do"
           else
-            echo "published=false" >> $GITHUB_OUTPUT
+            echo "published=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Publish
@@ -111,7 +111,7 @@ jobs:
         run: |
           BASE=$(node -p "require('./sdk/node/package.json').version")
           BUMPED=$(node -p "const [a,b,c]='${BASE}'.split('.'); [a,b,Number(c)+1].join('.')")
-          echo "NEXT_VERSION=${BUMPED}-next.${GITHUB_SHA:0:7}" >> $GITHUB_ENV
+          echo "NEXT_VERSION=${BUMPED}-next.${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
           echo "::notice::next channel ${BUMPED}-next.${GITHUB_SHA:0:7}, stable is ${BASE}"
 
       - name: Install dependencies
@@ -130,10 +130,10 @@ jobs:
         id: check-published
         run: |
           if npm view "@astropods/messaging@${{ env.NEXT_VERSION }}" version 2>/dev/null; then
-            echo "published=true" >> $GITHUB_OUTPUT
+            echo "published=true" >> "$GITHUB_OUTPUT"
             echo "::notice::${{ env.NEXT_VERSION }} is already published, nothing to do"
           else
-            echo "published=false" >> $GITHUB_OUTPUT
+            echo "published=false" >> "$GITHUB_OUTPUT"
           fi
 
       # The bump stays on the runner; main keeps the stable version.

@@ -38,7 +38,7 @@ jobs:
       - name: Read version
         run: |
           VERSION=$(grep '^version' sdk/python/pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Install build dependencies
         run: pip install build
@@ -67,11 +67,11 @@ jobs:
             "https://pypi.org/pypi/astropods-messaging/${VERSION}/json")
           case "$STATUS" in
             200)
-              echo "published=true" >> $GITHUB_OUTPUT
+              echo "published=true" >> "$GITHUB_OUTPUT"
               echo "::notice::astropods-messaging==${VERSION} is already published on PyPI"
               ;;
             404)
-              echo "published=false" >> $GITHUB_OUTPUT
+              echo "published=false" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "::error::PyPI returned unexpected status ${STATUS} when checking ${VERSION}"
