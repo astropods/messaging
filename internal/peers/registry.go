@@ -117,6 +117,40 @@ func (r *Registry) List(ctx context.Context) ([]Peer, error) {
 	return fetched, nil
 }
 
+// Find resolves a peer by deployment id, agent name or display name, matched
+// case-insensitively. A model naming a peer in a tool call writes whichever of
+// those it saw, so all three resolve.
+//
+// Returns an error naming the peers that do exist, because that message is
+// usually read by a model deciding what to do next, and a bare "not found"
+// gives it nothing to retry with. Those two messages carry no "peers:" prefix
+// for the same reason: they are shown to a model verbatim.
+func (r *Registry) Find(ctx context.Context, nameOrID string) (Peer, error) {
+	needle := strings.ToLower(strings.TrimSpace(nameOrID))
+	if needle == "" {
+		return Peer{}, errors.New("peers: an agent name or id is required")
+	}
+	found, err := r.List(ctx)
+	if err != nil {
+		return Peer{}, err
+	}
+	for _, p := range found {
+		if strings.ToLower(p.DeploymentID) == needle ||
+			strings.ToLower(p.AgentName) == needle ||
+			(p.DisplayName != "" && strings.ToLower(p.DisplayName) == needle) {
+			return p, nil
+		}
+	}
+	names := make([]string, 0, len(found))
+	for _, p := range found {
+		names = append(names, p.Name())
+	}
+	if len(names) == 0 {
+		return Peer{}, fmt.Errorf("no agent named %q; this organization has no other A2A agents", nameOrID)
+	}
+	return Peer{}, fmt.Errorf("no agent named %q; available agents are %s", nameOrID, strings.Join(names, ", "))
+}
+
 // Invalidate drops the cached list so the next List refetches. For a caller
 // that just failed to reach a peer and suspects the list is stale.
 func (r *Registry) Invalidate() {

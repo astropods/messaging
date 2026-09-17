@@ -1,20 +1,21 @@
-package a2a
+package a2awire
 
-// protocolVersion is the A2A protocol revision this adapter implements.
-const protocolVersion = "0.3.0"
+// ProtocolVersion is the A2A protocol revision this adapter implements.
+const ProtocolVersion = "0.3.0"
 
-// Task states defined by A2A. Only the ones this adapter can reach are listed.
+// Task states defined by A2A. Only the ones this implementation can reach are
+// listed.
 const (
-	stateSubmitted = "submitted"
-	stateWorking   = "working"
-	stateCompleted = "completed"
-	stateCanceled  = "canceled"
-	stateFailed    = "failed"
+	StateSubmitted = "submitted"
+	StateWorking   = "working"
+	StateCompleted = "completed"
+	StateCanceled  = "canceled"
+	StateFailed    = "failed"
 )
 
 // Card is the A2A agent card served at /.well-known/agent-card.json.
 type Card struct {
-	ProtocolVersion    string       `json:"protocolVersion"`
+	ProtocolVersion    string       `json:"ProtocolVersion"`
 	Name               string       `json:"name"`
 	Description        string       `json:"description"`
 	URL                string       `json:"url"`
@@ -46,7 +47,7 @@ type Part struct {
 	Text string `json:"text,omitempty"`
 }
 
-const partKindText = "text"
+const PartKindText = "text"
 
 // Message is an A2A message in either direction.
 type Message struct {
@@ -64,7 +65,7 @@ type Message struct {
 func (m Message) Text() string {
 	out := ""
 	for _, p := range m.Parts {
-		if p.Kind == partKindText {
+		if p.Kind == PartKindText {
 			out += p.Text
 		}
 	}
@@ -91,12 +92,12 @@ type Task struct {
 	Kind      string     `json:"kind"`
 }
 
-// sendParams is the params object of message/send.
-type sendParams struct {
+// SendParams is the params object of message/send.
+type SendParams struct {
 	Message Message `json:"message"`
 }
 
-// taskIDParams is the params object of tasks/get and tasks/cancel.
-type taskIDParams struct {
+// TaskIDParams is the params object of tasks/get and tasks/cancel.
+type TaskIDParams struct {
 	ID string `json:"id"`
 }

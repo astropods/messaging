@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/astropods/messaging/internal/a2awire"
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/logctx"
 	"github.com/astropods/messaging/internal/peers"
@@ -257,13 +258,13 @@ func (a *Adapter) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (a *Adapter) handleRPC(w http.ResponseWriter, r *http.Request) {
 	ctx := logctx.WithTraceparent(r.Context(), r.Header.Get("traceparent"))
 
-	var req request
+	var req a2awire.Request
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusOK, errorResponse(nil, codeParseError, "invalid JSON"))
+		writeJSON(w, http.StatusOK, a2awire.ErrorResponse(nil, a2awire.CodeParseError, "invalid JSON"))
 		return
 	}
-	if req.JSONRPC != jsonRPCVersion || req.Method == "" {
-		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInvalidRequest, "jsonrpc must be 2.0 and method is required"))
+	if req.JSONRPC != a2awire.JSONRPCVersion || req.Method == "" {
+		writeJSON(w, http.StatusOK, a2awire.ErrorResponse(req.ID, a2awire.CodeInvalidRequest, "jsonrpc must be 2.0 and method is required"))
 		return
 	}
 
@@ -275,23 +276,23 @@ func (a *Adapter) handleRPC(w http.ResponseWriter, r *http.Request) {
 	case "tasks/cancel":
 		writeJSON(w, http.StatusOK, a.cancelTask(req))
 	case "message/stream", "tasks/resubscribe":
-		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeUnsupportedOperation, "streaming is not supported; the agent card advertises capabilities.streaming=false"))
+		writeJSON(w, http.StatusOK, a2awire.ErrorResponse(req.ID, a2awire.CodeUnsupportedOperation, "streaming is not supported; the agent card advertises capabilities.streaming=false"))
 	default:
-		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeMethodNotFound, "unknown method "+req.Method))
+		writeJSON(w, http.StatusOK, a2awire.ErrorResponse(req.ID, a2awire.CodeMethodNotFound, "unknown method "+req.Method))
 	}
 }
 
-func (a *Adapter) send(ctx context.Context, req request) response {
-	var params sendParams
+func (a *Adapter) send(ctx context.Context, req a2awire.Request) a2awire.Response {
+	var params a2awire.SendParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		return errorResponse(req.ID, codeInvalidParams, "params must carry a message object")
+		return a2awire.ErrorResponse(req.ID, a2awire.CodeInvalidParams, "params must carry a message object")
 	}
 	text := params.Message.Text()
 	if text == "" {
-		return errorResponse(req.ID, codeInvalidParams, "message must carry at least one non-empty text part")
+		return a2awire.ErrorResponse(req.ID, a2awire.CodeInvalidParams, "message must carry at least one non-empty text part")
 	}
 	if a.agentReadiness != nil && !a.agentReadiness() {
-		return errorResponse(req.ID, codeInternalError, "agent is not connected")
+		return a2awire.ErrorResponse(req.ID, a2awire.CodeInternalError, "agent is not connected")
 	}
 
 	// A2A contextId is our conversation ID: both mean "the thread this turn
@@ -334,7 +335,7 @@ func (a *Adapter) send(ctx context.Context, req request) response {
 			reason = "no agent is connected to serve this call"
 		}
 		task.fail(reason)
-		return resultResponse(req.ID, task.snapshot())
+		return a2awire.ResultResponse(req.ID, task.snapshot())
 	}
 
 	select {
@@ -343,34 +344,34 @@ func (a *Adapter) send(ctx context.Context, req request) response {
 	case <-time.After(a.sendTimeout):
 		logctx.FromContext(ctx).Warn("[A2A] send timed out, task left working", "task_id", task.id)
 	}
-	return resultResponse(req.ID, task.snapshot())
+	return a2awire.ResultResponse(req.ID, task.snapshot())
 }
 
-func (a *Adapter) getTask(req request) response {
-	var params taskIDParams
+func (a *Adapter) getTask(req a2awire.Request) a2awire.Response {
+	var params a2awire.TaskIDParams
 	if err := json.Unmarshal(req.Params, &params); err != nil || params.ID == "" {
-		return errorResponse(req.ID, codeInvalidParams, "params must carry a task id")
+		return a2awire.ErrorResponse(req.ID, a2awire.CodeInvalidParams, "params must carry a task id")
 	}
 	task := a.tasks.byTaskID(params.ID)
 	if task == nil {
-		return errorResponse(req.ID, codeTaskNotFound, "no task with id "+params.ID)
+		return a2awire.ErrorResponse(req.ID, a2awire.CodeTaskNotFound, "no task with id "+params.ID)
 	}
-	return resultResponse(req.ID, task.snapshot())
+	return a2awire.ResultResponse(req.ID, task.snapshot())
 }
 
-func (a *Adapter) cancelTask(req request) response {
-	var params taskIDParams
+func (a *Adapter) cancelTask(req a2awire.Request) a2awire.Response {
+	var params a2awire.TaskIDParams
 	if err := json.Unmarshal(req.Params, &params); err != nil || params.ID == "" {
-		return errorResponse(req.ID, codeInvalidParams, "params must carry a task id")
+		return a2awire.ErrorResponse(req.ID, a2awire.CodeInvalidParams, "params must carry a task id")
 	}
 	task := a.tasks.byTaskID(params.ID)
 	if task == nil {
-		return errorResponse(req.ID, codeTaskNotFound, "no task with id "+params.ID)
+		return a2awire.ErrorResponse(req.ID, a2awire.CodeTaskNotFound, "no task with id "+params.ID)
 	}
 	if !task.cancel() {
-		return errorResponse(req.ID, codeTaskNotCancelable, "task "+params.ID+" already reached a terminal state")
+		return a2awire.ErrorResponse(req.ID, a2awire.CodeTaskNotCancelable, "task "+params.ID+" already reached a terminal state")
 	}
-	return resultResponse(req.ID, task.snapshot())
+	return a2awire.ResultResponse(req.ID, task.snapshot())
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

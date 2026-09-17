@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/astropods/messaging/internal/a2awire"
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
@@ -48,7 +49,7 @@ func replyingHandler(a *Adapter, chunks ...*pb.ContentChunk) adapter.MessageHand
 
 // rpc issues one JSON-RPC call against the adapter's handler and decodes the
 // envelope.
-func rpc(t *testing.T, a *Adapter, method string, params any) response {
+func rpc(t *testing.T, a *Adapter, method string, params any) a2awire.Response {
 	t.Helper()
 	body := map[string]any{"jsonrpc": "2.0", "id": 1, "method": method}
 	if params != nil {
@@ -65,7 +66,7 @@ func rpc(t *testing.T, a *Adapter, method string, params any) response {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("JSON-RPC transport must answer 200 even on error, got %d", rec.Code)
 	}
-	var res response
+	var res a2awire.Response
 	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
 		t.Fatalf("decode response: %v (body %s)", err, rec.Body.String())
 	}
@@ -74,7 +75,7 @@ func rpc(t *testing.T, a *Adapter, method string, params any) response {
 
 // resultTask decodes a successful result into a Task, failing the test on an
 // unexpected JSON-RPC error.
-func resultTask(t *testing.T, res response) Task {
+func resultTask(t *testing.T, res a2awire.Response) a2awire.Task {
 	t.Helper()
 	if res.Error != nil {
 		t.Fatalf("expected a task result, got JSON-RPC error %d: %s", res.Error.Code, res.Error.Message)
@@ -83,7 +84,7 @@ func resultTask(t *testing.T, res response) Task {
 	if err != nil {
 		t.Fatalf("re-marshal result: %v", err)
 	}
-	var task Task
+	var task a2awire.Task
 	if err := json.Unmarshal(raw, &task); err != nil {
 		t.Fatalf("decode task: %v", err)
 	}
@@ -100,7 +101,7 @@ func textMessage(text string) map[string]any {
 	}
 }
 
-func artifactText(task Task) string {
+func artifactText(task a2awire.Task) string {
 	var b strings.Builder
 	for _, a := range task.Artifacts {
 		for _, p := range a.Parts {
@@ -116,12 +117,12 @@ func TestAgentCardIsServedWithTheAdvertisedIdentity(t *testing.T) {
 	rec := httptest.NewRecorder()
 	a.handleCard(rec, httptest.NewRequest(http.MethodGet, CardPath, nil))
 
-	var card Card
+	var card a2awire.Card
 	if err := json.Unmarshal(rec.Body.Bytes(), &card); err != nil {
 		t.Fatalf("decode card: %v", err)
 	}
-	if card.ProtocolVersion != protocolVersion {
-		t.Errorf("card protocolVersion = %q, want %q so A2A clients negotiate correctly", card.ProtocolVersion, protocolVersion)
+	if card.ProtocolVersion != a2awire.ProtocolVersion {
+		t.Errorf("card protocolVersion = %q, want %q so A2A clients negotiate correctly", card.ProtocolVersion, a2awire.ProtocolVersion)
 	}
 	if card.Name != "billing-bot" {
 		t.Errorf("card name = %q, want the deployed agent name", card.Name)
@@ -140,7 +141,7 @@ func TestAgentCardDescriptionFallsBackToADerivedSentence(t *testing.T) {
 	rec := httptest.NewRecorder()
 	a.handleCard(rec, httptest.NewRequest(http.MethodGet, CardPath, nil))
 
-	var card Card
+	var card a2awire.Card
 	if err := json.Unmarshal(rec.Body.Bytes(), &card); err != nil {
 		t.Fatalf("decode card: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestAgentCardSkillsComeFromTheToolsTheAgentDeclared(t *testing.T) {
 	rec := httptest.NewRecorder()
 	a.handleCard(rec, httptest.NewRequest(http.MethodGet, CardPath, nil))
 
-	var card Card
+	var card a2awire.Card
 	if err := json.Unmarshal(rec.Body.Bytes(), &card); err != nil {
 		t.Fatalf("decode card: %v", err)
 	}
@@ -191,8 +192,8 @@ func TestSendReturnsACompletedTaskCarryingTheAgentReply(t *testing.T) {
 
 	task := resultTask(t, rpc(t, a, "message/send", textMessage("is invoice 12 paid?")))
 
-	if task.Status.State != stateCompleted {
-		t.Errorf("task state = %q, want %q once the agent sends END", task.Status.State, stateCompleted)
+	if task.Status.State != a2awire.StateCompleted {
+		t.Errorf("task state = %q, want %q once the agent sends END", task.Status.State, a2awire.StateCompleted)
 	}
 	if got := artifactText(task); got != "Invoice 12 is paid." {
 		t.Errorf("artifact text = %q, want every delta joined; agents stream a reply as deltas and send an empty END", got)
@@ -290,8 +291,8 @@ func TestSendRejectsAMessageWithNoText(t *testing.T) {
 		"role": "user", "messageId": "m", "parts": []map[string]any{{"kind": "data"}},
 	}})
 
-	if res.Error == nil || res.Error.Code != codeInvalidParams {
-		t.Fatalf("got %+v, want InvalidParams (%d): the adapter handles text only and must say so rather than send an empty turn", res.Error, codeInvalidParams)
+	if res.Error == nil || res.Error.Code != a2awire.CodeInvalidParams {
+		t.Fatalf("got %+v, want InvalidParams (%d): the adapter handles text only and must say so rather than send an empty turn", res.Error, a2awire.CodeInvalidParams)
 	}
 }
 
@@ -303,8 +304,8 @@ func TestSendFailsTheTaskWhenNoAgentIsConnected(t *testing.T) {
 
 	task := resultTask(t, rpc(t, a, "message/send", textMessage("hi")))
 
-	if task.Status.State != stateFailed {
-		t.Errorf("task state = %q, want %q when delivery never reached an agent", task.Status.State, stateFailed)
+	if task.Status.State != a2awire.StateFailed {
+		t.Errorf("task state = %q, want %q when delivery never reached an agent", task.Status.State, a2awire.StateFailed)
 	}
 	if !strings.Contains(task.Status.Message, "no agent is connected") {
 		t.Errorf("task status message = %q, want a caller-readable reason rather than the raw sentinel error", task.Status.Message)
@@ -324,8 +325,8 @@ func TestSendFailsTheTaskWhenTheAgentReportsAnError(t *testing.T) {
 
 	task := resultTask(t, rpc(t, a, "message/send", textMessage("hi")))
 
-	if task.Status.State != stateFailed {
-		t.Errorf("task state = %q, want %q", task.Status.State, stateFailed)
+	if task.Status.State != a2awire.StateFailed {
+		t.Errorf("task state = %q, want %q", task.Status.State, a2awire.StateFailed)
 	}
 	if task.Status.Message != "invoice service timed out" {
 		t.Errorf("task status message = %q, want the agent's own message surfaced to the caller", task.Status.Message)
@@ -353,7 +354,7 @@ func TestSendTimesOutToAWorkingTaskThatLaterCompletesViaTasksGet(t *testing.T) {
 	})
 
 	task := resultTask(t, rpc(t, a, "message/send", textMessage("slow one")))
-	if task.Status.State != stateWorking && task.Status.State != stateSubmitted {
+	if task.Status.State != a2awire.StateWorking && task.Status.State != a2awire.StateSubmitted {
 		t.Fatalf("task state = %q, want it still running: a slow turn must be pollable, not reported failed", task.Status.State)
 	}
 
@@ -365,8 +366,8 @@ func TestSendTimesOutToAWorkingTaskThatLaterCompletesViaTasksGet(t *testing.T) {
 	}
 
 	polled := resultTask(t, rpc(t, a, "tasks/get", map[string]any{"id": task.ID}))
-	if polled.Status.State != stateCompleted {
-		t.Errorf("polled state = %q, want %q: the task must keep resolving after send returned", polled.Status.State, stateCompleted)
+	if polled.Status.State != a2awire.StateCompleted {
+		t.Errorf("polled state = %q, want %q: the task must keep resolving after send returned", polled.Status.State, a2awire.StateCompleted)
 	}
 	if got := artifactText(polled); got != "done late" {
 		t.Errorf("polled artifact = %q, want the reply that arrived after the timeout", got)
@@ -378,8 +379,8 @@ func TestTasksGetReportsTaskNotFoundForAnUnknownID(t *testing.T) {
 
 	res := rpc(t, a, "tasks/get", map[string]any{"id": "nope"})
 
-	if res.Error == nil || res.Error.Code != codeTaskNotFound {
-		t.Fatalf("got %+v, want TaskNotFound (%d)", res.Error, codeTaskNotFound)
+	if res.Error == nil || res.Error.Code != a2awire.CodeTaskNotFound {
+		t.Fatalf("got %+v, want TaskNotFound (%d)", res.Error, a2awire.CodeTaskNotFound)
 	}
 }
 
@@ -390,13 +391,13 @@ func TestTasksCancelStopsAnInFlightTaskOnce(t *testing.T) {
 	task := resultTask(t, rpc(t, a, "message/send", textMessage("slow")))
 
 	cancelled := resultTask(t, rpc(t, a, "tasks/cancel", map[string]any{"id": task.ID}))
-	if cancelled.Status.State != stateCanceled {
-		t.Errorf("state after cancel = %q, want %q", cancelled.Status.State, stateCanceled)
+	if cancelled.Status.State != a2awire.StateCanceled {
+		t.Errorf("state after cancel = %q, want %q", cancelled.Status.State, a2awire.StateCanceled)
 	}
 
 	res := rpc(t, a, "tasks/cancel", map[string]any{"id": task.ID})
-	if res.Error == nil || res.Error.Code != codeTaskNotCancelable {
-		t.Fatalf("got %+v on second cancel, want TaskNotCancelable (%d)", res.Error, codeTaskNotCancelable)
+	if res.Error == nil || res.Error.Code != a2awire.CodeTaskNotCancelable {
+		t.Fatalf("got %+v on second cancel, want TaskNotCancelable (%d)", res.Error, a2awire.CodeTaskNotCancelable)
 	}
 }
 
@@ -406,8 +407,8 @@ func TestStreamingMethodsReportUnsupportedOperation(t *testing.T) {
 
 	for _, method := range []string{"message/stream", "tasks/resubscribe"} {
 		res := rpc(t, a, method, textMessage("hi"))
-		if res.Error == nil || res.Error.Code != codeUnsupportedOperation {
-			t.Errorf("%s returned %+v, want UnsupportedOperation (%d) to match capabilities.streaming=false", method, res.Error, codeUnsupportedOperation)
+		if res.Error == nil || res.Error.Code != a2awire.CodeUnsupportedOperation {
+			t.Errorf("%s returned %+v, want UnsupportedOperation (%d) to match capabilities.streaming=false", method, res.Error, a2awire.CodeUnsupportedOperation)
 		}
 	}
 }
@@ -417,8 +418,8 @@ func TestUnknownMethodReportsMethodNotFound(t *testing.T) {
 
 	res := rpc(t, a, "agent/doSomething", nil)
 
-	if res.Error == nil || res.Error.Code != codeMethodNotFound {
-		t.Fatalf("got %+v, want MethodNotFound (%d)", res.Error, codeMethodNotFound)
+	if res.Error == nil || res.Error.Code != a2awire.CodeMethodNotFound {
+		t.Fatalf("got %+v, want MethodNotFound (%d)", res.Error, a2awire.CodeMethodNotFound)
 	}
 }
 
@@ -429,12 +430,12 @@ func TestRequestWithWrongJSONRPCVersionIsRejected(t *testing.T) {
 	rec := httptest.NewRecorder()
 	a.handleRPC(rec, req)
 
-	var res response
+	var res a2awire.Response
 	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if res.Error == nil || res.Error.Code != codeInvalidRequest {
-		t.Fatalf("got %+v, want InvalidRequest (%d)", res.Error, codeInvalidRequest)
+	if res.Error == nil || res.Error.Code != a2awire.CodeInvalidRequest {
+		t.Fatalf("got %+v, want InvalidRequest (%d)", res.Error, a2awire.CodeInvalidRequest)
 	}
 }
 
@@ -445,12 +446,12 @@ func TestMalformedJSONIsReportedAsAParseError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	a.handleRPC(rec, req)
 
-	var res response
+	var res a2awire.Response
 	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if res.Error == nil || res.Error.Code != codeParseError {
-		t.Fatalf("got %+v, want ParseError (%d)", res.Error, codeParseError)
+	if res.Error == nil || res.Error.Code != a2awire.CodeParseError {
+		t.Fatalf("got %+v, want ParseError (%d)", res.Error, a2awire.CodeParseError)
 	}
 }
 
@@ -467,8 +468,8 @@ func TestAgentDisconnectFailsTheInFlightTaskInsteadOfHanging(t *testing.T) {
 	start := time.Now()
 	task := resultTask(t, rpc(t, a, "message/send", textMessage("hi")))
 
-	if task.Status.State != stateFailed {
-		t.Errorf("task state = %q, want %q when the agent's stream ended mid-turn", task.Status.State, stateFailed)
+	if task.Status.State != a2awire.StateFailed {
+		t.Errorf("task state = %q, want %q when the agent's stream ended mid-turn", task.Status.State, a2awire.StateFailed)
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("send took %s, want it to return on disconnect rather than wait out sendTimeout", elapsed)

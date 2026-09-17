@@ -230,3 +230,70 @@ func TestPeerNamePrefersTheDisplayName(t *testing.T) {
 		t.Errorf("Name() = %q, want the agent name when no display name is set", got)
 	}
 }
+
+func TestFindResolvesAPeerByAnyOfItsNames(t *testing.T) {
+	stub := &stubClient{fallback: func() (*http.Response, error) {
+		return jsonResponse(http.StatusOK,
+			`{"peers":[{"deployment_id":"dep-abc","agent_name":"billing-bot","display_name":"Billing Bot","url":"http://billing:8100"}]}`), nil
+	}}
+	r, _ := newTestRegistry(t, stub)
+
+	for _, needle := range []string{"dep-abc", "billing-bot", "Billing Bot", "BILLING-BOT", "billing bot"} {
+		peer, err := r.Find(context.Background(), needle)
+		if err != nil {
+			t.Errorf("Find(%q): %v — a model writes whichever name it saw", needle, err)
+			continue
+		}
+		if peer.DeploymentID != "dep-abc" {
+			t.Errorf("Find(%q) resolved to %q, want dep-abc", needle, peer.DeploymentID)
+		}
+	}
+}
+
+func TestFindNamesTheAvailableAgentsWhenTheNameIsWrong(t *testing.T) {
+	stub := &stubClient{fallback: func() (*http.Response, error) {
+		return jsonResponse(http.StatusOK, peersBody("billing", "support")), nil
+	}}
+	r, _ := newTestRegistry(t, stub)
+
+	_, err := r.Find(context.Background(), "payroll")
+
+	if err == nil {
+		t.Fatal("want an error for an unknown agent")
+	}
+	for _, want := range []string{"billing", "support"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want it to name %q: a model reads this to retry", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "peers:") {
+		t.Error("error carries the package prefix; this message is shown to a model verbatim")
+	}
+}
+
+func TestFindSaysSoWhenTheOrganizationHasNoOtherAgents(t *testing.T) {
+	stub := &stubClient{fallback: func() (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{"peers":[]}`), nil
+	}}
+	r, _ := newTestRegistry(t, stub)
+
+	_, err := r.Find(context.Background(), "billing")
+
+	if err == nil {
+		t.Fatal("want an error when there are no peers at all")
+	}
+	if !strings.Contains(err.Error(), "no other A2A agents") {
+		t.Errorf("error = %v, want it to distinguish an empty organization from a wrong name", err)
+	}
+}
+
+func TestFindRejectsAnEmptyName(t *testing.T) {
+	stub := &stubClient{fallback: func() (*http.Response, error) {
+		return jsonResponse(http.StatusOK, peersBody("billing")), nil
+	}}
+	r, _ := newTestRegistry(t, stub)
+
+	if _, err := r.Find(context.Background(), "  "); err == nil {
+		t.Fatal("want an error for a blank agent name")
+	}
+}

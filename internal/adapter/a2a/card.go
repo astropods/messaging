@@ -3,6 +3,8 @@ package a2a
 import (
 	"fmt"
 
+	"github.com/astropods/messaging/internal/a2awire"
+
 	"github.com/astropods/messaging/internal/store"
 )
 
@@ -14,22 +16,22 @@ const cardVersion = "1.0.0"
 // declared over its gRPC config stream, so a peer sees what the agent can
 // actually do rather than a deploy-time guess. An agent that declares no tools
 // still gets a card, just with no skills.
-func buildCard(name, description, publicURL string, configStore *store.AgentConfigStore) Card {
-	card := Card{
-		ProtocolVersion:    protocolVersion,
+func buildCard(name, description, publicURL string, configStore *store.AgentConfigStore) a2awire.Card {
+	card := a2awire.Card{
+		ProtocolVersion:    a2awire.ProtocolVersion,
 		Name:               name,
 		Description:        description,
 		URL:                publicURL,
 		PreferredTransport: "JSONRPC",
 		Version:            cardVersion,
-		Capabilities: Capabilities{
+		Capabilities: a2awire.Capabilities{
 			Streaming:              false,
 			PushNotifications:      false,
 			StateTransitionHistory: false,
 		},
 		DefaultInputModes:  []string{"text/plain"},
 		DefaultOutputModes: []string{"text/plain"},
-		Skills:             []Skill{},
+		Skills:             []a2awire.Skill{},
 	}
 	if card.Description == "" {
 		card.Description = fmt.Sprintf("The %s agent, running on Astropods.", name)
@@ -49,7 +51,7 @@ func buildCard(name, description, publicURL string, configStore *store.AgentConf
 		if skillName == "" {
 			skillName = tool.Name
 		}
-		card.Skills = append(card.Skills, Skill{
+		card.Skills = append(card.Skills, a2awire.Skill{
 			ID:          tool.Name,
 			Name:        skillName,
 			Description: tool.Description,

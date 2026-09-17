@@ -15,6 +15,7 @@ import (
 	"github.com/astropods/messaging/internal/adapter/a2a"
 	"github.com/astropods/messaging/internal/adapter/slack"
 	"github.com/astropods/messaging/internal/adapter/web"
+	"github.com/astropods/messaging/internal/agenttools"
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/grpc"
 	"github.com/astropods/messaging/internal/internalfeedback"
@@ -218,8 +219,12 @@ func main() {
 	authorizer := buildAuthorizer(cfg.Authz)
 	internalFeedbackHandler := buildInternalFeedbackHandler(cfg.Authz)
 
+	// Peer discovery is shared: the A2A adapter warms it, and the agent tools
+	// server answers list_agents/ask_agent from the same cache.
+	peerRegistry := buildPeerRegistry(cfg.Authz)
+
 	// Initialize adapters
-	adapters := initializeAdapters(ctx, cfg, threadStore, agentConfigStore, authorizer, chatStore, fileStore, internalFeedbackHandler)
+	adapters := initializeAdapters(ctx, cfg, threadStore, agentConfigStore, authorizer, chatStore, fileStore, internalFeedbackHandler, peerRegistry)
 	if len(adapters) == 0 && !cfg.GRPC.Enabled {
 		slog.Error("No adapters enabled or configured and gRPC is disabled")
 		os.Exit(1)
@@ -316,6 +321,17 @@ func main() {
 		}()
 	}
 
+	// Start the agent-facing peer surface. Only with A2A on: without it there
+	// is nothing to discover and nothing to call.
+	if cfg.A2A.Enabled && peerRegistry != nil {
+		toolsServer := agenttools.New(peerRegistry, peers.NewClient(), cfg.A2A.ToolsAddr, cfg.A2A.AgentName)
+		go func() {
+			if err := toolsServer.Start(ctx); err != nil {
+				slog.Error("[A2A] Agent tools server stopped", "err", err)
+			}
+		}()
+	}
+
 	// Start all adapters
 	if len(adapters) > 0 {
 		for name, adapterInstance := range adapters {
@@ -358,7 +374,7 @@ func main() {
 }
 
 // initializeAdapters creates and initializes adapters based on configuration
-func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer, chatStore *sqlite.Store, fileStore files.FileStore, internalFeedbackHandler adapter.InternalFeedbackHandler) map[string]adapter.Adapter {
+func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer, chatStore *sqlite.Store, fileStore files.FileStore, internalFeedbackHandler adapter.InternalFeedbackHandler, peerRegistry *peers.Registry) map[string]adapter.Adapter {
 	adapters := make(map[string]adapter.Adapter)
 
 	// Initialize Slack adapter if enabled
@@ -430,8 +446,8 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			slog.Error("Error initializing A2A adapter", "err", err)
 		} else {
 			a2aAdapter.SetAgentConfigStore(agentConfigStore)
-			if registry := buildPeerRegistry(cfg.Authz); registry != nil {
-				a2aAdapter.SetPeerRegistry(registry)
+			if peerRegistry != nil {
+				a2aAdapter.SetPeerRegistry(peerRegistry)
 			}
 			adapters["a2a"] = a2aAdapter
 			slog.Info("A2A adapter initialized")

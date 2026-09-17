@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/astropods/messaging/internal/a2awire"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
@@ -32,7 +33,7 @@ func newTaskEntry(id, contextID string) *taskEntry {
 		id:        id,
 		contextID: contextID,
 		created:   time.Now(),
-		state:     stateSubmitted,
+		state:     a2awire.StateSubmitted,
 		done:      make(chan struct{}),
 	}
 }
@@ -53,9 +54,9 @@ func (t *taskEntry) record(chunk *pb.ContentChunk) {
 		t.partial.Reset()
 	}
 	t.partial.WriteString(chunk.Content)
-	t.state = stateWorking
+	t.state = a2awire.StateWorking
 	if chunk.Type == pb.ContentChunk_END {
-		t.state = stateCompleted
+		t.state = a2awire.StateCompleted
 		t.closeLocked()
 	}
 }
@@ -68,7 +69,7 @@ func (t *taskEntry) fail(reason string) {
 	if t.finished {
 		return
 	}
-	t.state = stateFailed
+	t.state = a2awire.StateFailed
 	t.failure = reason
 	t.closeLocked()
 }
@@ -81,7 +82,7 @@ func (t *taskEntry) cancel() bool {
 	if t.finished {
 		return false
 	}
-	t.state = stateCanceled
+	t.state = a2awire.StateCanceled
 	t.closeLocked()
 	return true
 }
@@ -96,23 +97,23 @@ func (t *taskEntry) closeLocked() {
 
 // snapshot renders the current state as an A2A task. Safe to call while the
 // turn is still streaming; the artifact then holds the text seen so far.
-func (t *taskEntry) snapshot() Task {
+func (t *taskEntry) snapshot() a2awire.Task {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	task := Task{
+	task := a2awire.Task{
 		ID:        t.id,
 		ContextID: t.contextID,
 		Kind:      "task",
-		Status: TaskStatus{
+		Status: a2awire.TaskStatus{
 			State:     t.state,
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 			Message:   t.failure,
 		},
 	}
 	if text := t.partial.String(); text != "" {
-		task.Artifacts = []Artifact{{
+		task.Artifacts = []a2awire.Artifact{{
 			ArtifactID: t.id,
-			Parts:      []Part{{Kind: partKindText, Text: text}},
+			Parts:      []a2awire.Part{{Kind: a2awire.PartKindText, Text: text}},
 		}}
 	}
 	return task

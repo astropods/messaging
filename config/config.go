@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/agenttools"
 )
 
 // Config holds the overall messaging service configuration
@@ -198,6 +199,9 @@ type A2AConfig struct {
 	AgentName   string
 	Description string
 	PublicURL   string
+	// ToolsAddr is where the agent-facing peer surface (REST + MCP) listens.
+	// Loopback by default: reaching it means acting as this agent.
+	ToolsAddr string
 }
 
 // StorageConfig holds storage configuration
@@ -304,6 +308,7 @@ func Load() (*Config, error) {
 		AgentName:   getEnv("ASTRO_AGENT_NAME", ""),
 		Description: getEnv("A2A_AGENT_DESCRIPTION", ""),
 		PublicURL:   getEnv("A2A_PUBLIC_URL", ""),
+		ToolsAddr:   getEnv("A2A_TOOLS_ADDR", agenttools.DefaultListenAddr),
 	}
 
 	// Metrics configuration
