@@ -21,6 +21,9 @@ type Config struct {
 	// Web configuration
 	Web WebConfig
 
+	// A2A configuration (agent-to-agent calls from peers in the same account)
+	A2A A2AConfig
+
 	// Storage configuration
 	Storage StorageConfig
 
@@ -186,6 +189,17 @@ type WebConfig struct {
 	AuthTestUserID string
 }
 
+// A2AConfig holds A2A adapter configuration. AgentName, Description and
+// PublicURL populate the agent card; PublicURL has to be injected because it is
+// the sidecar's own cluster Service DNS name, which the process cannot derive.
+type A2AConfig struct {
+	Enabled     bool
+	ListenAddr  string
+	AgentName   string
+	Description string
+	PublicURL   string
+}
+
 // StorageConfig holds storage configuration
 type StorageConfig struct {
 	Type     string // "redis" or "memory"
@@ -281,6 +295,15 @@ func Load() (*Config, error) {
 		ListenAddr:     getEnv("WEB_LISTEN_ADDR", ":8080"),
 		AllowedOrigins: getEnvList("WEB_ALLOWED_ORIGINS", []string{"*"}),
 		AuthTestUserID: getEnv("WEB_AUTHN_TEST_USER_ID", ""),
+	}
+
+	// A2A configuration
+	cfg.A2A = A2AConfig{
+		Enabled:     getEnvBool("A2A_ENABLED", false),
+		ListenAddr:  getEnv("A2A_LISTEN_ADDR", ":8100"),
+		AgentName:   getEnv("ASTRO_AGENT_NAME", ""),
+		Description: getEnv("A2A_AGENT_DESCRIPTION", ""),
+		PublicURL:   getEnv("A2A_PUBLIC_URL", ""),
 	}
 
 	// Metrics configuration

@@ -40,6 +40,25 @@ func SlackCapabilities(aiFeatures bool) AdapterCapabilities {
 	}
 }
 
+// A2ACapabilities returns capabilities for peer agents calling over A2A.
+// A2A models a turn as a task the caller polls, so the adapter reports no
+// streaming, no status surface and no threads: the caller sends whatever
+// context it wants considered on every call.
+func A2ACapabilities() AdapterCapabilities {
+	return AdapterCapabilities{
+		SupportsStreaming:        false,
+		SupportsStatusUpdates:    false,
+		SupportsSuggestedPrompts: false,
+		SupportsThreads:          false,
+		SupportsTypingIndicator:  false,
+		MaxUpdateRateHz:          0,
+		MaxContentLength:         0,
+		SupportsReactions:        false,
+		SupportsCards:            false,
+		SupportsAudioInput:       false,
+	}
+}
+
 // WebCapabilities returns capabilities for web browser clients via HTTP + SSE
 func WebCapabilities() AdapterCapabilities {
 	return AdapterCapabilities{

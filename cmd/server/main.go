@@ -12,6 +12,7 @@ import (
 
 	"github.com/astropods/messaging/config"
 	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/adapter/a2a"
 	"github.com/astropods/messaging/internal/adapter/slack"
 	"github.com/astropods/messaging/internal/adapter/web"
 	"github.com/astropods/messaging/internal/authz"
@@ -263,6 +264,9 @@ func main() {
 				wa.SetAgentReadiness(grpcServer.AgentConnected)
 				slog.Info("Registered audio forwarder for adapter", "adapter", name)
 			}
+			if aa, ok := adpt.(*a2a.Adapter); ok {
+				aa.SetAgentReadiness(grpcServer.AgentConnected)
+			}
 		}
 	}
 
@@ -394,6 +398,22 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			webAdapter.SetFileStore(fileStore)
 			adapters["web"] = webAdapter
 			slog.Info("Web adapter initialized")
+		}
+	}
+
+	// Initialize A2A adapter if enabled
+	if cfg.A2A.Enabled {
+		slog.Info("Initializing A2A adapter...")
+		a2aAdapter := a2a.New(
+			a2a.WithListenAddr(cfg.A2A.ListenAddr),
+			a2a.WithAgentIdentity(cfg.A2A.AgentName, cfg.A2A.Description, cfg.A2A.PublicURL),
+		)
+		if err := a2aAdapter.Initialize(ctx, adapter.Config{}); err != nil {
+			slog.Error("Error initializing A2A adapter", "err", err)
+		} else {
+			a2aAdapter.SetAgentConfigStore(agentConfigStore)
+			adapters["a2a"] = a2aAdapter
+			slog.Info("A2A adapter initialized")
 		}
 	}
 
