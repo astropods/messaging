@@ -11,6 +11,7 @@ import (
 
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/logctx"
+	"github.com/astropods/messaging/internal/peers"
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/google/uuid"
@@ -41,6 +42,7 @@ type Adapter struct {
 	agentReadiness   adapter.AgentReadiness
 	server           *http.Server
 	tasks            *registry
+	peers            *peers.Registry
 
 	listenAddr  string
 	agentName   string
@@ -95,6 +97,21 @@ func (a *Adapter) SetAgentReadiness(fn adapter.AgentReadiness) {
 	a.agentReadiness = fn
 }
 
+// SetPeerRegistry wires discovery of the other A2A agents in this account.
+func (a *Adapter) SetPeerRegistry(r *peers.Registry) {
+	a.peers = r
+}
+
+// Peers returns the A2A agents this agent can call. Empty when discovery is
+// not configured, so a caller need not distinguish "no peers" from "no
+// registry".
+func (a *Adapter) Peers(ctx context.Context) ([]peers.Peer, error) {
+	if a.peers == nil {
+		return []peers.Peer{}, nil
+	}
+	return a.peers.List(ctx)
+}
+
 func (a *Adapter) Initialize(ctx context.Context, config adapter.Config) error {
 	a.config = config
 	if a.tasks == nil {
@@ -131,6 +148,8 @@ func (a *Adapter) Start(ctx context.Context) error {
 			slog.Error("[A2A] HTTP server error", "err", err)
 		}
 	}()
+
+	go a.warmPeers(ctx)
 
 	<-ctx.Done()
 	return a.Stop(context.Background())
@@ -204,6 +223,25 @@ func (a *Adapter) HandleAgentDisconnect(ctx context.Context, conversationID stri
 	if task := a.tasks.active(conversationID); task != nil {
 		task.fail("agent disconnected")
 	}
+}
+
+// warmPeers primes the discovery cache at startup. A failure is logged and
+// left alone: discovery retries on the next List, and inbound A2A calls do not
+// depend on it.
+func (a *Adapter) warmPeers(ctx context.Context) {
+	if a.peers == nil {
+		return
+	}
+	found, err := a.peers.List(ctx)
+	if err != nil {
+		slog.Warn("[A2A] Initial peer discovery failed", "err", err)
+		return
+	}
+	names := make([]string, 0, len(found))
+	for _, p := range found {
+		names = append(names, p.Name())
+	}
+	slog.Info("[A2A] Discovered peer agents", "count", len(found), "peers", names)
 }
 
 func (a *Adapter) handleCard(w http.ResponseWriter, r *http.Request) {

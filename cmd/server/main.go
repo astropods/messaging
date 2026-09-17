@@ -18,6 +18,7 @@ import (
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/grpc"
 	"github.com/astropods/messaging/internal/internalfeedback"
+	"github.com/astropods/messaging/internal/peers"
 	"github.com/astropods/messaging/internal/store"
 	"github.com/astropods/messaging/internal/store/files"
 	"github.com/astropods/messaging/internal/store/sqlite"
@@ -60,6 +61,23 @@ func buildAuthorizer(cfg config.AuthzConfig) authz.Authorizer {
 		return authz.DenyAll()
 	}
 	return a
+}
+
+// buildPeerRegistry returns the A2A peer registry, or nil when there is no
+// deploy token to authenticate discovery with (local runs outside a
+// deployment). A nil registry means "no peers", not a failure: A2A still
+// serves inbound calls without it.
+func buildPeerRegistry(cfg config.AuthzConfig) *peers.Registry {
+	if cfg.IdentityToken == "" {
+		slog.Warn("[A2A] Peer discovery disabled: ASTRO_AUTHZ_TOKEN not set")
+		return nil
+	}
+	r, err := peers.NewFromToken(cfg.IdentityToken)
+	if err != nil {
+		slog.Error("[A2A] Failed to initialize peer discovery", "err", err)
+		return nil
+	}
+	return r
 }
 
 func buildInternalFeedbackHandler(cfg config.AuthzConfig) adapter.InternalFeedbackHandler {
@@ -412,6 +430,9 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			slog.Error("Error initializing A2A adapter", "err", err)
 		} else {
 			a2aAdapter.SetAgentConfigStore(agentConfigStore)
+			if registry := buildPeerRegistry(cfg.Authz); registry != nil {
+				a2aAdapter.SetPeerRegistry(registry)
+			}
 			adapters["a2a"] = a2aAdapter
 			slog.Info("A2A adapter initialized")
 		}
