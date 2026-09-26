@@ -463,7 +463,7 @@ func TestSlackAdapter_FetchReactionMessage_UnrepliedMessage(t *testing.T) {
 
 	a := &SlackAdapter{client: slackapi.New("xoxb-test-token", slackapi.OptionAPIURL(server.URL+"/"))}
 
-	text, parentThreadTs, _, ok := a.fetchReactionMessage(t.Context(), "C123", ts)
+	text, _, parentThreadTs, _, ok := a.fetchReactionMessage(t.Context(), "C123", ts)
 	if !ok {
 		t.Fatal("expected the reacted message to resolve from conversations.history")
 	}
