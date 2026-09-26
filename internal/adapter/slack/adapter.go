@@ -1129,7 +1129,7 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 
 	metrics.SlackEvents.WithLabelValues("reaction").Inc()
 
-	originalText, parentThreadTs, files, ok := a.fetchReactionMessage(ctx, ev.Item.Channel, ev.Item.Timestamp)
+	originalText, authorID, parentThreadTs, files, ok := a.fetchReactionMessage(ctx, ev.Item.Channel, ev.Item.Timestamp)
 	if !ok {
 		slog.Debug("[Slack] Could not fetch original message for reaction, skipping")
 		return
@@ -1160,6 +1160,18 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 	content := fmt.Sprintf("[reaction :%s: added by <@%s> on message]\n%s",
 		ev.Reaction, ev.User, originalText)
 
+	// User is the reactor, as on every other event kind, so whoever wrote the
+	// reacted message travels separately. An agent acting on a reaction is
+	// acting on what that person said, not on who noticed it. Absent when
+	// slack gives no author, as on a webhook post: unknown, never the reactor.
+	platformData := map[string]string{}
+	if authorID != "" {
+		platformData["author_id"] = authorID
+		if name := a.directory.userName(ctx, authorID); name != "" {
+			platformData["author_name"] = name
+		}
+	}
+
 	msg := &pb.Message{
 		Id:             uuid.NewString(),
 		Timestamp:      timestamppb.New(time.Now()),
@@ -1174,6 +1186,7 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 			ThreadRootId: parentThreadTs, // empty when reaction is on a top-level message
 			EventKind:    pb.PlatformContext_EVENT_KIND_REACTION,
 			BotUserId:    a.botUserID,
+			PlatformData: platformData,
 		},
 		User: &pb.User{
 			Id: ev.User,
@@ -1192,7 +1205,7 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 // parent thread timestamp. The parent thread ts is what lets handleReactionAdded
 // populate PlatformContext.ThreadRootId so the agent can distinguish a reaction
 // on a top-level message from a reaction on a reply in an existing thread.
-func (a *SlackAdapter) fetchReactionMessage(ctx context.Context, channelID, timestamp string) (text string, parentThreadTs string, files []slack.File, ok bool) {
+func (a *SlackAdapter) fetchReactionMessage(ctx context.Context, channelID, timestamp string) (text string, authorID string, parentThreadTs string, files []slack.File, ok bool) {
 	res := a.lookupMessage(ctx, channelID, timestamp)
 	if !res.found {
 		if res.err != nil {
@@ -1201,7 +1214,7 @@ func (a *SlackAdapter) fetchReactionMessage(ctx context.Context, channelID, time
 			slog.Warn(fmt.Sprintf("[Slack] Reacted message %s in %s not found; dropping reaction", timestamp, channelID))
 		}
 		metrics.MessagesDropped.WithLabelValues("slack", "reaction_message_unavailable").Inc()
-		return "", "", nil, false
+		return "", "", "", nil, false
 	}
 	m := res.msg
 	// ThreadTimestamp is set on thread replies; on a thread root it equals the
@@ -1210,7 +1223,7 @@ func (a *SlackAdapter) fetchReactionMessage(ctx context.Context, channelID, time
 	if m.ThreadTimestamp != "" && m.ThreadTimestamp != m.Timestamp {
 		parentThreadTs = m.ThreadTimestamp
 	}
-	return renderMessage(m.Text, m.Blocks, m.Attachments), parentThreadTs, m.Files, true
+	return renderMessage(m.Text, m.Blocks, m.Attachments), m.User, parentThreadTs, m.Files, true
 }
 
 // sendErrorMessage posts user-facing errors to Slack. Infrastructure errors
