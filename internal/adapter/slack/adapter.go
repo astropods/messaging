@@ -216,6 +216,9 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 	if len(a.observeChannels) > 0 {
 		a.msgDedup = newSlackMsgDedup(512)
 	}
+	if config.JoinObservedChannels {
+		a.joinObservedChannels(ctx, config.ObserveChannelIDs)
+	}
 	// Resolve the bot user id once at init so every outbound Message can carry
 	// it on PlatformContext (agents may need it to detect "I was @-mentioned"
 	// on paths where the adapter strips the mention or doesn't see it).
@@ -229,6 +232,37 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 	slog.Info(fmt.Sprintf("[Slack] Adapter initialized (Socket Mode: %v, observe channels: %v, actionable reactions: %v, allowed channels: %v, allowed user IDs: %v)",
 		config.SocketMode, config.ObserveChannelIDs, config.ActionableReactions, config.AllowedChannelIDs, config.AllowedUserIDs))
 	return nil
+}
+
+// joinObservedChannels adds the bot to every public channel it is meant to
+// observe; Slack delivers channel events only to member apps.
+//
+// conversations.join is public-only, so a private channel fails here and still
+// needs a manual invite. Failures are logged and never block startup.
+func (a *SlackAdapter) joinObservedChannels(ctx context.Context, channelIDs []string) {
+	var joined, failed, skipped int
+	for i, id := range channelIDs {
+		if id == "" {
+			skipped++
+			continue
+		}
+		// conversations.join is Slack Tier-3 (~50/min); a long list bursts
+		// past it without this and the 429s are logged as join failures.
+		if err := a.rateLimiter.Wait(ctx); err != nil {
+			slog.Warn("[Slack] stopped joining observed channels",
+				"err", err, "not_attempted", len(channelIDs)-i)
+			break
+		}
+		if _, _, _, err := a.client.JoinConversationContext(ctx, id); err != nil {
+			failed++
+			slog.Warn("[Slack] could not join observed channel", "channel", id, "err", err)
+			continue
+		}
+		joined++
+	}
+	slog.Info("[Slack] joined observed channels",
+		"joined", joined, "failed", failed, "skipped", skipped,
+		"attempted", joined+failed, "total", len(channelIDs))
 }
 
 // Start begins listening for Slack events

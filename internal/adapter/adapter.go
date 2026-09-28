@@ -126,6 +126,10 @@ type Config struct {
 	// are forwarded to the agent instead of being dropped. A message that already
 	// mentions the bot user is delivered via app_mention only (not duplicated).
 	ObserveChannelIDs []string
+
+	// JoinObservedChannels makes the adapter join every public channel in
+	// ObserveChannelIDs at startup.
+	JoinObservedChannels bool
 }
 
 // RateLimitConfig configures rate limiting
