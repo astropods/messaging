@@ -165,6 +165,10 @@ type SlackAdapterConfig struct {
 	// ObserveChannelIDs lists channel IDs where top-level (non-mention) messages
 	// are forwarded to the agent instead of being dropped.
 	ObserveChannelIDs []string `json:"observe_channel_ids,omitempty"`
+	// JoinObservedChannels makes the adapter add itself to every public channel
+	// in ObserveChannelIDs at startup. Off by default: joining posts a visible
+	// membership change in someone's workspace.
+	JoinObservedChannels *bool `json:"join_observed_channels,omitempty"`
 }
 
 // SlackConfig holds Slack-specific configuration
@@ -269,6 +273,8 @@ func Load() (*Config, error) {
 		AllowedChannelIDs:   cfg.Slack.AdapterConfig.AllowedChannelIDs,
 		AllowedUserIDs:      cfg.Slack.AdapterConfig.AllowedUserIDs,
 		ObserveChannelIDs:   cfg.Slack.AdapterConfig.ObserveChannelIDs,
+		JoinObservedChannels: cfg.Slack.AdapterConfig.JoinObservedChannels != nil &&
+			*cfg.Slack.AdapterConfig.JoinObservedChannels,
 		RateLimit: adapter.RateLimitConfig{
 			RequestsPerSecond: getEnvFloat("SLACK_RATE_LIMIT_RPS", 3.0),
 			BurstSize:         getEnvInt("SLACK_RATE_LIMIT_BURST", 10),

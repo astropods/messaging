@@ -216,6 +216,9 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 	if len(a.observeChannels) > 0 {
 		a.msgDedup = newSlackMsgDedup(512)
 	}
+	if config.JoinObservedChannels {
+		a.joinObservedChannels(ctx, config.ObserveChannelIDs)
+	}
 	// Resolve the bot user id once at init so every outbound Message can carry
 	// it on PlatformContext (agents may need it to detect "I was @-mentioned"
 	// on paths where the adapter strips the mention or doesn't see it).
@@ -229,6 +232,31 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 	slog.Info(fmt.Sprintf("[Slack] Adapter initialized (Socket Mode: %v, observe channels: %v, actionable reactions: %v, allowed channels: %v, allowed user IDs: %v)",
 		config.SocketMode, config.ObserveChannelIDs, config.ActionableReactions, config.AllowedChannelIDs, config.AllowedUserIDs))
 	return nil
+}
+
+// joinObservedChannels adds the bot to every public channel it is meant to
+// observe. Slack delivers channel events only to member apps, so a channel in
+// observe_channel_ids that the bot was never invited to is silently invisible:
+// the agent sees nothing and nothing reports why.
+//
+// conversations.join is idempotent and public-only. A private channel answers
+// method_not_supported_for_channel_type and still needs one manual invite, so
+// it is reported per channel rather than retried. Failures never block startup:
+// a workspace where some channels cannot be joined must still serve the rest.
+func (a *SlackAdapter) joinObservedChannels(ctx context.Context, channelIDs []string) {
+	var joined, failed int
+	for _, id := range channelIDs {
+		if id == "" {
+			continue
+		}
+		if _, _, _, err := a.client.JoinConversationContext(ctx, id); err != nil {
+			failed++
+			slog.Warn("[Slack] could not join observed channel", "channel", id, "err", err)
+			continue
+		}
+		joined++
+	}
+	slog.Info("[Slack] joined observed channels", "joined", joined, "failed", failed, "total", len(channelIDs))
 }
 
 // Start begins listening for Slack events
