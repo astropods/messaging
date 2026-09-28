@@ -240,10 +240,18 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 // conversations.join is public-only, so a private channel fails here and still
 // needs a manual invite. Failures are logged and never block startup.
 func (a *SlackAdapter) joinObservedChannels(ctx context.Context, channelIDs []string) {
-	var joined, failed int
-	for _, id := range channelIDs {
+	var joined, failed, skipped int
+	for i, id := range channelIDs {
 		if id == "" {
+			skipped++
 			continue
+		}
+		// conversations.join is Slack Tier-3 (~50/min); a long list bursts
+		// past it without this and the 429s are logged as join failures.
+		if err := a.rateLimiter.Wait(ctx); err != nil {
+			slog.Warn("[Slack] stopped joining observed channels",
+				"err", err, "not_attempted", len(channelIDs)-i)
+			break
 		}
 		if _, _, _, err := a.client.JoinConversationContext(ctx, id); err != nil {
 			failed++
@@ -252,7 +260,9 @@ func (a *SlackAdapter) joinObservedChannels(ctx context.Context, channelIDs []st
 		}
 		joined++
 	}
-	slog.Info("[Slack] joined observed channels", "joined", joined, "failed", failed, "total", len(channelIDs))
+	slog.Info("[Slack] joined observed channels",
+		"joined", joined, "failed", failed, "skipped", skipped,
+		"attempted", joined+failed, "total", len(channelIDs))
 }
 
 // Start begins listening for Slack events
