@@ -165,9 +165,8 @@ type SlackAdapterConfig struct {
 	// ObserveChannelIDs lists channel IDs where top-level (non-mention) messages
 	// are forwarded to the agent instead of being dropped.
 	ObserveChannelIDs []string `json:"observe_channel_ids,omitempty"`
-	// JoinObservedChannels makes the adapter add itself to every public channel
-	// in ObserveChannelIDs at startup. Off by default: joining posts a visible
-	// membership change in someone's workspace.
+	// JoinObservedChannels makes the adapter join every public channel in
+	// ObserveChannelIDs at startup. Off by default.
 	JoinObservedChannels *bool `json:"join_observed_channels,omitempty"`
 }
 

@@ -235,14 +235,10 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 }
 
 // joinObservedChannels adds the bot to every public channel it is meant to
-// observe. Slack delivers channel events only to member apps, so a channel in
-// observe_channel_ids that the bot was never invited to is silently invisible:
-// the agent sees nothing and nothing reports why.
+// observe; Slack delivers channel events only to member apps.
 //
-// conversations.join is idempotent and public-only. A private channel answers
-// method_not_supported_for_channel_type and still needs one manual invite, so
-// it is reported per channel rather than retried. Failures never block startup:
-// a workspace where some channels cannot be joined must still serve the rest.
+// conversations.join is public-only, so a private channel fails here and still
+// needs a manual invite. Failures are logged and never block startup.
 func (a *SlackAdapter) joinObservedChannels(ctx context.Context, channelIDs []string) {
 	var joined, failed int
 	for _, id := range channelIDs {

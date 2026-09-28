@@ -128,7 +128,7 @@ type Config struct {
 	ObserveChannelIDs []string
 
 	// JoinObservedChannels makes the adapter join every public channel in
-	// ObserveChannelIDs at startup, instead of each one being invited by hand.
+	// ObserveChannelIDs at startup.
 	JoinObservedChannels bool
 }
 

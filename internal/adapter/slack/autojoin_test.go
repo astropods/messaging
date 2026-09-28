@@ -12,7 +12,7 @@ import (
 )
 
 // joinRecorder serves conversations.join, recording the channels asked for and
-// failing the ones named in fail.
+// failing those named in fail.
 func joinRecorder(fail map[string]string) (*httptest.Server, *[]string, *sync.Mutex) {
 	var mu sync.Mutex
 	var got []string
@@ -53,8 +53,6 @@ func TestJoinObservedChannels_JoinsEveryChannel(t *testing.T) {
 	}
 }
 
-// A private channel cannot be self-joined and must not stop the others: a
-// workspace where one channel is unreachable still has to observe the rest.
 func TestJoinObservedChannels_ContinuesPastAFailure(t *testing.T) {
 	a, _ := newTestAdapter()
 	srv, got, mu := joinRecorder(map[string]string{
