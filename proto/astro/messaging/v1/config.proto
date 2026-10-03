@@ -13,6 +13,15 @@ message AgentConfig {
   // files API doesn't advertise an upload that would be silently ignored.
   // Opt-in: an unset value (older agents) reads as false.
   bool supports_files = 3;
+  // Skills the agent accepts tasks for on the agent mesh. The Mesh adapter
+  // advertises them so other agents can address skill:<name>. Empty means the
+  // agent is reachable on the mesh only by its address.
+  repeated AgentSkill skills = 4;
+}
+
+message AgentSkill {
+  string name = 1;                        // Mesh skill name: lowercase letters, digits, ".", "_", "-"
+  string description = 2;
 }
 
 // Tool configuration for any agent

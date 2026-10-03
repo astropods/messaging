@@ -31,6 +31,10 @@ type AgentConfig struct {
 	// files API doesn't advertise an upload that would be silently ignored.
 	// Opt-in: an unset value (older agents) reads as false.
 	SupportsFiles bool `protobuf:"varint,3,opt,name=supports_files,json=supportsFiles,proto3" json:"supports_files,omitempty"`
+	// Skills the agent accepts tasks for on the agent mesh. The Mesh adapter
+	// advertises them so other agents can address skill:<name>. Empty means the
+	// agent is reachable on the mesh only by its address.
+	Skills        []*AgentSkill `protobuf:"bytes,4,rep,name=skills,proto3" json:"skills,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -86,6 +90,65 @@ func (x *AgentConfig) GetSupportsFiles() bool {
 	return false
 }
 
+func (x *AgentConfig) GetSkills() []*AgentSkill {
+	if x != nil {
+		return x.Skills
+	}
+	return nil
+}
+
+type AgentSkill struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"` // Mesh skill name: lowercase letters, digits, ".", "_", "-"
+	Description   string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentSkill) Reset() {
+	*x = AgentSkill{}
+	mi := &file_astro_messaging_v1_config_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentSkill) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentSkill) ProtoMessage() {}
+
+func (x *AgentSkill) ProtoReflect() protoreflect.Message {
+	mi := &file_astro_messaging_v1_config_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentSkill.ProtoReflect.Descriptor instead.
+func (*AgentSkill) Descriptor() ([]byte, []int) {
+	return file_astro_messaging_v1_config_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *AgentSkill) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *AgentSkill) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
 // Tool configuration for any agent
 type AgentToolConfig struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -100,7 +163,7 @@ type AgentToolConfig struct {
 
 func (x *AgentToolConfig) Reset() {
 	*x = AgentToolConfig{}
-	mi := &file_astro_messaging_v1_config_proto_msgTypes[1]
+	mi := &file_astro_messaging_v1_config_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -112,7 +175,7 @@ func (x *AgentToolConfig) String() string {
 func (*AgentToolConfig) ProtoMessage() {}
 
 func (x *AgentToolConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_astro_messaging_v1_config_proto_msgTypes[1]
+	mi := &file_astro_messaging_v1_config_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -125,7 +188,7 @@ func (x *AgentToolConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentToolConfig.ProtoReflect.Descriptor instead.
 func (*AgentToolConfig) Descriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_config_proto_rawDescGZIP(), []int{1}
+	return file_astro_messaging_v1_config_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *AgentToolConfig) GetName() string {
@@ -174,7 +237,7 @@ type AgentToolGraph struct {
 
 func (x *AgentToolGraph) Reset() {
 	*x = AgentToolGraph{}
-	mi := &file_astro_messaging_v1_config_proto_msgTypes[2]
+	mi := &file_astro_messaging_v1_config_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -186,7 +249,7 @@ func (x *AgentToolGraph) String() string {
 func (*AgentToolGraph) ProtoMessage() {}
 
 func (x *AgentToolGraph) ProtoReflect() protoreflect.Message {
-	mi := &file_astro_messaging_v1_config_proto_msgTypes[2]
+	mi := &file_astro_messaging_v1_config_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -199,7 +262,7 @@ func (x *AgentToolGraph) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentToolGraph.ProtoReflect.Descriptor instead.
 func (*AgentToolGraph) Descriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_config_proto_rawDescGZIP(), []int{2}
+	return file_astro_messaging_v1_config_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *AgentToolGraph) GetNodes() []*AgentToolGraphNode {
@@ -227,7 +290,7 @@ type AgentToolGraphNode struct {
 
 func (x *AgentToolGraphNode) Reset() {
 	*x = AgentToolGraphNode{}
-	mi := &file_astro_messaging_v1_config_proto_msgTypes[3]
+	mi := &file_astro_messaging_v1_config_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -239,7 +302,7 @@ func (x *AgentToolGraphNode) String() string {
 func (*AgentToolGraphNode) ProtoMessage() {}
 
 func (x *AgentToolGraphNode) ProtoReflect() protoreflect.Message {
-	mi := &file_astro_messaging_v1_config_proto_msgTypes[3]
+	mi := &file_astro_messaging_v1_config_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -252,7 +315,7 @@ func (x *AgentToolGraphNode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentToolGraphNode.ProtoReflect.Descriptor instead.
 func (*AgentToolGraphNode) Descriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_config_proto_rawDescGZIP(), []int{3}
+	return file_astro_messaging_v1_config_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *AgentToolGraphNode) GetId() string {
@@ -287,7 +350,7 @@ type AgentToolGraphEdge struct {
 
 func (x *AgentToolGraphEdge) Reset() {
 	*x = AgentToolGraphEdge{}
-	mi := &file_astro_messaging_v1_config_proto_msgTypes[4]
+	mi := &file_astro_messaging_v1_config_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -299,7 +362,7 @@ func (x *AgentToolGraphEdge) String() string {
 func (*AgentToolGraphEdge) ProtoMessage() {}
 
 func (x *AgentToolGraphEdge) ProtoReflect() protoreflect.Message {
-	mi := &file_astro_messaging_v1_config_proto_msgTypes[4]
+	mi := &file_astro_messaging_v1_config_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -312,7 +375,7 @@ func (x *AgentToolGraphEdge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentToolGraphEdge.ProtoReflect.Descriptor instead.
 func (*AgentToolGraphEdge) Descriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_config_proto_rawDescGZIP(), []int{4}
+	return file_astro_messaging_v1_config_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *AgentToolGraphEdge) GetId() string {
@@ -340,11 +403,16 @@ var File_astro_messaging_v1_config_proto protoreflect.FileDescriptor
 
 const file_astro_messaging_v1_config_proto_rawDesc = "" +
 	"\n" +
-	"\x1fastro/messaging/v1/config.proto\x12\x12astro.messaging.v1\"\x94\x01\n" +
+	"\x1fastro/messaging/v1/config.proto\x12\x12astro.messaging.v1\"\xcc\x01\n" +
 	"\vAgentConfig\x12#\n" +
 	"\rsystem_prompt\x18\x01 \x01(\tR\fsystemPrompt\x129\n" +
 	"\x05tools\x18\x02 \x03(\v2#.astro.messaging.v1.AgentToolConfigR\x05tools\x12%\n" +
-	"\x0esupports_files\x18\x03 \x01(\bR\rsupportsFiles\"\xab\x01\n" +
+	"\x0esupports_files\x18\x03 \x01(\bR\rsupportsFiles\x126\n" +
+	"\x06skills\x18\x04 \x03(\v2\x1e.astro.messaging.v1.AgentSkillR\x06skills\"B\n" +
+	"\n" +
+	"AgentSkill\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x02 \x01(\tR\vdescription\"\xab\x01\n" +
 	"\x0fAgentToolConfig\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
@@ -375,24 +443,26 @@ func file_astro_messaging_v1_config_proto_rawDescGZIP() []byte {
 	return file_astro_messaging_v1_config_proto_rawDescData
 }
 
-var file_astro_messaging_v1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_astro_messaging_v1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_astro_messaging_v1_config_proto_goTypes = []any{
 	(*AgentConfig)(nil),        // 0: astro.messaging.v1.AgentConfig
-	(*AgentToolConfig)(nil),    // 1: astro.messaging.v1.AgentToolConfig
-	(*AgentToolGraph)(nil),     // 2: astro.messaging.v1.AgentToolGraph
-	(*AgentToolGraphNode)(nil), // 3: astro.messaging.v1.AgentToolGraphNode
-	(*AgentToolGraphEdge)(nil), // 4: astro.messaging.v1.AgentToolGraphEdge
+	(*AgentSkill)(nil),         // 1: astro.messaging.v1.AgentSkill
+	(*AgentToolConfig)(nil),    // 2: astro.messaging.v1.AgentToolConfig
+	(*AgentToolGraph)(nil),     // 3: astro.messaging.v1.AgentToolGraph
+	(*AgentToolGraphNode)(nil), // 4: astro.messaging.v1.AgentToolGraphNode
+	(*AgentToolGraphEdge)(nil), // 5: astro.messaging.v1.AgentToolGraphEdge
 }
 var file_astro_messaging_v1_config_proto_depIdxs = []int32{
-	1, // 0: astro.messaging.v1.AgentConfig.tools:type_name -> astro.messaging.v1.AgentToolConfig
-	2, // 1: astro.messaging.v1.AgentToolConfig.graph:type_name -> astro.messaging.v1.AgentToolGraph
-	3, // 2: astro.messaging.v1.AgentToolGraph.nodes:type_name -> astro.messaging.v1.AgentToolGraphNode
-	4, // 3: astro.messaging.v1.AgentToolGraph.edges:type_name -> astro.messaging.v1.AgentToolGraphEdge
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	2, // 0: astro.messaging.v1.AgentConfig.tools:type_name -> astro.messaging.v1.AgentToolConfig
+	1, // 1: astro.messaging.v1.AgentConfig.skills:type_name -> astro.messaging.v1.AgentSkill
+	3, // 2: astro.messaging.v1.AgentToolConfig.graph:type_name -> astro.messaging.v1.AgentToolGraph
+	4, // 3: astro.messaging.v1.AgentToolGraph.nodes:type_name -> astro.messaging.v1.AgentToolGraphNode
+	5, // 4: astro.messaging.v1.AgentToolGraph.edges:type_name -> astro.messaging.v1.AgentToolGraphEdge
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_astro_messaging_v1_config_proto_init() }
@@ -406,7 +476,7 @@ func file_astro_messaging_v1_config_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_astro_messaging_v1_config_proto_rawDesc), len(file_astro_messaging_v1_config_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

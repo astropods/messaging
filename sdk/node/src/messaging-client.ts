@@ -370,6 +370,17 @@ export interface AgentConfig {
    * Opt-in: omitting it reads as false.
    */
   supportsFiles?: boolean;
+  /**
+   * Skills the agent accepts tasks for on the agent mesh. Another agent reaches
+   * one with `skill:<name>`. Every agent is also reachable as
+   * `skill:agent.<agent-name>`, so names starting with `agent.` are ignored.
+   */
+  skills?: AgentSkill[];
+}
+
+export interface AgentSkill {
+  name: string;
+  description?: string;
 }
 
 // --- Audio types ---

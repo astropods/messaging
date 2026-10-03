@@ -21,6 +21,9 @@ type Config struct {
 	// Web configuration
 	Web WebConfig
 
+	// Agent mesh configuration
+	Mesh MeshConfig
+
 	// Storage configuration
 	Storage StorageConfig
 
@@ -186,6 +189,14 @@ type WebConfig struct {
 	AuthTestUserID string
 }
 
+// MeshConfig holds agent mesh (AMP) adapter configuration. The adapter logs in
+// with Authz.IdentityToken, the deployment's ASTRO_AUTHZ_TOKEN.
+type MeshConfig struct {
+	Enabled bool
+	URL     string
+	Name    string
+}
+
 // StorageConfig holds storage configuration
 type StorageConfig struct {
 	Type     string // "redis" or "memory"
@@ -281,6 +292,12 @@ func Load() (*Config, error) {
 		ListenAddr:     getEnv("WEB_LISTEN_ADDR", ":8080"),
 		AllowedOrigins: getEnvList("WEB_ALLOWED_ORIGINS", []string{"*"}),
 		AuthTestUserID: getEnv("WEB_AUTHN_TEST_USER_ID", ""),
+	}
+
+	cfg.Mesh = MeshConfig{
+		Enabled: getEnvBool("MESH_ENABLED", false),
+		URL:     getEnv("ASTRO_MESH_URL", ""),
+		Name:    getEnv("MESH_NAME", ""),
 	}
 
 	// Metrics configuration

@@ -8,13 +8,14 @@ import (
 
 // AgentConfigStore stores the agent's declared configuration in memory.
 type AgentConfigStore struct {
-	config *pb.AgentConfig
-	mu     sync.RWMutex
+	config  *pb.AgentConfig
+	changed chan struct{}
+	mu      sync.RWMutex
 }
 
 // NewAgentConfigStore creates a new AgentConfigStore.
 func NewAgentConfigStore() *AgentConfigStore {
-	return &AgentConfigStore{}
+	return &AgentConfigStore{changed: make(chan struct{})}
 }
 
 // Set stores the agent config.
@@ -22,6 +23,15 @@ func (s *AgentConfigStore) Set(config *pb.AgentConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.config = config
+	close(s.changed)
+	s.changed = make(chan struct{})
+}
+
+// Changed returns a channel that closes on the next Set.
+func (s *AgentConfigStore) Changed() <-chan struct{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.changed
 }
 
 // Get returns the stored agent config, or nil if not yet received.
