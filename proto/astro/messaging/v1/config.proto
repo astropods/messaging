@@ -17,8 +17,6 @@ message AgentConfig {
   // advertises them so other agents can address skill:<name>. Empty means the
   // agent is reachable on the mesh only by its address.
   repeated AgentSkill skills = 4;
-  // Maximum mesh tasks the agent works on at once. Zero means the default (4).
-  int32 mesh_max_concurrent = 5;
 }
 
 message AgentSkill {

@@ -20,9 +20,9 @@ import (
 )
 
 const (
-	Platform             = "mesh"
-	agentPrefix          = "agent."
-	defaultMaxConcurrent = 4
+	Platform      = "mesh"
+	agentPrefix   = "agent."
+	maxConcurrent = 4
 )
 
 var skillPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
@@ -134,17 +134,8 @@ func (a *Adapter) skills() []string {
 	return out
 }
 
-func (a *Adapter) maxConcurrent() int {
-	if a.configs != nil {
-		if n := a.configs.Get().GetMeshMaxConcurrent(); n > 0 {
-			return int(n)
-		}
-	}
-	return defaultMaxConcurrent
-}
-
 func (a *Adapter) card(skills []string) card {
-	c := card{Name: a.cfg.Name, Kind: "agent", MaxConcurrent: a.maxConcurrent()}
+	c := card{Name: a.cfg.Name, Kind: "agent", MaxConcurrent: maxConcurrent}
 	if c.Name == "" {
 		c.Name = "agent"
 	}
@@ -183,7 +174,7 @@ func (a *Adapter) run(ctx context.Context) {
 }
 
 func (a *Adapter) connect(ctx context.Context) error {
-	skills, limit := a.skills(), a.maxConcurrent()
+	skills := a.skills()
 	s, welcome, err := dial(ctx, a.cfg.URL, a.cfg.Token, a.card(skills))
 	if err != nil {
 		return err
@@ -194,7 +185,7 @@ func (a *Adapter) connect(ctx context.Context) error {
 		s.close()
 		a.dropTurns()
 	}()
-	slog.Info("[Mesh] joined the mesh", "address", s.address, "skills", skills, "max_concurrent", limit)
+	slog.Info("[Mesh] joined the mesh", "address", s.address, "skills", skills)
 
 	interval := time.Duration(welcome.HeartbeatIntervalS) * time.Second
 	if interval <= 0 {
@@ -203,7 +194,7 @@ func (a *Adapter) connect(ctx context.Context) error {
 	stop := make(chan struct{})
 	defer close(stop)
 	if a.configs != nil {
-		go a.watchConfig(stop, s, skills, limit)
+		go a.watchSkills(stop, s, skills)
 	}
 	go func() {
 		tick := time.NewTicker(interval / 2)
@@ -231,15 +222,15 @@ func (a *Adapter) connect(ctx context.Context) error {
 	})
 }
 
-func (a *Adapter) watchConfig(stop <-chan struct{}, s *session, sent []string, limit int) {
+func (a *Adapter) watchSkills(stop <-chan struct{}, s *session, sent []string) {
 	for {
 		changed := a.configs.Changed()
 		select {
 		case <-stop:
 			return
 		case <-changed:
-			if !slices.Equal(a.skills(), sent) || a.maxConcurrent() != limit {
-				slog.Info("[Mesh] agent changed its mesh settings; rejoining")
+			if !slices.Equal(a.skills(), sent) {
+				slog.Info("[Mesh] agent changed its skills; rejoining")
 				s.close()
 				return
 			}
@@ -287,7 +278,7 @@ func (a *Adapter) deliver(ctx context.Context, s *session, f *frame) {
 
 func (a *Adapter) offer(ctx context.Context, s *session, f *frame) {
 	env := f.Envelope
-	if a.handler == nil || a.activeTasks() >= a.maxConcurrent() {
+	if a.handler == nil || a.activeTasks() >= maxConcurrent {
 		_ = s.write(&frame{Type: "nack", DeliveryID: f.DeliveryID, DelayS: 1})
 		return
 	}

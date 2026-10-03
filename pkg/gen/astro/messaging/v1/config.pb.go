@@ -34,11 +34,9 @@ type AgentConfig struct {
 	// Skills the agent accepts tasks for on the agent mesh. The Mesh adapter
 	// advertises them so other agents can address skill:<name>. Empty means the
 	// agent is reachable on the mesh only by its address.
-	Skills []*AgentSkill `protobuf:"bytes,4,rep,name=skills,proto3" json:"skills,omitempty"`
-	// Maximum mesh tasks the agent works on at once. Zero means the default (4).
-	MeshMaxConcurrent int32 `protobuf:"varint,5,opt,name=mesh_max_concurrent,json=meshMaxConcurrent,proto3" json:"mesh_max_concurrent,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	Skills        []*AgentSkill `protobuf:"bytes,4,rep,name=skills,proto3" json:"skills,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentConfig) Reset() {
@@ -97,13 +95,6 @@ func (x *AgentConfig) GetSkills() []*AgentSkill {
 		return x.Skills
 	}
 	return nil
-}
-
-func (x *AgentConfig) GetMeshMaxConcurrent() int32 {
-	if x != nil {
-		return x.MeshMaxConcurrent
-	}
-	return 0
 }
 
 type AgentSkill struct {
@@ -412,13 +403,12 @@ var File_astro_messaging_v1_config_proto protoreflect.FileDescriptor
 
 const file_astro_messaging_v1_config_proto_rawDesc = "" +
 	"\n" +
-	"\x1fastro/messaging/v1/config.proto\x12\x12astro.messaging.v1\"\xfc\x01\n" +
+	"\x1fastro/messaging/v1/config.proto\x12\x12astro.messaging.v1\"\xcc\x01\n" +
 	"\vAgentConfig\x12#\n" +
 	"\rsystem_prompt\x18\x01 \x01(\tR\fsystemPrompt\x129\n" +
 	"\x05tools\x18\x02 \x03(\v2#.astro.messaging.v1.AgentToolConfigR\x05tools\x12%\n" +
 	"\x0esupports_files\x18\x03 \x01(\bR\rsupportsFiles\x126\n" +
-	"\x06skills\x18\x04 \x03(\v2\x1e.astro.messaging.v1.AgentSkillR\x06skills\x12.\n" +
-	"\x13mesh_max_concurrent\x18\x05 \x01(\x05R\x11meshMaxConcurrent\"B\n" +
+	"\x06skills\x18\x04 \x03(\v2\x1e.astro.messaging.v1.AgentSkillR\x06skills\"B\n" +
 	"\n" +
 	"AgentSkill\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +

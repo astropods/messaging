@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1f\x61stro/messaging/v1/config.proto\x12\x12\x61stro.messaging.v1\"\xbd\x01\n\x0b\x41gentConfig\x12\x15\n\rsystem_prompt\x18\x01 \x01(\t\x12\x32\n\x05tools\x18\x02 \x03(\x0b\x32#.astro.messaging.v1.AgentToolConfig\x12\x16\n\x0esupports_files\x18\x03 \x01(\x08\x12.\n\x06skills\x18\x04 \x03(\x0b\x32\x1e.astro.messaging.v1.AgentSkill\x12\x1b\n\x13mesh_max_concurrent\x18\x05 \x01(\x05\"/\n\nAgentSkill\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x02 \x01(\t\"\x84\x01\n\x0f\x41gentToolConfig\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\r\n\x05title\x18\x02 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x03 \x01(\t\x12\x0c\n\x04type\x18\x04 \x01(\t\x12\x31\n\x05graph\x18\x05 \x01(\x0b\x32\".astro.messaging.v1.AgentToolGraph\"~\n\x0e\x41gentToolGraph\x12\x35\n\x05nodes\x18\x01 \x03(\x0b\x32&.astro.messaging.v1.AgentToolGraphNode\x12\x35\n\x05\x65\x64ges\x18\x02 \x03(\x0b\x32&.astro.messaging.v1.AgentToolGraphEdge\"<\n\x12\x41gentToolGraphNode\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x0c\n\x04type\x18\x03 \x01(\t\"@\n\x12\x41gentToolGraphEdge\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0e\n\x06source\x18\x02 \x01(\t\x12\x0e\n\x06target\x18\x03 \x01(\tB3Z1github.com/postman/astro/messaging/v1;messagingv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1f\x61stro/messaging/v1/config.proto\x12\x12\x61stro.messaging.v1\"\xa0\x01\n\x0b\x41gentConfig\x12\x15\n\rsystem_prompt\x18\x01 \x01(\t\x12\x32\n\x05tools\x18\x02 \x03(\x0b\x32#.astro.messaging.v1.AgentToolConfig\x12\x16\n\x0esupports_files\x18\x03 \x01(\x08\x12.\n\x06skills\x18\x04 \x03(\x0b\x32\x1e.astro.messaging.v1.AgentSkill\"/\n\nAgentSkill\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x02 \x01(\t\"\x84\x01\n\x0f\x41gentToolConfig\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\r\n\x05title\x18\x02 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x03 \x01(\t\x12\x0c\n\x04type\x18\x04 \x01(\t\x12\x31\n\x05graph\x18\x05 \x01(\x0b\x32\".astro.messaging.v1.AgentToolGraph\"~\n\x0e\x41gentToolGraph\x12\x35\n\x05nodes\x18\x01 \x03(\x0b\x32&.astro.messaging.v1.AgentToolGraphNode\x12\x35\n\x05\x65\x64ges\x18\x02 \x03(\x0b\x32&.astro.messaging.v1.AgentToolGraphEdge\"<\n\x12\x41gentToolGraphNode\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x0c\n\x04type\x18\x03 \x01(\t\"@\n\x12\x41gentToolGraphEdge\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0e\n\x06source\x18\x02 \x01(\t\x12\x0e\n\x06target\x18\x03 \x01(\tB3Z1github.com/postman/astro/messaging/v1;messagingv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,15 +33,15 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'Z1github.com/postman/astro/messaging/v1;messagingv1'
   _globals['_AGENTCONFIG']._serialized_start=56
-  _globals['_AGENTCONFIG']._serialized_end=245
-  _globals['_AGENTSKILL']._serialized_start=247
-  _globals['_AGENTSKILL']._serialized_end=294
-  _globals['_AGENTTOOLCONFIG']._serialized_start=297
-  _globals['_AGENTTOOLCONFIG']._serialized_end=429
-  _globals['_AGENTTOOLGRAPH']._serialized_start=431
-  _globals['_AGENTTOOLGRAPH']._serialized_end=557
-  _globals['_AGENTTOOLGRAPHNODE']._serialized_start=559
-  _globals['_AGENTTOOLGRAPHNODE']._serialized_end=619
-  _globals['_AGENTTOOLGRAPHEDGE']._serialized_start=621
-  _globals['_AGENTTOOLGRAPHEDGE']._serialized_end=685
+  _globals['_AGENTCONFIG']._serialized_end=216
+  _globals['_AGENTSKILL']._serialized_start=218
+  _globals['_AGENTSKILL']._serialized_end=265
+  _globals['_AGENTTOOLCONFIG']._serialized_start=268
+  _globals['_AGENTTOOLCONFIG']._serialized_end=400
+  _globals['_AGENTTOOLGRAPH']._serialized_start=402
+  _globals['_AGENTTOOLGRAPH']._serialized_end=528
+  _globals['_AGENTTOOLGRAPHNODE']._serialized_start=530
+  _globals['_AGENTTOOLGRAPHNODE']._serialized_end=590
+  _globals['_AGENTTOOLGRAPHEDGE']._serialized_start=592
+  _globals['_AGENTTOOLGRAPHEDGE']._serialized_end=656
 # @@protoc_insertion_point(module_scope)

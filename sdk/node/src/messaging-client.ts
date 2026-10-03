@@ -376,8 +376,6 @@ export interface AgentConfig {
    * `skill:agent.<agent-name>`, so names starting with `agent.` are ignored.
    */
   skills?: AgentSkill[];
-  /** Maximum mesh tasks the agent works on at once. Omitted means 4. */
-  meshMaxConcurrent?: number;
 }
 
 export interface AgentSkill {
