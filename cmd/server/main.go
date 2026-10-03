@@ -12,6 +12,7 @@ import (
 
 	"github.com/astropods/messaging/config"
 	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/adapter/mesh"
 	"github.com/astropods/messaging/internal/adapter/slack"
 	"github.com/astropods/messaging/internal/adapter/web"
 	"github.com/astropods/messaging/internal/authz"
@@ -394,6 +395,22 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			webAdapter.SetFileStore(fileStore)
 			adapters["web"] = webAdapter
 			slog.Info("Web adapter initialized")
+		}
+	}
+
+	if cfg.Mesh.Enabled {
+		slog.Info("Initializing Mesh adapter...")
+		meshAdapter := mesh.New(mesh.Config{
+			URL:   cfg.Mesh.URL,
+			Token: cfg.Authz.IdentityToken,
+			Name:  cfg.Mesh.Name,
+		})
+		meshAdapter.SetAgentConfigStore(agentConfigStore)
+		if err := meshAdapter.Initialize(ctx, adapter.Config{}); err != nil {
+			slog.Error("Failed to initialize Mesh adapter", "err", err)
+		} else {
+			adapters[mesh.Platform] = meshAdapter
+			slog.Info("Mesh adapter initialized", "url", cfg.Mesh.URL)
 		}
 	}
 
