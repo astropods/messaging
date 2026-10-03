@@ -28,7 +28,7 @@ A direct mesh message (not a task) gets a mesh message back, with `reply_to` set
 The `agent.` prefix is reserved: `skill:agent.sasbot` reaches that agent by name, and a declared skill starting with `agent.` is dropped so one agent cannot answer for another's name. When the agent sends a new `AgentConfig` whose skills or concurrency differ, the adapter rejoins with the new card (`AgentConfigStore.Changed`).
 
 ```ts
-client.sendConfig({ systemPrompt, tools, skills: [{ name: "summarize" }], meshMaxConcurrent: 2 });
+client.sendAgentConfig({ systemPrompt, tools, skills: [{ name: "summarize" }], meshMaxConcurrent: 2 });
 ```
 
 **Session.** The adapter holds one WebSocket session (subprotocol `amp.v1alpha1`), sends a heartbeat every half interval, and reconnects with backoff from 1 to 30 seconds. A rejected credential retries at the 30-second ceiling. A dropped session forgets its in-flight turns; the gateway re-offers their tasks when their leases expire.
