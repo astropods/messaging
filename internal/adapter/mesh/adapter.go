@@ -153,7 +153,7 @@ func (a *Adapter) skills() []string {
 }
 
 func (a *Adapter) card(skills []string) card {
-	c := card{Name: a.cfg.Name, Kind: "agent", MaxConcurrent: maxConcurrent}
+	c := card{Name: a.cfg.Name, Kind: "agent", Accepts: []string{"text", "data"}, MaxConcurrent: maxConcurrent}
 	if c.Name == "" {
 		c.Name = "agent"
 	}
