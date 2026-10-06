@@ -45,6 +45,19 @@ export class RoomClient {
     return this.request('POST', `/artifacts?name=${encodeURIComponent(name)}`, body, contentType);
   }
 
+  async documentLink(documentId: string): Promise<{ url: string; expires_at: string }> {
+    return this.request('GET', `/artifacts/${encodeURIComponent(documentId)}/download`);
+  }
+
+  async readDocument(documentId: string): Promise<ArrayBuffer> {
+    const { url } = await this.documentLink(documentId);
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new RoomError(res.status, `download of document ${documentId} failed`);
+    }
+    return res.arrayBuffer();
+  }
+
   async listTasks(scope: 'assigned' | 'created' = 'assigned'): Promise<{ tasks: RoomTask[] }> {
     return this.request('GET', `/tasks?scope=${scope}`);
   }

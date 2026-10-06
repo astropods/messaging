@@ -59,6 +59,17 @@ class RoomClient:
         data = body.encode() if isinstance(body, str) else body
         return self._request("POST", "/artifacts?name=" + urllib.parse.quote(name), data, content_type)
 
+    def document_link(self, document_id: str) -> dict:
+        return self._request("GET", "/artifacts/" + urllib.parse.quote(document_id) + "/download")
+
+    def read_document(self, document_id: str) -> bytes:
+        url = self.document_link(document_id)["url"]
+        try:
+            with urllib.request.urlopen(url, timeout=self._timeout) as res:
+                return res.read()
+        except urllib.error.HTTPError as err:
+            raise RoomError(err.code, f"download of document {document_id} failed") from None
+
     def list_tasks(self, scope: str = "assigned") -> dict:
         return self._request("GET", "/tasks?scope=" + urllib.parse.quote(scope))
 

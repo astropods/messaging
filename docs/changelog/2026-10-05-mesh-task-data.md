@@ -22,7 +22,7 @@ const task = meshTask(message);
 task = mesh_task(message)
 ```
 
-Both return null (`None`) for a message that did not come from the agent mesh.
+Both return null (`None`) for a message that did not come from the agent mesh. The room client reads an input with its grant: `documentLink(id)` / `document_link(id)` returns a short-lived download link, and `readDocument(id)` / `read_document(id)` fetches the bytes.
 
 # Migration
 
