@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/adapter/mesh"
 	"github.com/astropods/messaging/internal/logctx"
 	"github.com/astropods/messaging/internal/metrics"
 	"github.com/astropods/messaging/internal/store"
@@ -330,6 +331,25 @@ func (s *Server) GetConversationMetadata(ctx context.Context, req *pb.Conversati
 		MessageCount:    int32(conv.MessageCount), //nolint:gosec // MessageCount is bounded
 		Found:           true,
 	}, nil
+}
+
+type roomGranter interface {
+	RoomGrant(conversationID string) (mesh.RoomGrant, bool)
+}
+
+func (s *Server) GetRoomGrant(_ context.Context, req *pb.RoomGrantRequest) (*pb.RoomGrantResponse, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, adpt := range s.adapters {
+		granter, ok := adpt.(roomGranter)
+		if !ok {
+			continue
+		}
+		if g, ok := granter.RoomGrant(req.GetConversationId()); ok {
+			return &pb.RoomGrantResponse{Found: true, RoomId: g.RoomID, Grant: g.Grant, ExpiresAt: timestamppb.New(g.ExpiresAt), ApiUrl: g.APIURL}, nil
+		}
+	}
+	return &pb.RoomGrantResponse{}, nil
 }
 
 // HealthCheck returns server health status

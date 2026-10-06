@@ -35,6 +35,7 @@ type envelope struct {
 	ReplyTo string `json:"reply_to,omitempty"`
 	State   string `json:"state,omitempty"`
 	Parts   []part `json:"parts,omitempty"`
+	Scope   string `json:"scope,omitempty"`
 }
 
 type skill struct {
@@ -75,6 +76,8 @@ type frame struct {
 	DeliveryID         string      `json:"delivery_id,omitempty"`
 	Offer              bool        `json:"offer,omitempty"`
 	DelayS             int         `json:"delay_s,omitempty"`
+	Grant              string      `json:"grant,omitempty"`
+	Scopes             []string    `json:"scopes,omitempty"`
 	Error              *ampError   `json:"error,omitempty"`
 	Reason             string      `json:"reason,omitempty"`
 }
