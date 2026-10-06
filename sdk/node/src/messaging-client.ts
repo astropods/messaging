@@ -174,6 +174,13 @@ export interface SaveConversationRequest {
   onConflict?: 'SKIP' | 'REPLACE' | 'APPEND';
 }
 
+export interface RoomGrant {
+  roomId: string;
+  grant: string;
+  expiresAt: Date;
+  apiUrl: string;
+}
+
 export type SaveConversationStatus =
   | 'CREATED'
   | 'REPLACED'
@@ -673,6 +680,36 @@ export class MessagingClient extends EventEmitter {
           else resolve(response);
         }
       );
+    });
+  }
+
+  /**
+   * The current scope grant for an agent mesh conversation, or null when the
+   * conversation is not a mesh task or message, or its grant has expired.
+   */
+  async getRoomGrant(conversationId: string): Promise<RoomGrant | null> {
+    if (!this.isConnected) {
+      throw new Error('Client not connected. Call connect() first.');
+    }
+
+    return new Promise((resolve, reject) => {
+      this.client.GetRoomGrant({ conversationId }, (error: any, response: any) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        if (!response?.found) {
+          resolve(null);
+          return;
+        }
+        const seconds = Number(response.expiresAt?.seconds ?? 0);
+        resolve({
+          roomId: response.roomId,
+          grant: response.grant,
+          expiresAt: new Date(seconds * 1000),
+          apiUrl: response.apiUrl,
+        });
+      });
     });
   }
 

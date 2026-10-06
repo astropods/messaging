@@ -73,6 +73,11 @@ class AgentMessagingStub:
                 request_serializer=astro_dot_messaging_dot_v1_dot_service__pb2.HealthCheckRequest.SerializeToString,
                 response_deserializer=astro_dot_messaging_dot_v1_dot_service__pb2.HealthCheckResponse.FromString,
                 _registered_method=True)
+        self.GetRoomGrant = channel.unary_unary(
+                '/astro.messaging.v1.AgentMessaging/GetRoomGrant',
+                request_serializer=astro_dot_messaging_dot_v1_dot_service__pb2.RoomGrantRequest.SerializeToString,
+                response_deserializer=astro_dot_messaging_dot_v1_dot_service__pb2.RoomGrantResponse.FromString,
+                _registered_method=True)
 
 
 class AgentMessagingServicer:
@@ -132,6 +137,14 @@ class AgentMessagingServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetRoomGrant(self, request, context):
+        """The current scope grant for an agent mesh conversation. The room API
+        accepts it as proof of current work in the room it names.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_AgentMessagingServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -169,6 +182,11 @@ def add_AgentMessagingServicer_to_server(servicer, server):
                     servicer.HealthCheck,
                     request_deserializer=astro_dot_messaging_dot_v1_dot_service__pb2.HealthCheckRequest.FromString,
                     response_serializer=astro_dot_messaging_dot_v1_dot_service__pb2.HealthCheckResponse.SerializeToString,
+            ),
+            'GetRoomGrant': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetRoomGrant,
+                    request_deserializer=astro_dot_messaging_dot_v1_dot_service__pb2.RoomGrantRequest.FromString,
+                    response_serializer=astro_dot_messaging_dot_v1_dot_service__pb2.RoomGrantResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -361,6 +379,33 @@ class AgentMessaging:
             '/astro.messaging.v1.AgentMessaging/HealthCheck',
             astro_dot_messaging_dot_v1_dot_service__pb2.HealthCheckRequest.SerializeToString,
             astro_dot_messaging_dot_v1_dot_service__pb2.HealthCheckResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetRoomGrant(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/astro.messaging.v1.AgentMessaging/GetRoomGrant',
+            astro_dot_messaging_dot_v1_dot_service__pb2.RoomGrantRequest.SerializeToString,
+            astro_dot_messaging_dot_v1_dot_service__pb2.RoomGrantResponse.FromString,
             options,
             channel_credentials,
             insecure,

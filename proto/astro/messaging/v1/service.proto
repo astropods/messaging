@@ -44,6 +44,11 @@ service AgentMessaging {
   // Health check
   rpc HealthCheck(HealthCheckRequest)
       returns (HealthCheckResponse);
+
+  // The current scope grant for an agent mesh conversation. The room API
+  // accepts it as proof of current work in the room it names.
+  rpc GetRoomGrant(RoomGrantRequest)
+      returns (RoomGrantResponse);
 }
 
 // Request wrapper for bidirectional streaming
@@ -80,6 +85,18 @@ message ConversationMetadataResponse {
   google.protobuf.Timestamp last_message_time = 5;
   int32 message_count = 6;                // Approximate from cache
   bool found = 7;                         // Whether conversation exists in cache
+}
+
+message RoomGrantRequest {
+  string conversation_id = 1;
+}
+
+message RoomGrantResponse {
+  bool found = 1;                         // False when the conversation has no live grant
+  string room_id = 2;                     // The scope the grant names
+  string grant = 3;                       // Bearer token for /api/v1/rooms/:room_id/...
+  google.protobuf.Timestamp expires_at = 4;
+  string api_url = 5;                     // astro-server base URL the room routes live under
 }
 
 // Health check
