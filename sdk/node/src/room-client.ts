@@ -1,4 +1,4 @@
-import type { MessagingClient, RoomGrant } from './messaging-client';
+import type { Message, MessagingClient, RoomGrant } from './messaging-client';
 
 export interface RoomDocument {
   id: string;
@@ -66,4 +66,45 @@ export class RoomClient {
     }
     return (text ? JSON.parse(text) : {}) as T;
   }
+}
+
+export interface RoomTaskInput {
+  id: string;
+  name: string;
+  contentType: string;
+}
+
+export interface MeshTask {
+  roomTaskId?: string;
+  inputs: RoomTaskInput[];
+  onBehalfOf?: { kind: 'user' | 'agent'; id: string };
+}
+
+/**
+ * Reads the room task details the overseer sends with a mesh task: the room
+ * task ID, its input documents, and who asked. Null for a message that did not
+ * come from the agent mesh.
+ */
+export function meshTask(message: Message): MeshTask | null {
+  const data = message.platformContext?.platformData;
+  if (!data || message.platform !== 'mesh') {
+    return null;
+  }
+  const task: MeshTask = { inputs: [] };
+  try {
+    for (const part of JSON.parse(data.mesh_data ?? '[]')) {
+      if (part?.room_task_id) task.roomTaskId = part.room_task_id;
+      for (const input of part?.inputs ?? []) {
+        task.inputs.push({ id: input.id, name: input.name, contentType: input.content_type });
+      }
+    }
+    const metadata = JSON.parse(data.mesh_metadata ?? '{}');
+    if (metadata?.on_behalf_of?.kind && metadata.on_behalf_of.id) {
+      task.onBehalfOf = { kind: metadata.on_behalf_of.kind, id: metadata.on_behalf_of.id };
+    }
+    task.roomTaskId ??= metadata?.room_task_id;
+  } catch {
+    return task;
+  }
+  return task;
 }

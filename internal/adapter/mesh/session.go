@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -22,20 +23,22 @@ const (
 )
 
 type part struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type string          `json:"type"`
+	Text string          `json:"text,omitempty"`
+	Data json.RawMessage `json:"data,omitempty"`
 }
 
 type envelope struct {
-	ID      string `json:"id"`
-	From    string `json:"from,omitempty"`
-	To      string `json:"to"`
-	Kind    string `json:"kind"`
-	TaskID  string `json:"task_id,omitempty"`
-	ReplyTo string `json:"reply_to,omitempty"`
-	State   string `json:"state,omitempty"`
-	Parts   []part `json:"parts,omitempty"`
-	Scope   string `json:"scope,omitempty"`
+	ID       string          `json:"id"`
+	From     string          `json:"from,omitempty"`
+	To       string          `json:"to"`
+	Kind     string          `json:"kind"`
+	TaskID   string          `json:"task_id,omitempty"`
+	ReplyTo  string          `json:"reply_to,omitempty"`
+	State    string          `json:"state,omitempty"`
+	Parts    []part          `json:"parts,omitempty"`
+	Scope    string          `json:"scope,omitempty"`
+	Metadata json.RawMessage `json:"metadata,omitempty"`
 }
 
 type skill struct {

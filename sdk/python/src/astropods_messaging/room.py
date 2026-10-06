@@ -6,7 +6,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional, Union
+from typing import Any, List, Optional, Union
 
 from .astro.messaging.v1.service_pb2 import RoomGrantRequest
 
@@ -80,3 +80,37 @@ class RoomClient:
                 message = text
             raise RoomError(err.code, message) from None
         return json.loads(text) if text else {}
+
+
+@dataclass
+class RoomTaskInput:
+    id: str
+    name: str
+    content_type: str
+
+
+@dataclass
+class MeshTask:
+    room_task_id: Optional[str]
+    inputs: List[RoomTaskInput]
+    on_behalf_of: Optional[dict]
+
+
+def mesh_task(message: Any) -> Optional[MeshTask]:
+    """The room task details the overseer sends with a mesh task, or None for a
+    message that did not come from the agent mesh."""
+    if getattr(message, "platform", "") != "mesh":
+        return None
+    data = dict(message.platform_context.platform_data)
+    task = MeshTask(room_task_id=None, inputs=[], on_behalf_of=None)
+    try:
+        for part in json.loads(data.get("mesh_data", "[]")):
+            task.room_task_id = part.get("room_task_id") or task.room_task_id
+            for item in part.get("inputs", []):
+                task.inputs.append(RoomTaskInput(id=item.get("id", ""), name=item.get("name", ""), content_type=item.get("content_type", "")))
+        metadata = json.loads(data.get("mesh_metadata", "{}"))
+        task.on_behalf_of = metadata.get("on_behalf_of")
+        task.room_task_id = task.room_task_id or metadata.get("room_task_id")
+    except (ValueError, AttributeError):
+        pass
+    return task

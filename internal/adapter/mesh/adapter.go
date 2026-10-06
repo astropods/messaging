@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -317,23 +318,42 @@ func (a *Adapter) offer(ctx context.Context, s *session, f *frame) {
 	}
 }
 
+func platformData(env *envelope) map[string]string {
+	data := map[string]string{
+		"mesh_kind":    env.Kind,
+		"mesh_task_id": env.TaskID,
+		"mesh_from":    env.From,
+		"mesh_to":      env.To,
+		"mesh_scope":   env.Scope,
+	}
+	var parts []json.RawMessage
+	for _, p := range env.Parts {
+		if p.Type == "data" && len(p.Data) > 0 {
+			parts = append(parts, p.Data)
+		}
+	}
+	if len(parts) > 0 {
+		if raw, err := json.Marshal(parts); err == nil {
+			data["mesh_data"] = string(raw)
+		}
+	}
+	if len(env.Metadata) > 0 {
+		data["mesh_metadata"] = string(env.Metadata)
+	}
+	return data
+}
+
 func (a *Adapter) toMessage(env *envelope, conversationID string) *pb.Message {
 	return &pb.Message{
 		Id:        uuid.NewString(),
 		Timestamp: timestamppb.Now(),
 		Platform:  Platform,
 		PlatformContext: &pb.PlatformContext{
-			MessageId: env.ID,
-			ChannelId: env.From,
-			ThreadId:  conversationID,
-			PlatformData: map[string]string{
-				"mesh_kind":    env.Kind,
-				"mesh_task_id": env.TaskID,
-				"mesh_from":    env.From,
-				"mesh_to":      env.To,
-				"mesh_scope":   env.Scope,
-			},
-			EventKind: pb.PlatformContext_EVENT_KIND_DM,
+			MessageId:    env.ID,
+			ChannelId:    env.From,
+			ThreadId:     conversationID,
+			PlatformData: platformData(env),
+			EventKind:    pb.PlatformContext_EVENT_KIND_DM,
 		},
 		User:           &pb.User{Id: env.From, Username: env.From},
 		Content:        textOf(env.Parts),
