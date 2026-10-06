@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -49,13 +50,14 @@ func deployToken(t *testing.T, iss string) string {
 type fakeGateway struct {
 	t      *testing.T
 	frames chan *frame
+	hello  chan *frame
 	conn   chan *websocket.Conn
 	url    string
 }
 
 func newFakeGateway(t *testing.T) *fakeGateway {
 	t.Helper()
-	g := &fakeGateway{t: t, frames: make(chan *frame, 64), conn: make(chan *websocket.Conn, 1)}
+	g := &fakeGateway{t: t, frames: make(chan *frame, 64), hello: make(chan *frame, 1), conn: make(chan *websocket.Conn, 1)}
 	upgrader := websocket.Upgrader{Subprotocols: []string{subprotocol}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := upgrader.Upgrade(w, r, nil)
@@ -66,6 +68,7 @@ func newFakeGateway(t *testing.T) *fakeGateway {
 		if err := c.ReadJSON(&hello); err != nil {
 			return
 		}
+		g.hello <- &hello
 		_ = c.WriteJSON(&frame{Type: "welcome", Re: hello.Seq, Address: "acct/dep-1", HeartbeatIntervalS: 30, Scopes: []string{"research"}})
 		g.conn <- c
 		for {
@@ -115,6 +118,15 @@ func startAdapter(t *testing.T, g *fakeGateway) (*Adapter, chan *pb.Message, *we
 	case <-time.After(5 * time.Second):
 		t.Fatal("adapter never connected")
 		return nil, nil, nil
+	}
+}
+
+func TestCardAcceptsTextAndDataParts(t *testing.T) {
+	g := newFakeGateway(t)
+	startAdapter(t, g)
+	hello := <-g.hello
+	if hello.Card == nil || !slices.Equal(hello.Card.Accepts, []string{"text", "data"}) {
+		t.Fatalf("hello card = %+v, want accepts [text data] so the gateway offers room tasks with a data part", hello.Card)
 	}
 }
 

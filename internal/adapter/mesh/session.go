@@ -48,8 +48,9 @@ type skill struct {
 type card struct {
 	Name          string  `json:"name"`
 	Kind          string  `json:"kind"`
-	Skills        []skill `json:"skills,omitempty"`
-	MaxConcurrent int     `json:"max_concurrent,omitempty"`
+	Skills        []skill  `json:"skills,omitempty"`
+	Accepts       []string `json:"accepts,omitempty"`
+	MaxConcurrent int      `json:"max_concurrent,omitempty"`
 }
 
 type ampError struct {

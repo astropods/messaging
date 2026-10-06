@@ -23,6 +23,7 @@ A direct mesh message (not a task) gets a mesh message back, with `reply_to` set
 |---|---|
 | `name` | `MESH_NAME`, the agent's name |
 | `skills` | `agent.<MESH_NAME>`, always, plus the agent's `AgentConfig.skills` |
+| `accepts` | `text` and `data`, the part types the adapter passes to the agent |
 | `max_concurrent` | 4: at most four tasks at once |
 
 The `agent.` prefix is reserved: `skill:agent.sasbot` reaches that agent by name, and a declared skill starting with `agent.` is dropped so one agent cannot answer for another's name. When the agent sends a new `AgentConfig` whose skills differ, the adapter rejoins with the new card (`AgentConfigStore.Changed`).
