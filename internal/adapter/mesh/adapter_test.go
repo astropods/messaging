@@ -122,7 +122,8 @@ func TestTaskScopeAndGrantReachTheAgentAndTravelBack(t *testing.T) {
 	g := newFakeGateway(t)
 	a, got, conn := startAdapter(t, g)
 
-	offer := &envelope{ID: "m1", From: "acct/room-engine", To: "acct/dep-1", Kind: "task", TaskID: "t_1", Scope: "research", Parts: text("Draft the Q3 summary")}
+	parts := append(text("Draft the Q3 summary"), part{Type: "data", Data: json.RawMessage(`{"room_task_id":"rt_1","inputs":[{"id":"a1","name":"q3.pdf","content_type":"application/pdf"}]}`)})
+	offer := &envelope{ID: "m1", From: "acct/overseer", To: "acct/dep-1", Kind: "task", TaskID: "t_1", Scope: "research", Parts: parts, Metadata: json.RawMessage(`{"on_behalf_of":{"kind":"user","id":"user-1"},"room_task_id":"rt_1"}`)}
 	if err := conn.WriteJSON(&frame{Type: "deliver", DeliveryID: "d_1", Offer: true, Envelope: offer}); err != nil {
 		t.Fatal(err)
 	}
@@ -140,6 +141,16 @@ func TestTaskScopeAndGrantReachTheAgentAndTravelBack(t *testing.T) {
 	}
 	if scope := msg.GetPlatformContext().GetPlatformData()["mesh_scope"]; scope != "research" {
 		t.Errorf("message mesh_scope = %q, want research", scope)
+	}
+	if msg.GetContent() != "Draft the Q3 summary" {
+		t.Errorf("message content = %q, want only the task's text", msg.GetContent())
+	}
+	data := msg.GetPlatformContext().GetPlatformData()
+	if got := data["mesh_data"]; got != `[{"room_task_id":"rt_1","inputs":[{"id":"a1","name":"q3.pdf","content_type":"application/pdf"}]}]` {
+		t.Errorf("mesh_data = %s, want the task's data part, so the agent sees its input documents", got)
+	}
+	if got := data["mesh_metadata"]; !strings.Contains(got, `"on_behalf_of":{"kind":"user","id":"user-1"}`) {
+		t.Errorf("mesh_metadata = %s, want who the task is on behalf of", got)
 	}
 
 	rg, ok := a.RoomGrant("t_1")

@@ -24,7 +24,7 @@ from .astro.messaging.v1.response_pb2 import (
 )
 from .astro.messaging.v1.config_pb2 import AgentConfig, AgentToolConfig
 from .saved import derive_saved_conversation_id
-from .room import RoomClient, RoomError, RoomGrant, get_room_grant
+from .room import MeshTask, RoomClient, RoomError, RoomGrant, RoomTaskInput, get_room_grant, mesh_task
 from .astro.messaging.v1.trace_pb2 import TraceContext
 from .astro.messaging.v1.audio_pb2 import AudioStreamConfig, AudioChunk, AudioEncoding
 from .astro.messaging.v1.feedback_pb2 import (
@@ -59,6 +59,9 @@ __all__ = [
     "RoomError",
     "RoomGrant",
     "get_room_grant",
+    "MeshTask",
+    "RoomTaskInput",
+    "mesh_task",
     "RoomGrantRequest",
     "RoomGrantResponse",
     "StatusUpdate",
