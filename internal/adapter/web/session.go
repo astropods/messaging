@@ -3,6 +3,15 @@ package web
 import (
 	"context"
 	"net/http"
+	"net/url"
+)
+
+// astro-server sets these on every proxied request; its proxy never forwards
+// them from a client. The name is path-escaped, since a header value cannot
+// hold every name.
+const (
+	HeaderUserID   = "X-Amzn-Oidc-Identity"
+	HeaderUserName = "X-Astro-User-Name"
 )
 
 // Session represents an authenticated user session
@@ -49,6 +58,12 @@ func NewHeaderSessionManager(userIDHeader, usernameHeader, emailHeader string) *
 	}
 }
 
+// NewAstroServerSessionManager reads the identity astro-server's messaging
+// proxy sets: the WorkOS user ID and the user's display name.
+func NewAstroServerSessionManager() *HeaderSessionManager {
+	return NewHeaderSessionManager(HeaderUserID, HeaderUserName, "")
+}
+
 // ValidateRequest extracts session from headers
 func (m *HeaderSessionManager) ValidateRequest(ctx context.Context, r *http.Request) (*Session, error) {
 	userID := r.Header.Get(m.UserIDHeader)
@@ -58,9 +73,18 @@ func (m *HeaderSessionManager) ValidateRequest(ctx context.Context, r *http.Requ
 
 	return &Session{
 		UserID:   userID,
-		Username: r.Header.Get(m.UsernameHeader),
+		Username: unescapeName(r.Header.Get(m.UsernameHeader)),
 		Email:    r.Header.Get(m.EmailHeader),
 	}, nil
+}
+
+// unescapeName drops a malformed name rather than fail the session over it.
+func unescapeName(v string) string {
+	name, err := url.PathUnescape(v)
+	if err != nil {
+		return ""
+	}
+	return name
 }
 
 // FixedSessionManager returns the same Session for every request. Used in

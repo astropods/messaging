@@ -8,7 +8,9 @@ import (
 
 	"time"
 
+	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/store"
+	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	slacklib "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 )
@@ -39,8 +41,8 @@ func TestDirectory_ResolvesAndCaches(t *testing.T) {
 	srv := directoryServer(t, &calls)
 	d := newSlackDirectory(slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/")))
 
-	if got := d.userName(t.Context(), "U1"); got != "Ada" {
-		t.Errorf("userName = %q, want Ada", got)
+	if got := d.userName(t.Context(), "U1"); got != "Ada Lovelace" {
+		t.Errorf("userName = %q, want Ada Lovelace", got)
 	}
 	if got := d.channelName(t.Context(), "C1"); got != "eng-support" {
 		t.Errorf("channelName = %q, want eng-support", got)
@@ -78,6 +80,34 @@ func TestDirectory_CachesFailuresAndFallsBackToTheID(t *testing.T) {
 	}
 }
 
+// Workspaces often set display names to a handle such as "ada.lovelace", so
+// the full name reads better in a greeting.
+func TestDirectory_PrefersTheFullName(t *testing.T) {
+	cases := []struct {
+		user string
+		want string
+	}{
+		{`{"id":"U1","name":"ada","real_name":"Ada Lovelace","profile":{"display_name":"ada.lovelace"}}`, "Ada Lovelace"},
+		{`{"id":"U1","name":"ada","profile":{"display_name":"ada.lovelace"}}`, "ada.lovelace"},
+		{`{"id":"U1","name":"ada"}`, "ada"},
+	}
+	for _, tc := range cases {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/users.info", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true,"user":` + tc.user + `}`))
+		})
+		mux.HandleFunc("/", jsonOK)
+		srv := httptest.NewServer(mux)
+		d := newSlackDirectory(slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/")))
+
+		if got := d.userName(t.Context(), "U1"); got != tc.want {
+			t.Errorf("user %s: userName = %q, want %q", tc.user, got, tc.want)
+		}
+		srv.Close()
+	}
+}
+
 func TestDirectory_NilSafeAndIgnoresEmptyIDs(t *testing.T) {
 	var d *slackDirectory
 	if d.userName(t.Context(), "U1") != "" || d.channelName(t.Context(), "C1") != "" {
@@ -112,6 +142,109 @@ func TestDispatch_NamesTheChannel(t *testing.T) {
 	}
 }
 
+func TestDispatch_NamesTheSender(t *testing.T) {
+	var calls atomic.Int32
+	srv := directoryServer(t, &calls)
+	a, handler := newTestAdapter()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	a.directory = newSlackDirectory(a.client)
+	setFakeAIClient(a, srv)
+
+	a.handleMessage(t.Context(), &slackevents.MessageEvent{
+		Channel: "C1", User: "U1", Text: "hello", TimeStamp: "2.0001", ThreadTimeStamp: "1.0001",
+	}, "T1", nil)
+
+	msg := handler.last()
+	if msg == nil {
+		t.Fatal("expected a dispatched message")
+	}
+	if msg.User.Username != "Ada Lovelace" {
+		t.Errorf("Username = %q, want Ada Lovelace", msg.User.Username)
+	}
+}
+
+// users.info only knows the Slack id, so a linked sender must still be looked
+// up by it after authz swaps msg.User.Id for the Astro user ID.
+func TestDispatch_NamesALinkedSenderByTheirSlackID(t *testing.T) {
+	var asked atomic.Value
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users.info", func(w http.ResponseWriter, r *http.Request) {
+		asked.Store(r.FormValue("user"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U07ABCDEF","name":"alice","profile":{"display_name":"Alice"}}}`))
+	})
+	mux.HandleFunc("/", jsonOK)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	a, handler := newTestAdapter()
+	a.directory = newSlackDirectory(slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/")))
+	a.SetAuthorizer(&stubAuthorizer{result: authz.Result{Allowed: true, UserID: "user_alice"}})
+
+	msg := &pb.Message{
+		User:            &pb.User{Id: "U07ABCDEF"},
+		PlatformContext: &pb.PlatformContext{ChannelId: "C123"},
+	}
+	if err := a.dispatch(t.Context(), msg, "T07XYZ"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if handler.count() != 1 {
+		t.Fatalf("expected msgHandler called once, got %d", handler.count())
+	}
+	if got, _ := asked.Load().(string); got != "U07ABCDEF" {
+		t.Errorf("users.info asked for %q, want the Slack id U07ABCDEF", got)
+	}
+	if msg.User.Username != "Alice" {
+		t.Errorf("Username = %q, want Alice", msg.User.Username)
+	}
+	if msg.User.Id != "user_alice" {
+		t.Errorf("User.Id = %q, want the Astro user ID kept", msg.User.Id)
+	}
+}
+
+// A denied message never reaches the agent, so it must not spend a users.info
+// call.
+func TestDispatch_DoesNotLookUpADeniedSender(t *testing.T) {
+	var calls atomic.Int32
+	srv := directoryServer(t, &calls)
+	a, _ := newTestAdapter()
+	a.directory = newSlackDirectory(slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/")))
+	a.SetAuthorizer(&denyAuthorizer{})
+
+	msg := &pb.Message{
+		User:            &pb.User{Id: "U1"},
+		PlatformContext: &pb.PlatformContext{ChannelId: "C1", ChannelName: "eng-support"},
+	}
+	if err := a.dispatch(t.Context(), msg, "T1"); err == nil {
+		t.Fatal("expected a denied dispatch")
+	}
+	if calls.Load() != 0 {
+		t.Errorf("expected no Slack lookups for a denied sender, got %d", calls.Load())
+	}
+}
+
+// Slash commands and reactions arrive with a username already set.
+func TestDispatch_KeepsAUsernameTheEventCarried(t *testing.T) {
+	var calls atomic.Int32
+	srv := directoryServer(t, &calls)
+	a, handler := newTestAdapter()
+	a.directory = newSlackDirectory(slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/")))
+
+	msg := &pb.Message{
+		User:            &pb.User{Id: "U1", Username: "ada"},
+		PlatformContext: &pb.PlatformContext{ChannelId: "C1", ChannelName: "eng-support"},
+	}
+	if err := a.dispatch(t.Context(), msg, "T1"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if got := handler.last().User.Username; got != "ada" {
+		t.Errorf("Username = %q, want the event's own ada", got)
+	}
+	if calls.Load() != 0 {
+		t.Errorf("expected no users.info call, got %d", calls.Load())
+	}
+}
+
 // Slack's conversations.replies leaves username empty on ordinary messages, so
 // without this every author in a copied thread is a raw U… id.
 func TestHydrateThread_NamesTheAuthors(t *testing.T) {
@@ -142,7 +275,7 @@ func TestHydrateThread_NamesTheAuthors(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
 	}
-	if msgs[0].User.Username != "Ada" {
-		t.Errorf("Username = %q, want Ada", msgs[0].User.Username)
+	if msgs[0].User.Username != "Ada Lovelace" {
+		t.Errorf("Username = %q, want Ada Lovelace", msgs[0].User.Username)
 	}
 }

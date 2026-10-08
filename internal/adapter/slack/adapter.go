@@ -140,6 +140,10 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 		}
 		msg.User.Id = canonicalUserID(result, msg.User.Id)
 	}
+	// Keyed on PlatformContext.UserId: msg.User.Id may now be the Astro user ID.
+	if msg != nil && msg.User != nil && msg.User.Username == "" && msg.PlatformContext != nil {
+		msg.User.Username = a.directory.userName(ctx, msg.PlatformContext.UserId)
+	}
 	if a.msgHandler == nil {
 		return nil
 	}
