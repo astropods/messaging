@@ -10,7 +10,7 @@ Part of astropods/astro#3126.
 
 ## Slack
 
-`dispatch` sets `Message.user.username` from the existing `slackDirectory.userName` resolver, the one that already names thread-history authors. It reads Slack's `users.info` and returns the display name, then the real name, then the handle. Both hits and misses are cached per pod.
+`dispatch` sets `Message.user.username` from the existing `slackDirectory.userName` resolver, the one that already names thread-history authors. It reads Slack's `users.info` and returns the full name, then the display name, then the handle. The full name comes first because workspaces often set display names to a handle such as `ada.lovelace`, which reads badly in a greeting. Thread-history authors use the same resolver, so they are named the same way. Both hits and misses are cached per pod.
 
 | Case | Behavior |
 |---|---|

@@ -41,8 +41,8 @@ func TestDirectory_ResolvesAndCaches(t *testing.T) {
 	srv := directoryServer(t, &calls)
 	d := newSlackDirectory(slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/")))
 
-	if got := d.userName(t.Context(), "U1"); got != "Ada" {
-		t.Errorf("userName = %q, want Ada", got)
+	if got := d.userName(t.Context(), "U1"); got != "Ada Lovelace" {
+		t.Errorf("userName = %q, want Ada Lovelace", got)
 	}
 	if got := d.channelName(t.Context(), "C1"); got != "eng-support" {
 		t.Errorf("channelName = %q, want eng-support", got)
@@ -77,6 +77,34 @@ func TestDirectory_CachesFailuresAndFallsBackToTheID(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Errorf("expected the failure cached after one call, got %d", calls.Load())
+	}
+}
+
+// Workspaces often set display names to a handle such as "ada.lovelace", so
+// the full name reads better in a greeting.
+func TestDirectory_PrefersTheFullName(t *testing.T) {
+	cases := []struct {
+		user string
+		want string
+	}{
+		{`{"id":"U1","name":"ada","real_name":"Ada Lovelace","profile":{"display_name":"ada.lovelace"}}`, "Ada Lovelace"},
+		{`{"id":"U1","name":"ada","profile":{"display_name":"ada.lovelace"}}`, "ada.lovelace"},
+		{`{"id":"U1","name":"ada"}`, "ada"},
+	}
+	for _, tc := range cases {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/users.info", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true,"user":` + tc.user + `}`))
+		})
+		mux.HandleFunc("/", jsonOK)
+		srv := httptest.NewServer(mux)
+		d := newSlackDirectory(slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/")))
+
+		if got := d.userName(t.Context(), "U1"); got != tc.want {
+			t.Errorf("user %s: userName = %q, want %q", tc.user, got, tc.want)
+		}
+		srv.Close()
 	}
 }
 
@@ -130,8 +158,8 @@ func TestDispatch_NamesTheSender(t *testing.T) {
 	if msg == nil {
 		t.Fatal("expected a dispatched message")
 	}
-	if msg.User.Username != "Ada" {
-		t.Errorf("Username = %q, want Ada", msg.User.Username)
+	if msg.User.Username != "Ada Lovelace" {
+		t.Errorf("Username = %q, want Ada Lovelace", msg.User.Username)
 	}
 }
 
@@ -247,7 +275,7 @@ func TestHydrateThread_NamesTheAuthors(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
 	}
-	if msgs[0].User.Username != "Ada" {
-		t.Errorf("Username = %q, want Ada", msgs[0].User.Username)
+	if msgs[0].User.Username != "Ada Lovelace" {
+		t.Errorf("Username = %q, want Ada Lovelace", msgs[0].User.Username)
 	}
 }
