@@ -19,6 +19,11 @@ import (
 
 func roomGrantToken(t *testing.T, room string) string {
 	t.Helper()
+	return roomGrantTokenUntil(t, room, time.Now().Add(time.Minute))
+}
+
+func roomGrantTokenUntil(t *testing.T, room string, expires time.Time) string {
+	t.Helper()
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +32,7 @@ func roomGrantToken(t *testing.T, room string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := jwt.Signed(signer).Claims(map[string]any{"scope": room, "message_id": "chat-1", "exp": time.Now().Add(time.Minute).Unix()}).Serialize()
+	token, err := jwt.Signed(signer).Claims(map[string]any{"scope": room, "message_id": "chat-1", "exp": expires.Unix()}).Serialize()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,5 +191,25 @@ func TestChatListFiltersByRoom(t *testing.T) {
 	}
 	if got := list(""); len(got) != 1 || got[0] != personal {
 		t.Errorf("unfiltered list = %v, want only the personal chat", got)
+	}
+}
+
+func TestRoomChatsDropGrantsThatHaveExpired(t *testing.T) {
+	rooms := newRoomChats()
+	now := time.Now()
+	rooms.set("stale", "room-a", roomGrantTokenUntil(t, "room-a", now.Add(-time.Second)), now)
+	rooms.set("live", "room-a", roomGrantTokenUntil(t, "room-a", now.Add(time.Minute)), now)
+	rooms.set("latest", "room-b", roomGrantTokenUntil(t, "room-b", now.Add(time.Minute)), now)
+
+	if _, ok := rooms.get("stale"); ok {
+		t.Error("an expired grant is still held after a later set")
+	}
+	for _, id := range []string{"live", "latest"} {
+		if _, ok := rooms.get(id); !ok {
+			t.Errorf("live grant %q was dropped", id)
+		}
+	}
+	if n := rooms.len(); n != 2 {
+		t.Fatalf("held %d room chats, want 2 so the map does not grow with every chat", n)
 	}
 }

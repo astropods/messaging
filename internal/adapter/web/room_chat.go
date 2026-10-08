@@ -16,8 +16,9 @@ const (
 )
 
 type roomChat struct {
-	roomID string
-	grant  string
+	roomID  string
+	grant   string
+	expires time.Time
 }
 
 type roomChats struct {
@@ -39,13 +40,26 @@ func (r *roomChats) get(conversationID string) (roomChat, bool) {
 	return c, ok
 }
 
-func (r *roomChats) set(conversationID, roomID, grant string) {
+// set keeps the conversation's latest grant and drops entries whose grant has expired.
+func (r *roomChats) set(conversationID, roomID, grant string, now time.Time) {
 	if r == nil {
 		return
 	}
+	expires, _ := roomgrant.Expiry(grant)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.byID[conversationID] = roomChat{roomID: roomID, grant: grant}
+	for id, c := range r.byID {
+		if !now.Before(c.expires) {
+			delete(r.byID, id)
+		}
+	}
+	r.byID[conversationID] = roomChat{roomID: roomID, grant: grant, expires: expires}
+}
+
+func (r *roomChats) len() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.byID)
 }
 
 func WithRoomAPIURL(url string) WebAdapterOption {

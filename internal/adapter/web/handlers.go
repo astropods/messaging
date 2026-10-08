@@ -199,7 +199,7 @@ func (h *Handlers) HandleCreateConversation(w http.ResponseWriter, r *http.Reque
 			http.Error(w, "failed to create conversation", http.StatusInternalServerError)
 			return
 		}
-		h.rooms.set(conversationID, roomID, r.Header.Get(HeaderRoomGrant))
+		h.rooms.set(conversationID, roomID, r.Header.Get(HeaderRoomGrant), time.Now())
 	}
 
 	resp := CreateConversationResponse{
@@ -378,7 +378,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if roomID != "" {
-		h.rooms.set(conversationID, roomID, r.Header.Get(HeaderRoomGrant))
+		h.rooms.set(conversationID, roomID, r.Header.Get(HeaderRoomGrant), time.Now())
 	}
 
 	// Arm the idle watchdog before forwarding, so the turn is tracked before any
