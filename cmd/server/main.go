@@ -15,6 +15,7 @@ import (
 	"github.com/astropods/messaging/internal/adapter/mesh"
 	"github.com/astropods/messaging/internal/adapter/slack"
 	"github.com/astropods/messaging/internal/adapter/web"
+	"github.com/astropods/messaging/internal/roomgrant"
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/grpc"
 	"github.com/astropods/messaging/internal/internalfeedback"
@@ -383,6 +384,13 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 		// isn't wrapped into a non-nil interface.
 		if chatStore != nil {
 			webOpts = append(webOpts, web.WithInteractionStore(chatStore))
+		}
+		if cfg.Authz.IdentityToken != "" {
+			if apiURL, err := roomgrant.APIURL(cfg.Authz.IdentityToken); err != nil {
+				slog.Warn("[Web] room chats disabled", "err", err)
+			} else {
+				webOpts = append(webOpts, web.WithRoomAPIURL(apiURL))
+			}
 		}
 		webAdapter := web.New(webOpts...)
 		if err := webAdapter.Initialize(ctx, adapter.Config{}); err != nil {

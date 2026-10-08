@@ -6,16 +6,18 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter/mesh"
+	"github.com/astropods/messaging/internal/adapter/web"
+	"github.com/astropods/messaging/internal/roomgrant"
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
 type grantingAdapter struct {
 	mesh.Adapter
-	grants map[string]mesh.RoomGrant
+	grants map[string]roomgrant.Grant
 }
 
-func (g *grantingAdapter) RoomGrant(conversationID string) (mesh.RoomGrant, bool) {
+func (g *grantingAdapter) RoomGrant(conversationID string) (roomgrant.Grant, bool) {
 	rg, ok := g.grants[conversationID]
 	return rg, ok
 }
@@ -23,7 +25,7 @@ func (g *grantingAdapter) RoomGrant(conversationID string) (mesh.RoomGrant, bool
 func TestGetRoomGrantReturnsTheMeshConversationsCurrentGrant(t *testing.T) {
 	server := NewServer(":0", store.NewThreadHistoryStore(100, 50, time.Hour), store.NewMemoryStore(), nil)
 	expires := time.Now().Add(5 * time.Minute).Truncate(time.Second)
-	server.adapters[mesh.Platform] = &grantingAdapter{grants: map[string]mesh.RoomGrant{
+	server.adapters[mesh.Platform] = &grantingAdapter{grants: map[string]roomgrant.Grant{
 		"t_1": {RoomID: "research", Grant: "g.r.ant", ExpiresAt: expires, APIURL: "https://astro.test"},
 	}}
 
@@ -40,3 +42,5 @@ func TestGetRoomGrantReturnsTheMeshConversationsCurrentGrant(t *testing.T) {
 		t.Errorf("room grant for a non-mesh conversation = %+v, %v; want found=false", missing, err)
 	}
 }
+
+var _ roomGranter = (*web.WebAdapter)(nil)

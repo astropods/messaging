@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
-	"github.com/astropods/messaging/internal/adapter/mesh"
 	"github.com/astropods/messaging/internal/logctx"
 	"github.com/astropods/messaging/internal/metrics"
+	"github.com/astropods/messaging/internal/roomgrant"
 	"github.com/astropods/messaging/internal/store"
 	"github.com/astropods/messaging/internal/store/sqlite"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
@@ -334,7 +334,7 @@ func (s *Server) GetConversationMetadata(ctx context.Context, req *pb.Conversati
 }
 
 type roomGranter interface {
-	RoomGrant(conversationID string) (mesh.RoomGrant, bool)
+	RoomGrant(conversationID string) (roomgrant.Grant, bool)
 }
 
 func (s *Server) GetRoomGrant(_ context.Context, req *pb.RoomGrantRequest) (*pb.RoomGrantResponse, error) {

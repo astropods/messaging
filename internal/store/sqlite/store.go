@@ -45,6 +45,8 @@ type Conversation struct {
 	// Empty on conversations started here; set only by SaveConversation.
 	SourceLabel string
 	SourceURL   string
+	// The room a room chat is bound to; empty for a personal chat.
+	RoomID string
 }
 
 // Message is one chat turn row.
@@ -156,6 +158,7 @@ CREATE INDEX IF NOT EXISTS idx_interactions_pending
 		{"messages", "author"},
 		{"messages", "origin"},
 		{"conversations", "saved_title"},
+		{"conversations", "room_id"},
 	} {
 		if err := ensureColumn(db, c.table, c.column, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err
@@ -282,10 +285,29 @@ func (s *Store) EnsureForSend(ctx context.Context, conversationID, userID, title
 	return owner == userID, nil
 }
 
+// BindRoom binds a new, owned conversation to roomID. It reports false when the
+// conversation is foreign, deleted, already bound, or already has messages.
+func (s *Store) BindRoom(ctx context.Context, conversationID, userID, roomID string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE conversations SET room_id = ?
+		WHERE conversation_id = ? AND user_id = ? AND deleted_at IS NULL AND room_id = ''
+		  AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = conversations.conversation_id)`,
+		roomID, conversationID, userID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("chatstore bind room: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("chatstore bind room rows: %w", err)
+	}
+	return n == 1, nil
+}
+
 // Get returns one active conversation, or nil if it does not exist or is deleted.
 func (s *Store) Get(ctx context.Context, conversationID string) (*Conversation, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT conversation_id, user_id, title, created_at, updated_at, source_label, source_url
+		SELECT conversation_id, user_id, title, created_at, updated_at, source_label, source_url, room_id
 		FROM conversations
 		WHERE conversation_id = ? AND deleted_at IS NULL`,
 		conversationID,
@@ -294,7 +316,7 @@ func (s *Store) Get(ctx context.Context, conversationID string) (*Conversation, 
 		conv             Conversation
 		createdMs, updMs int64
 	)
-	err := row.Scan(&conv.ConversationID, &conv.UserID, &conv.Title, &createdMs, &updMs, &conv.SourceLabel, &conv.SourceURL)
+	err := row.Scan(&conv.ConversationID, &conv.UserID, &conv.Title, &createdMs, &updMs, &conv.SourceLabel, &conv.SourceURL, &conv.RoomID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -312,9 +334,18 @@ func (s *Store) Get(ctx context.Context, conversationID string) (*Conversation, 
 // sent to) are excluded, and the result is capped at maxListedConversations —
 // both served by the (user_id, updated_at DESC) index.
 func (s *Store) ListByUser(ctx context.Context, userID string) ([]Conversation, error) {
+	return s.list(ctx, userID, "")
+}
+
+// ListByRoom returns the user's chats bound to roomID, in ListByUser's order.
+func (s *Store) ListByRoom(ctx context.Context, userID, roomID string) ([]Conversation, error) {
+	return s.list(ctx, userID, roomID)
+}
+
+func (s *Store) list(ctx context.Context, userID, roomID string) ([]Conversation, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.conversation_id, c.user_id, c.title, c.created_at, c.updated_at,
-			c.source_label, c.source_url,
+			c.source_label, c.source_url, c.room_id,
 			COALESCE((
 				SELECT CASE WHEN m.origin = 'save' THEN '' ELSE m.role END
 				FROM messages m
@@ -322,11 +353,11 @@ func (s *Store) ListByUser(ctx context.Context, userID string) ([]Conversation, 
 				ORDER BY m.seq DESC LIMIT 1
 			), '') AS last_role
 		FROM conversations c
-		WHERE c.user_id = ? AND c.deleted_at IS NULL
+		WHERE c.user_id = ? AND c.room_id = ? AND c.deleted_at IS NULL
 			AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.conversation_id)
 		ORDER BY c.updated_at DESC
 		LIMIT ?`,
-		userID, maxListedConversations,
+		userID, roomID, maxListedConversations,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("chatstore list: %w", err)
@@ -341,7 +372,7 @@ func (s *Store) ListByUser(ctx context.Context, userID string) ([]Conversation, 
 			lastRole         string
 		)
 		if err := rows.Scan(&conv.ConversationID, &conv.UserID, &conv.Title, &createdMs, &updMs,
-			&conv.SourceLabel, &conv.SourceURL, &lastRole); err != nil {
+			&conv.SourceLabel, &conv.SourceURL, &conv.RoomID, &lastRole); err != nil {
 			return nil, fmt.Errorf("chatstore list scan: %w", err)
 		}
 		conv.CreatedAt = time.UnixMilli(createdMs)
