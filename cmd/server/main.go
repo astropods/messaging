@@ -375,9 +375,7 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 				web.NewFixedSessionManager(web.Session{UserID: cfg.Web.AuthTestUserID}),
 			))
 		case cfg.Authz.IdentityToken != "":
-			webOpts = append(webOpts, web.WithSessionManager(
-				web.NewHeaderSessionManager("x-amzn-oidc-identity", "", ""),
-			))
+			webOpts = append(webOpts, web.WithSessionManager(web.NewAstroServerSessionManager()))
 		}
 		// Back interactions with the durable SQLite store when present (otherwise
 		// the adapter defaults to the in-memory store). Guarded so a nil *sqlite.Store
