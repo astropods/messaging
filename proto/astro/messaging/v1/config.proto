@@ -17,6 +17,8 @@ message AgentConfig {
   // advertises them so other agents can address skill:<name>. Empty means the
   // agent is reachable on the mesh only by its address.
   repeated AgentSkill skills = 4;
+  // Agent replaces its stored history with Message.history; enables message editing.
+  bool supports_history = 5;
 }
 
 message AgentSkill {

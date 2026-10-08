@@ -61,6 +61,8 @@ type Message struct {
 	// Original sender's display name on a copied-in conversation, where every
 	// human turn is role "user" but not every one is the owner's.
 	Author string
+	// This message and its alternatives, oldest first. Only PageMessages sets it.
+	Branches []string
 }
 
 // Store wraps the SQLite database. A single connection serializes writes, which
@@ -159,6 +161,10 @@ CREATE INDEX IF NOT EXISTS idx_interactions_pending
 		{"messages", "origin"},
 		{"conversations", "saved_title"},
 		{"conversations", "room_id"},
+		{"messages", "parent_id"},
+		{"conversations", "head_id"},
+		{"conversations", "head_newest_id"},
+		{"conversations", "agent_head_id"},
 	} {
 		if err := ensureColumn(db, c.table, c.column, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err
@@ -483,88 +489,6 @@ func (s *Store) ListMessages(ctx context.Context, conversationID string) ([]Mess
 	return out, nil
 }
 
-// hasMessagesBefore reports whether any message row precedes seq. seq is shared
-// with interactions so message rows aren't contiguous — position can't be read
-// off seq, hence the EXISTS.
-func (s *Store) hasMessagesBefore(ctx context.Context, conversationID string, seq int) (bool, error) {
-	var exists bool
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id = ? AND seq < ?)`,
-		conversationID, seq,
-	).Scan(&exists); err != nil {
-		return false, fmt.Errorf("chatstore has messages before: %w", err)
-	}
-	return exists, nil
-}
-
-// PageMessages returns one page of a conversation's messages, ordered by seq
-// ascending, doing the windowing in SQL so a large thread isn't fully
-// materialized to serve a single page. seq is shared with interactions, so
-// message rows can have gaps; hasMore is decided by an EXISTS on older message
-// rows rather than derived from the oldest seq. When beforeSeq > 0 the page
-// immediately preceding that seq is returned; otherwise the newest page. lastRole
-// is the role of the newest message in the whole thread (independent of the
-// returned page) for the assistant_streaming heuristic; it is "" for an empty thread.
-func (s *Store) PageMessages(ctx context.Context, conversationID string, limit, beforeSeq int) (msgs []Message, hasMore bool, oldestSeq int, lastRole string, err error) {
-	if limit <= 0 {
-		limit = 1
-	}
-	// Fetch the newest `limit` rows (optionally strictly older than beforeSeq)
-	// descending, then reverse to ascending for the caller.
-	query := `SELECT id, role, content, seq, attachments, author FROM messages WHERE conversation_id = ?`
-	args := []any{conversationID}
-	if beforeSeq > 0 {
-		query += ` AND seq < ?`
-		args = append(args, beforeSeq)
-	}
-	query += ` ORDER BY seq DESC LIMIT ?`
-	args = append(args, limit)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, false, 0, "", fmt.Errorf("chatstore page messages: %w", err)
-	}
-	defer rows.Close() //nolint:errcheck
-	for rows.Next() {
-		var m Message
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Seq, &m.Attachments, &m.Author); err != nil {
-			return nil, false, 0, "", fmt.Errorf("chatstore page messages scan: %w", err)
-		}
-		msgs = append(msgs, m)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, false, 0, "", fmt.Errorf("chatstore page messages rows: %w", err)
-	}
-	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
-		msgs[i], msgs[j] = msgs[j], msgs[i]
-	}
-	if len(msgs) > 0 {
-		oldestSeq = msgs[0].Seq
-		hasMore, err = s.hasMessagesBefore(ctx, conversationID, oldestSeq)
-		if err != nil {
-			return nil, false, 0, "", err
-		}
-	}
-
-	// The newest message's role drives assistant_streaming and is independent of
-	// the returned page (which may be an older window).
-	// A copied-in conversation ends on a user turn by nature, and no reply is
-	// coming. Blanking the role here keeps every caller's "last role is the
-	// user's, so a turn is in flight" test true for chats but not for copies.
-	err = s.db.QueryRowContext(ctx,
-		`SELECT CASE WHEN origin = 'save' THEN '' ELSE role END
-		 FROM messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1`,
-		conversationID,
-	).Scan(&lastRole)
-	if errors.Is(err, sql.ErrNoRows) {
-		return msgs, hasMore, oldestSeq, "", nil
-	}
-	if err != nil {
-		return nil, false, 0, "", fmt.Errorf("chatstore page last role: %w", err)
-	}
-	return msgs, hasMore, oldestSeq, lastRole, nil
-}
-
 // AppendMessage appends one message to a conversation, assigning the next
 // sequence number. Content is truncated to MaxMessageContentRunes.
 func (s *Store) AppendMessage(ctx context.Context, conversationID, userID, role, content, attachmentsJSON string) (Message, error) {
@@ -616,6 +540,11 @@ func nextSeqTx(ctx context.Context, tx *sql.Tx, conversationID string) (int, err
 // this is what lets UpsertAssistantProgress and FinalizeStopped fold their
 // role-check and append into one tx and not race each other into two rows.
 func appendMessageTx(ctx context.Context, tx *sql.Tx, conversationID, userID, role, content, attachmentsJSON string) (Message, error) {
+	return insertMessageTx(ctx, tx, conversationID, userID, role, content, attachmentsJSON, "")
+}
+
+// insertMessageTx takes parentID already encoded by storedParent.
+func insertMessageTx(ctx context.Context, tx *sql.Tx, conversationID, userID, role, content, attachmentsJSON, parentID string) (Message, error) {
 	content = TruncateRunes(content, MaxMessageContentRunes)
 
 	nextSeq, err := nextSeqTx(ctx, tx, conversationID)
@@ -645,11 +574,16 @@ func appendMessageTx(ctx context.Context, tx *sql.Tx, conversationID, userID, ro
 
 	msg := Message{ID: uuid.NewString(), Role: role, Content: content, Seq: nextSeq, Attachments: attachmentsJSON}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO messages (id, conversation_id, user_id, role, content, seq, created_at, attachments)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		msg.ID, conversationID, userID, role, content, nextSeq, time.Now().UnixMilli(), attachmentsJSON,
+		INSERT INTO messages (id, conversation_id, user_id, role, content, seq, created_at, attachments, parent_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		msg.ID, conversationID, userID, role, content, nextSeq, time.Now().UnixMilli(), attachmentsJSON, parentID,
 	); err != nil {
 		return Message{}, fmt.Errorf("chatstore append message: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE conversations SET head_id = '' WHERE conversation_id = ? AND head_id <> ''`, conversationID,
+	); err != nil {
+		return Message{}, fmt.Errorf("chatstore reset head: %w", err)
 	}
 	return msg, nil
 }
@@ -665,6 +599,15 @@ func appendMessageTx(ctx context.Context, tx *sql.Tx, conversationID, userID, ro
 // what prevents a concurrent stop and streamed chunk from both reading
 // lastRole=="user" and each appending a duplicate assistant row.
 func (s *Store) UpsertAssistantProgress(ctx context.Context, conversationID, content, attachmentsJSON string) (string, error) {
+	return s.upsertAssistant(ctx, conversationID, content, attachmentsJSON, false)
+}
+
+// FinishAssistantReply is UpsertAssistantProgress for the END chunk; it also sets the agent head.
+func (s *Store) FinishAssistantReply(ctx context.Context, conversationID, content, attachmentsJSON string) (string, error) {
+	return s.upsertAssistant(ctx, conversationID, content, attachmentsJSON, true)
+}
+
+func (s *Store) upsertAssistant(ctx context.Context, conversationID, content, attachmentsJSON string, final bool) (string, error) {
 	content = TruncateRunes(content, MaxMessageContentRunes)
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -722,7 +665,12 @@ func (s *Store) UpsertAssistantProgress(ctx context.Context, conversationID, con
 		}
 		id = msg.ID
 	}
-	if err := touchConversationTx(ctx, tx, conversationID); err != nil {
+	if final {
+		err = touchAgentReplyTx(ctx, tx, conversationID, id)
+	} else {
+		err = touchConversationTx(ctx, tx, conversationID)
+	}
+	if err != nil {
 		return "", err
 	}
 	if err := tx.Commit(); err != nil {
@@ -896,6 +844,14 @@ func (s *Store) ReapDanglingUserTurns(ctx context.Context) (int, error) {
 		}
 	}
 	return finalized, nil
+}
+
+func touchAgentReplyTx(ctx context.Context, tx *sql.Tx, conversationID, replyID string) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET updated_at = ?, agent_head_id = ? WHERE conversation_id = ?`,
+		time.Now().UnixMilli(), replyID, conversationID); err != nil {
+		return fmt.Errorf("chatstore touch conversation: %w", err)
+	}
+	return nil
 }
 
 func touchConversationTx(ctx context.Context, tx *sql.Tx, conversationID string) error {
