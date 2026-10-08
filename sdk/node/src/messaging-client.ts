@@ -21,6 +21,26 @@ export interface Message {
   content: string;
   attachments?: Attachment[];
   conversationId: string;
+  /**
+   * Set when the earlier turns differ from what the agent last received, else `null`.
+   * An agent with `supportsHistory` replaces its stored history with them first.
+   */
+  history?: ConversationHistory | null;
+}
+
+/** The turns before a message on the conversation's active branch. */
+export interface ConversationHistory {
+  /** Oldest first. Empty when the message has no earlier turns. */
+  messages: HistoryMessage[];
+  /** False when older turns were left out to bound the size. */
+  isComplete: boolean;
+}
+
+/** Attachments are not carried. */
+export interface HistoryMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
 }
 
 export interface User {
@@ -383,6 +403,8 @@ export interface AgentConfig {
    * `skill:agent.<agent-name>`, so names starting with `agent.` are ignored.
    */
   skills?: AgentSkill[];
+  /** Set true when the agent replaces its stored history with `Message.history`; enables message editing. */
+  supportsHistory?: boolean;
 }
 
 export interface AgentSkill {

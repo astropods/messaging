@@ -34,6 +34,8 @@ type chatMessageResponse struct {
 	// Names the original sender on a copied-in conversation, where every human
 	// turn is role "user" but only some are the owner's.
 	Author string `json:"author,omitempty"`
+	// This message and its alternatives, oldest first.
+	Branches []string `json:"branches,omitempty"`
 }
 
 type chatConversationSummary struct {
@@ -64,6 +66,10 @@ type getChatConversationResponse struct {
 
 type setChatTitleInput struct {
 	Title string `json:"title"`
+}
+
+type switchChatBranchInput struct {
+	MessageID string `json:"message_id"`
 }
 
 // HandleListChatConversations handles GET /api/chat/conversations.
@@ -142,7 +148,11 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "conversation not found", http.StatusNotFound)
 		return
 	}
+	h.writeChatConversation(w, r, conv, limit, beforeSeq)
+}
 
+func (h *Handlers) writeChatConversation(w http.ResponseWriter, r *http.Request, conv *sqlite.Conversation, limit, beforeSeq int) {
+	conversationID := conv.ConversationID
 	if limit == 0 {
 		limit = chatDefaultConversationLimit
 	}
@@ -170,6 +180,7 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 			Content:     m.Content,
 			Attachments: unmarshalAttachments(m.Attachments),
 			Author:      m.Author,
+			Branches:    m.Branches,
 		})
 	}
 
@@ -265,6 +276,53 @@ func (h *Handlers) HandleSetChatConversationTitle(w http.ResponseWriter, r *http
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"conversation_id": conversationID, "title": title})
+}
+
+// HandleSwitchChatBranch handles PUT /api/chat/conversations/{id}/branch.
+func (h *Handlers) HandleSwitchChatBranch(w http.ResponseWriter, r *http.Request) {
+	session := h.authenticate(w, r)
+	if session == nil {
+		return
+	}
+	conversationID := r.PathValue("id")
+	if conversationID == "" {
+		http.Error(w, "Missing conversation ID", http.StatusBadRequest)
+		return
+	}
+	var input switchChatBranchInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.MessageID == "" {
+		http.Error(w, "message_id is required", http.StatusBadRequest)
+		return
+	}
+	if !h.editsSupported() {
+		writeEditUnsupported(w)
+		return
+	}
+	if h.turns != nil {
+		if !h.turns.claim(conversationID) {
+			writeTurnInProgress(w)
+			return
+		}
+		defer h.turns.release(conversationID)
+	}
+
+	switched, err := h.chatStore.SwitchBranch(r.Context(), conversationID, session.UserID, input.MessageID)
+	if err != nil {
+		slog.Error("[Web] chat switch branch failed", "conversation", conversationID, "err", err)
+		http.Error(w, "failed to switch branch", http.StatusInternalServerError)
+		return
+	}
+	if !switched {
+		http.Error(w, "message not found", http.StatusNotFound)
+		return
+	}
+	conv, err := h.chatStore.Get(r.Context(), conversationID)
+	if err != nil || conv == nil {
+		slog.Error("[Web] chat get conversation failed", "conversation", conversationID, "err", err)
+		http.Error(w, "failed to load conversation", http.StatusInternalServerError)
+		return
+	}
+	h.writeChatConversation(w, r, conv, 0, 0)
 }
 
 // HandleDeleteChatConversation handles DELETE /api/chat/conversations/{id}.

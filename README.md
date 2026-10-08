@@ -10,6 +10,7 @@ Go messaging service that connects AI agents to messaging platforms via gRPC bid
 - **Thread history** — tracks edits and deletions in memory
 - **Storage** — Redis or in-memory conversation store
 - **Chat persistence** — deployment web-chat history in a deployment-local SQLite store, durable on the agent's shared disk (see `CHAT_DB_PATH`)
+- **Message edits**: an edited web-chat message starts a new branch of the conversation; agents that set `supports_history` receive the branch as `Message.history`
 - **Multi-arch Docker image** — `linux/amd64` and `linux/arm64`
 
 ## Project Structure
