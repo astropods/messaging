@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/astropods/messaging/internal/store/sqlite"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
@@ -76,7 +77,15 @@ func (h *Handlers) HandleListChatConversations(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	convs, err := h.chatStore.ListByUser(r.Context(), session.UserID)
+	var (
+		convs []sqlite.Conversation
+		err   error
+	)
+	if roomID := r.URL.Query().Get("room_id"); roomID != "" {
+		convs, err = h.chatStore.ListByRoom(r.Context(), session.UserID, roomID)
+	} else {
+		convs, err = h.chatStore.ListByUser(r.Context(), session.UserID)
+	}
 	if err != nil {
 		slog.Error("[Web] chat list conversations failed", "err", err)
 		http.Error(w, "failed to list conversations", http.StatusInternalServerError)

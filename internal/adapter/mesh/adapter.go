@@ -17,7 +17,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/astropods/messaging/internal/adapter"
-	"github.com/astropods/messaging/internal/authz"
+	"github.com/astropods/messaging/internal/roomgrant"
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
@@ -47,13 +47,6 @@ type turn struct {
 	lastStatus     string
 }
 
-type RoomGrant struct {
-	RoomID    string
-	Grant     string
-	ExpiresAt time.Time
-	APIURL    string
-}
-
 type Adapter struct {
 	cfg     Config
 	apiURL  string
@@ -79,11 +72,11 @@ func (a *Adapter) Initialize(_ context.Context, _ adapter.Config) error {
 	if a.cfg.Token == "" {
 		return errors.New("mesh: ASTRO_AUTHZ_TOKEN is required")
 	}
-	claims, err := authz.DecodeToken(a.cfg.Token)
+	apiURL, err := roomgrant.APIURL(a.cfg.Token)
 	if err != nil {
-		return fmt.Errorf("mesh: decode ASTRO_AUTHZ_TOKEN: %w", err)
+		return fmt.Errorf("mesh: %w", err)
 	}
-	a.apiURL = strings.TrimSuffix(claims.Issuer, "/")
+	a.apiURL = apiURL
 	return nil
 }
 
@@ -445,7 +438,7 @@ func (a *Adapter) refreshGrant(taskID, grant string) {
 	}
 }
 
-func (a *Adapter) RoomGrant(conversationID string) (RoomGrant, bool) {
+func (a *Adapter) RoomGrant(conversationID string) (roomgrant.Grant, bool) {
 	a.mu.Lock()
 	t := a.turns[conversationID]
 	var scope, grant string
@@ -453,12 +446,5 @@ func (a *Adapter) RoomGrant(conversationID string) (RoomGrant, bool) {
 		scope, grant = t.scope, t.grant
 	}
 	a.mu.Unlock()
-	if grant == "" || scope == "" {
-		return RoomGrant{}, false
-	}
-	expires, err := grantExpiry(grant)
-	if err != nil || !time.Now().Before(expires) {
-		return RoomGrant{}, false
-	}
-	return RoomGrant{RoomID: scope, Grant: grant, ExpiresAt: expires, APIURL: a.apiURL}, true
+	return roomgrant.Live(scope, grant, a.apiURL, time.Now())
 }

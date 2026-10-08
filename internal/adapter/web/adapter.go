@@ -55,6 +55,7 @@ type WebAdapter struct {
 	// freshSubscribeSettle: how long a no-cursor subscribe observes the wire before
 	// the store-derived terminal fallback (see settleFreshSubscribe).
 	freshSubscribeSettle time.Duration
+	roomAPIURL           string
 }
 
 // WebAdapterOption configures the WebAdapter

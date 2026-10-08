@@ -43,6 +43,7 @@ type Handlers struct {
 	// freshSubscribeSettle: wait before the terminal fallback (see settleFreshSubscribe).
 	freshSubscribeSettle time.Duration
 	interactions         store.InteractionStore // shared with WebAdapter
+	rooms                *roomChats
 }
 
 // NewHandlers creates a new Handlers instance
@@ -52,6 +53,7 @@ func NewHandlers(connManager *ConnectionManager, sessionManager SessionManager, 
 		sessionManager:   sessionManager,
 		threadStore:      threadStore,
 		agentConfigStore: agentConfigStore,
+		rooms:            newRoomChats(),
 	}
 }
 
@@ -191,6 +193,14 @@ func (h *Handlers) HandleCreateConversation(w http.ResponseWriter, r *http.Reque
 			slog.Error("[Web] chat persist create conversation failed", "err", err)
 		}
 	}
+	if roomID := r.Header.Get(HeaderRoomID); roomID != "" {
+		if err := h.bindRoom(r.Context(), conversationID, session.UserID, roomID); err != nil {
+			slog.Error("[Web] chat bind room failed", "err", err)
+			http.Error(w, "failed to create conversation", http.StatusInternalServerError)
+			return
+		}
+		h.rooms.set(conversationID, roomID, r.Header.Get(HeaderRoomGrant))
+	}
 
 	resp := CreateConversationResponse{
 		ConversationID: conversationID,
@@ -243,6 +253,18 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 			"error":             "turn_in_progress",
 			"error_description": "a response is already in progress on this conversation",
 		})
+		return
+	}
+
+	roomID := r.Header.Get(HeaderRoomID)
+	bound, exists, err := h.boundRoom(ctx, conversationID)
+	if err != nil {
+		slog.Error("[Web] chat read room binding failed", "err", err)
+		http.Error(w, "chat temporarily unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if exists && bound != roomID {
+		writeRoomMismatch(w)
 		return
 	}
 
@@ -299,6 +321,9 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		ConversationId: conversationID,
 		Attachments:    protoAtts,
 	}
+	if roomID != "" {
+		msg.PlatformContext.PlatformData = map[string]string{"mesh_scope": roomID}
+	}
 
 	if h.msgHandler == nil {
 		slog.Warn("[Web] No message handler registered")
@@ -326,6 +351,13 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "conversation not found", http.StatusNotFound)
 			return
 		}
+		if !exists && roomID != "" {
+			if err := h.bindRoom(ctx, conversationID, session.UserID, roomID); err != nil {
+				slog.Error("[Web] chat bind room failed", "err", err)
+				http.Error(w, "chat temporarily unavailable", http.StatusServiceUnavailable)
+				return
+			}
+		}
 		// A failed user-turn write must not run the agent (would persist an
 		// assistant-first / user-less turn).
 		if _, err := h.chatStore.AppendMessage(ctx, conversationID, session.UserID, "user", req.Content, marshalAttachments(attachments)); err != nil {
@@ -343,6 +375,10 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "chat temporarily unavailable", http.StatusServiceUnavailable)
 			return
 		}
+	}
+
+	if roomID != "" {
+		h.rooms.set(conversationID, roomID, r.Header.Get(HeaderRoomGrant))
 	}
 
 	// Arm the idle watchdog before forwarding, so the turn is tracked before any
