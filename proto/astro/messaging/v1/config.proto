@@ -16,6 +16,8 @@ message AgentConfig {
   // Deprecated and ignored: declare mesh skills in astropods.yml agent.skills,
   // which the platform passes to the Mesh adapter as MESH_SKILLS.
   repeated AgentSkill skills = 4;
+  // Agent replaces its stored history with Message.history; enables message editing.
+  bool supports_history = 5;
 }
 
 message AgentSkill {

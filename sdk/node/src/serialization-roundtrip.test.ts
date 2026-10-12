@@ -420,3 +420,48 @@ describe('Proto-loader binary roundtrip: AgentResponse oneof', () => {
     expect(result.renderable.intent).toBe('tool_permission');
   });
 });
+
+describe('Proto-loader binary roundtrip: Message history', () => {
+  const incoming = (history?: unknown) =>
+    deserializeResponse(
+      serializeResponse({
+        conversationId: 'conv-h',
+        incomingMessage: { conversationId: 'conv-h', content: 'q2 edited', ...(history ? { history } : {}) },
+      }),
+    ).incomingMessage;
+
+  it('decodes history with camelCase fields, oldest first', () => {
+    const msg = incoming({
+      messages: [
+        { id: 'm1', role: 'user', content: 'q1' },
+        { id: 'm2', role: 'assistant', content: 'a1' },
+      ],
+      isComplete: true,
+    });
+
+    expect(msg.history).toEqual({
+      messages: [
+        { id: 'm1', role: 'user', content: 'q1' },
+        { id: 'm2', role: 'assistant', content: 'a1' },
+      ],
+      isComplete: true,
+    });
+  });
+
+  it('keeps an empty history present, which means "no earlier turns"', () => {
+    expect(incoming({ messages: [] }).history).toEqual({ messages: [], isComplete: false });
+  });
+
+  it('decodes an unset history as null', () => {
+    expect(incoming().history).toBeNull();
+  });
+});
+
+describe('Proto-loader binary roundtrip: AgentConfig supportsHistory', () => {
+  it('carries supportsHistory', () => {
+    const result = deserializeRequest(
+      serializeRequest({ agentConfig: { systemPrompt: '', tools: [], supportsHistory: true } }),
+    );
+    expect(result.agentConfig.supportsHistory).toBe(true);
+  });
+});

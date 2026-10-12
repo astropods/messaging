@@ -102,10 +102,10 @@ func (s *Store) SaveConversation(ctx context.Context, req SaveRequest) (string, 
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO conversations
 				(conversation_id, user_id, title, created_at, updated_at,
-				 source_label, source_url, saved_title)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				 source_label, source_url, saved_title, agent_head_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			conversationID, req.UserID, req.Title, now, now,
-			req.SourceLabel, req.SourceURL, req.Title,
+			req.SourceLabel, req.SourceURL, req.Title, parentRoot,
 		); err != nil {
 			return "", "", fmt.Errorf("chatstore save insert: %w", err)
 		}
@@ -164,12 +164,19 @@ func (s *Store) resolveExisting(
 			return "", fmt.Errorf("chatstore save clear: %w", err)
 		}
 	}
+	// The agent still holds the discarded turns; the next send replays the copy.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE conversations SET agent_head_id = ? WHERE conversation_id = ?`, parentRoot, conversationID,
+	); err != nil {
+		return "", fmt.Errorf("chatstore save reset agent head: %w", err)
+	}
 	return SaveReplaced, s.touchSaved(ctx, tx, conversationID, req, now)
 }
 
 // touchSaved refreshes the copy's metadata. The title is left alone when the
 // user has renamed it, and an empty title never blanks one that exists: a save
 // must not undo the user's own edit any more than it may delete their turns.
+// The agent never received saved turns, so the next send replays the copy.
 func (s *Store) touchSaved(
 	ctx context.Context, tx *sql.Tx, conversationID string, req SaveRequest, now int64,
 ) error {
@@ -181,10 +188,11 @@ func (s *Store) touchSaved(
 				ELSE ?
 			END,
 			saved_title = CASE WHEN ? = '' THEN saved_title ELSE ? END,
-			updated_at = ?, source_label = ?, source_url = ?
+			updated_at = ?, source_label = ?, source_url = ?, head_id = '',
+			agent_head_id = CASE WHEN agent_head_id = '' THEN ? ELSE agent_head_id END
 		WHERE conversation_id = ?`,
 		req.Title, req.Title, req.Title, req.Title,
-		now, req.SourceLabel, req.SourceURL, conversationID,
+		now, req.SourceLabel, req.SourceURL, parentRoot, conversationID,
 	); err != nil {
 		return fmt.Errorf("chatstore save update: %w", err)
 	}

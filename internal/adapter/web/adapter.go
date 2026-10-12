@@ -169,7 +169,29 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	// Start connection manager heartbeat
 	a.connManager.Start(ctx)
 
-	// Set up HTTP routes
+	handler := a.corsMiddleware(a.routes())
+
+	a.server = &http.Server{
+		Addr:         a.listenAddr,
+		Handler:      handler,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 0, // No timeout for SSE
+		IdleTimeout:  120 * time.Second,
+	}
+
+	slog.Info("[Web] Starting HTTP server", "addr", a.listenAddr)
+
+	go func() {
+		if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("[Web] HTTP server error", "err", err)
+		}
+	}()
+
+	<-ctx.Done()
+	return a.Stop(context.Background())
+}
+
+func (a *WebAdapter) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// API routes
@@ -185,6 +207,7 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/chat/conversations", a.handlers.HandleListChatConversations)
 	mux.HandleFunc("GET /api/chat/conversations/{id}", a.handlers.HandleGetChatConversation)
 	mux.HandleFunc("PUT /api/chat/conversations/{id}/title", a.handlers.HandleSetChatConversationTitle)
+	mux.HandleFunc("PUT /api/chat/conversations/{id}/branch", a.handlers.HandleSwitchChatBranch)
 	mux.HandleFunc("DELETE /api/chat/conversations/{id}", a.handlers.HandleDeleteChatConversation)
 	mux.HandleFunc("POST /api/chat/conversations/{id}/interactions/{interactionId}", a.handlers.HandleInteractionResponse)
 	mux.HandleFunc("GET /api/conversations/{id}/audio", a.handlers.HandleAudioStream)
@@ -202,31 +225,7 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/files/{key}/content", a.handlers.HandleGetFileContent)
 
 	mux.HandleFunc("GET /health", a.handlers.HandleHealth)
-
-	// Wrap with CORS middleware
-	handler := a.corsMiddleware(mux)
-
-	// Create server
-	a.server = &http.Server{
-		Addr:         a.listenAddr,
-		Handler:      handler,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 0, // No timeout for SSE
-		IdleTimeout:  120 * time.Second,
-	}
-
-	slog.Info("[Web] Starting HTTP server", "addr", a.listenAddr)
-
-	// Start server in goroutine
-	go func() {
-		if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("[Web] HTTP server error", "err", err)
-		}
-	}()
-
-	// Wait for context cancellation
-	<-ctx.Done()
-	return a.Stop(context.Background())
+	return mux
 }
 
 // Stop gracefully shuts down the adapter
@@ -463,7 +462,11 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 					}
 				}
 				// A persisted note (non-assistant row) is the boundary, so this appends a new row for the continuation instead of updating the pre-interaction reply.
-				_, err := a.chatStore.UpsertAssistantProgress(ctx, conversationID, content, marshalAttachments(agentAttachments))
+				write := a.chatStore.UpsertAssistantProgress
+				if isEnd {
+					write = a.chatStore.FinishAssistantReply
+				}
+				_, err := write(ctx, conversationID, content, marshalAttachments(agentAttachments))
 				if err != nil {
 					if errors.Is(err, sqlite.ErrMessageLimitReached) {
 						// Terminal per-conversation state, not a real failure — don't

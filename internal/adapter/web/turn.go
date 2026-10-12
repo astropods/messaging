@@ -53,9 +53,11 @@ type turnState struct {
 // after the new turn's START can still slip through; fully halting generation
 // requires agent/SDK cooperation.)
 type turnTracker struct {
-	mu          sync.Mutex
-	turns       map[string]*turnState
-	stopped     map[string]bool
+	mu      sync.Mutex
+	turns   map[string]*turnState
+	stopped map[string]bool
+	// claimed lets only one send or branch switch pass the in-flight check at a time.
+	claimed     map[string]bool
 	idleTimeout time.Duration
 	onIdle      func(conversationID string)
 }
@@ -64,7 +66,24 @@ func newTurnTracker() *turnTracker {
 	return &turnTracker{
 		turns:   make(map[string]*turnState),
 		stopped: make(map[string]bool),
+		claimed: make(map[string]bool),
 	}
+}
+
+func (t *turnTracker) claim(conversationID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if st := t.turns[conversationID]; (st != nil && !st.userStopped) || t.claimed[conversationID] {
+		return false
+	}
+	t.claimed[conversationID] = true
+	return true
+}
+
+func (t *turnTracker) release(conversationID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.claimed, conversationID)
 }
 
 // setIdleReaper enables the idle watchdog: a tracked turn with no activity for
@@ -142,6 +161,7 @@ func (t *turnTracker) startTurn(conversationID string) {
 		t.turns[conversationID] = st
 	}
 	st.userStopped = false
+	delete(t.claimed, conversationID)
 	t.armIdleLocked(conversationID, st)
 }
 
@@ -269,7 +289,7 @@ func (t *turnTracker) isStreaming(conversationID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	st := t.turns[conversationID]
-	return st != nil && !st.userStopped
+	return (st != nil && !st.userStopped) || t.claimed[conversationID]
 }
 
 // stop marks the in-flight turn on conversationID stopped and returns the partial
@@ -333,6 +353,7 @@ func (t *turnTracker) clear(conversationID string) {
 	}
 	delete(t.turns, conversationID)
 	delete(t.stopped, conversationID)
+	delete(t.claimed, conversationID)
 }
 
 // clearStoppedTurn cleans up a stopped conversation when its generation's END

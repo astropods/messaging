@@ -1,10 +1,6 @@
 package sqlite
 
-// Covers PageMessages, which windows a thread in SQL (WHERE seq < ? ... LIMIT ?)
-// rather than materializing the whole thread. Preserves the prior pagination
-// contract: seq is contiguous from 1, so the page's oldest seq alone determines
-// hasMore. Includes the before_seq-beyond-range case that previously risked an
-// out-of-range slice.
+// Covers PageMessages on a linear thread, where seq is contiguous from 1.
 //
 //	go test ./internal/store/sqlite -run TestPageMessages -v
 

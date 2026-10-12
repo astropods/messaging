@@ -115,3 +115,26 @@ def test_platform_feedback_trace_context_roundtrip():
     assert restored.trace_context.traceparent == feedback.trace_context.traceparent
     assert restored.WhichOneof("feedback") == "text"
     assert restored.text.text == "useful answer"
+
+
+def test_message_history_roundtrip_keeps_an_empty_history_present():
+    from astropods_messaging import ConversationHistory, HistoryMessage
+
+    msg = message_pb2.Message(
+        conversation_id="conv-1",
+        history=ConversationHistory(
+            messages=[HistoryMessage(id="m1", role="user", content="hi")],
+            is_complete=True,
+        ),
+    )
+    restored = message_pb2.Message()
+    restored.ParseFromString(msg.SerializeToString())
+    assert restored.HasField("history")
+    assert [(m.role, m.content) for m in restored.history.messages] == [("user", "hi")]
+    assert restored.history.is_complete
+
+    reset = message_pb2.Message(conversation_id="conv-1", history=ConversationHistory())
+    restored = message_pb2.Message()
+    restored.ParseFromString(reset.SerializeToString())
+    assert restored.HasField("history"), "an empty history means 'no earlier turns' and must survive the wire"
+    assert not message_pb2.Message().HasField("history")

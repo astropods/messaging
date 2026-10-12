@@ -154,6 +154,10 @@ type SendMessageRequest struct {
 	// Attachments references files already uploaded via the files API (by key).
 	// The bytes are not inlined — only the key + display metadata ride the send.
 	Attachments []sendAttachmentInput `json:"attachments,omitempty"`
+	// EditOf is a user message this one replaces, on a new branch.
+	EditOf string `json:"edit_of,omitempty"`
+	// ParentID is the newest message the client shows; a stale one gets 409 stale_branch.
+	ParentID string `json:"parent_id,omitempty"`
 }
 
 // sendAttachmentInput is a client-declared attachment reference on a send. Only
@@ -247,13 +251,18 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// One turn at a time: reject a send while a turn is in flight (streaming or paused on an interaction) — a guard against a racing client; the interaction-response path forwards directly, not through here.
-	if h.turns != nil && h.turns.isStreaming(conversationID) {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error":             "turn_in_progress",
-			"error_description": "a response is already in progress on this conversation",
-		})
+	if req.EditOf != "" && !h.editsSupported() {
+		writeEditUnsupported(w)
 		return
+	}
+
+	// One turn at a time, paused-on-interaction included; interaction responses forward directly, not through here.
+	if h.turns != nil {
+		if !h.turns.claim(conversationID) {
+			writeTurnInProgress(w)
+			return
+		}
+		defer h.turns.release(conversationID)
 	}
 
 	roomID := r.Header.Get(HeaderRoomID)
@@ -336,6 +345,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	// inverting turn order or dropping the reply. EnsureForSend also enforces
 	// ownership, rejecting a foreign conversation before the agent runs. (See the
 	// changelog for the full ordering/ownership rationale.)
+	var turn sqlite.UserTurn
 	if h.chatStore != nil {
 		title := sqlite.TruncateRunes(req.Content, chatTitleMaxRunes)
 		owned, err := h.chatStore.EnsureForSend(ctx, conversationID, session.UserID, title)
@@ -360,7 +370,24 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		// A failed user-turn write must not run the agent (would persist an
 		// assistant-first / user-less turn).
-		if _, err := h.chatStore.AppendMessage(ctx, conversationID, session.UserID, "user", req.Content, marshalAttachments(attachments)); err != nil {
+		turn, err = h.chatStore.AppendUserTurn(ctx, conversationID, session.UserID, sqlite.TurnInput{
+			Content:         req.Content,
+			AttachmentsJSON: marshalAttachments(attachments),
+			EditOf:          req.EditOf,
+			Anchor:          req.ParentID,
+		})
+		if err != nil {
+			if errors.Is(err, sqlite.ErrInvalidEdit) {
+				writeInvalidEdit(w)
+				return
+			}
+			if errors.Is(err, sqlite.ErrStaleBranch) {
+				writeJSON(w, http.StatusConflict, map[string]string{
+					"error":             "stale_branch",
+					"error_description": "the conversation changed since it was loaded; reload it and send again",
+				})
+				return
+			}
 			// The message cap is terminal, not transient — return 409 with a
 			// machine-readable code so the client keys on it (not the bare status).
 			if errors.Is(err, sqlite.ErrMessageLimitReached) {
@@ -375,10 +402,29 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "chat temporarily unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		if turn.History != nil {
+			msg.History = protoHistory(turn.History)
+		}
 	}
 
 	if roomID != "" {
 		h.rooms.set(conversationID, roomID, r.Header.Get(HeaderRoomGrant), time.Now())
+	}
+
+	// Before the forward: a synchronous transport routes the reply into the thread store before msgHandler returns.
+	if h.threadStore != nil {
+		if turn.History != nil {
+			replaceThreadHistory(h.threadStore, conversationID, session, turn.History)
+		}
+		h.threadStore.AddMessage(conversationID, &pb.ThreadMessage{
+			MessageId: messageID,
+			User: &pb.User{
+				Id:       session.UserID,
+				Username: session.Username,
+			},
+			Content:   req.Content,
+			Timestamp: timestamppb.New(now),
+		})
 	}
 
 	// Arm the idle watchdog before forwarding, so the turn is tracked before any
@@ -427,19 +473,6 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		h.sendErrorEvent(conversationID, "INTERNAL_ERROR", "Failed to process message")
 		http.Error(w, "Failed to process message", http.StatusInternalServerError)
 		return
-	}
-
-	// Add to thread store
-	if h.threadStore != nil {
-		h.threadStore.AddMessage(conversationID, &pb.ThreadMessage{
-			MessageId: messageID,
-			User: &pb.User{
-				Id:       session.UserID,
-				Username: session.Username,
-			},
-			Content:   req.Content,
-			Timestamp: timestamppb.New(now),
-		})
 	}
 
 	resp := SendMessageResponse{
@@ -936,6 +969,7 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 		// the composer's upload affordance when false, so an agent that never wires
 		// up the files API doesn't advertise an upload that would be ignored.
 		Files bool `json:"files"`
+		Edit  bool `json:"edit"`
 	}
 	type agentConfigResp struct {
 		SystemPrompt string           `json:"systemPrompt"`
@@ -970,7 +1004,10 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	resp := agentConfigResp{
 		SystemPrompt: config.SystemPrompt,
 		Tools:        tools,
-		Capabilities: capabilitiesResp{Files: h.fileStore != nil && config.GetSupportsFiles()},
+		Capabilities: capabilitiesResp{
+			Files: h.fileStore != nil && config.GetSupportsFiles(),
+			Edit:  h.editsSupported(),
+		},
 	}
 
 	w.Header().Set("Content-Type", "application/json")

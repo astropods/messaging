@@ -6,7 +6,14 @@ from .astro.messaging.v1.service_pb2 import (
     RoomGrantRequest,
     RoomGrantResponse,
 )
-from .astro.messaging.v1.message_pb2 import Message, PlatformContext, User, Attachment
+from .astro.messaging.v1.message_pb2 import (
+    Message,
+    PlatformContext,
+    User,
+    Attachment,
+    ConversationHistory,
+    HistoryMessage,
+)
 from .astro.messaging.v1.response_pb2 import (
     AgentResponse,
     StatusUpdate,
@@ -47,6 +54,8 @@ __all__ = [
     "PlatformContext",
     "User",
     "Attachment",
+    "ConversationHistory",
+    "HistoryMessage",
     "AgentResponse",
     "SaveConversationRequest",
     "ThreadHistoryRequest",
