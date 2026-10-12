@@ -321,6 +321,16 @@ func platformData(env *envelope) map[string]string {
 	return data
 }
 
+const roomUserPrefix = "room:"
+
+// turnUserID is what astro-server's connection token route resolves to the room member who shared the connection.
+func turnUserID(env *envelope) string {
+	if env.Scope != "" {
+		return roomUserPrefix + env.Scope
+	}
+	return env.From
+}
+
 func (a *Adapter) toMessage(env *envelope, conversationID string) *pb.Message {
 	return &pb.Message{
 		Id:        uuid.NewString(),
@@ -333,7 +343,7 @@ func (a *Adapter) toMessage(env *envelope, conversationID string) *pb.Message {
 			PlatformData: platformData(env),
 			EventKind:    pb.PlatformContext_EVENT_KIND_DM,
 		},
-		User:           &pb.User{Id: env.From, Username: env.From},
+		User:           &pb.User{Id: turnUserID(env), Username: env.From},
 		Content:        textOf(env.Parts),
 		ConversationId: conversationID,
 	}
