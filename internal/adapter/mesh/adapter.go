@@ -31,9 +31,15 @@ const (
 var skillPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 
 type Config struct {
-	URL   string
-	Token string
-	Name  string
+	URL    string
+	Token  string
+	Name   string
+	Skills []Skill
+}
+
+type Skill struct {
+	Name        string
+	Description string
 }
 
 type turn struct {
@@ -51,7 +57,6 @@ type Adapter struct {
 	cfg     Config
 	apiURL  string
 	handler adapter.MessageHandler
-	configs *store.AgentConfigStore
 
 	session atomic.Pointer[session]
 	cancel  context.CancelFunc
@@ -111,47 +116,46 @@ func (a *Adapter) Capabilities() adapter.AdapterCapabilities {
 
 func (a *Adapter) SetMessageHandler(h adapter.MessageHandler) { a.handler = h }
 
-func (a *Adapter) SetAgentConfigStore(s *store.AgentConfigStore) { a.configs = s }
-
 func (a *Adapter) SetFeedbackHandler(adapter.FeedbackHandler) {}
 
 func (a *Adapter) HydrateThread(context.Context, string, *store.ThreadHistoryStore) error {
 	return nil
 }
 
-func (a *Adapter) skills() []string {
-	var out []string
-	if identity := agentPrefix + strings.ToLower(a.cfg.Name); a.cfg.Name != "" && skillPattern.MatchString(identity) {
-		out = append(out, identity)
-	}
-	if a.configs == nil {
-		return out
-	}
-	cfg := a.configs.Get()
-	if cfg == nil {
-		return out
-	}
-	for _, s := range cfg.GetSkills() {
-		name := s.GetName()
+func (a *Adapter) skills() []skill {
+	var out []skill
+	add := func(name, description string) {
 		switch {
 		case strings.HasPrefix(name, agentPrefix):
 			slog.Warn("[Mesh] ignoring declared skill with the reserved agent. prefix", "skill", name)
 		case !skillPattern.MatchString(name):
 			slog.Warn("[Mesh] ignoring declared skill that is not a valid skill name", "skill", name)
-		case !slices.Contains(out, name):
-			out = append(out, name)
+		case slices.ContainsFunc(out, func(s skill) bool { return s.Name == name }):
+		default:
+			out = append(out, skill{Name: name, Description: description})
 		}
+	}
+	if identity := agentPrefix + strings.ToLower(a.cfg.Name); a.cfg.Name != "" && skillPattern.MatchString(identity) {
+		out = append(out, skill{Name: identity})
+	}
+	for _, s := range a.cfg.Skills {
+		add(s.Name, s.Description)
 	}
 	return out
 }
 
-func (a *Adapter) card(skills []string) card {
-	c := card{Name: a.cfg.Name, Kind: "agent", Accepts: []string{"text", "data"}, MaxConcurrent: maxConcurrent}
+func skillNames(skills []skill) []string {
+	names := make([]string, 0, len(skills))
+	for _, s := range skills {
+		names = append(names, s.Name)
+	}
+	return names
+}
+
+func (a *Adapter) card(skills []skill) card {
+	c := card{Name: a.cfg.Name, Kind: "agent", Accepts: []string{"text", "data"}, MaxConcurrent: maxConcurrent, Skills: skills}
 	if c.Name == "" {
 		c.Name = "agent"
-	}
-	for _, s := range skills {
-		c.Skills = append(c.Skills, skill{Name: s})
 	}
 	return c
 }
@@ -196,7 +200,7 @@ func (a *Adapter) connect(ctx context.Context) error {
 		s.close()
 		a.dropTurns()
 	}()
-	slog.Info("[Mesh] joined the mesh", "address", s.address, "skills", skills)
+	slog.Info("[Mesh] joined the mesh", "address", s.address, "skills", skillNames(skills))
 
 	interval := time.Duration(welcome.HeartbeatIntervalS) * time.Second
 	if interval <= 0 {
@@ -204,9 +208,6 @@ func (a *Adapter) connect(ctx context.Context) error {
 	}
 	stop := make(chan struct{})
 	defer close(stop)
-	if a.configs != nil {
-		go a.watchSkills(stop, s, skills)
-	}
 	go func() {
 		tick := time.NewTicker(interval / 2)
 		defer tick.Stop()
@@ -234,22 +235,6 @@ func (a *Adapter) connect(ctx context.Context) error {
 			a.refreshGrant(f.TaskID, f.Grant)
 		}
 	})
-}
-
-func (a *Adapter) watchSkills(stop <-chan struct{}, s *session, sent []string) {
-	for {
-		changed := a.configs.Changed()
-		select {
-		case <-stop:
-			return
-		case <-changed:
-			if !slices.Equal(a.skills(), sent) {
-				slog.Info("[Mesh] agent changed its skills; rejoining")
-				s.close()
-				return
-			}
-		}
-	}
 }
 
 func (a *Adapter) dropTurns() {

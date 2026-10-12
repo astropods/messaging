@@ -398,9 +398,8 @@ export interface AgentConfig {
    */
   supportsFiles?: boolean;
   /**
-   * Skills the agent accepts tasks for on the agent mesh. Another agent reaches
-   * one with `skill:<name>`. Every agent is also reachable as
-   * `skill:agent.<agent-name>`, so names starting with `agent.` are ignored.
+   * @deprecated Ignored. Declare mesh skills in `astropods.yml` under
+   * `agent.skills`; the platform passes them to the sidecar.
    */
   skills?: AgentSkill[];
   /** Set true when the agent replaces its stored history with `Message.history`; enables message editing. */

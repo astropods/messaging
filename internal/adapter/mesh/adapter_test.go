@@ -102,7 +102,12 @@ func (g *fakeGateway) next(match func(*frame) bool) *frame {
 
 func startAdapter(t *testing.T, g *fakeGateway) (*Adapter, chan *pb.Message, *websocket.Conn) {
 	t.Helper()
-	a := New(Config{URL: g.url, Token: deployToken(t, "https://astro.test/"), Name: "writer"})
+	return startAdapterWithSkills(t, g, nil)
+}
+
+func startAdapterWithSkills(t *testing.T, g *fakeGateway, skills []Skill) (*Adapter, chan *pb.Message, *websocket.Conn) {
+	t.Helper()
+	a := New(Config{URL: g.url, Token: deployToken(t, "https://astro.test/"), Name: "writer", Skills: skills})
 	if err := a.Initialize(context.Background(), adapter.Config{}); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
@@ -127,6 +132,35 @@ func TestCardAcceptsTextAndDataParts(t *testing.T) {
 	hello := <-g.hello
 	if hello.Card == nil || !slices.Equal(hello.Card.Accepts, []string{"text", "data"}) {
 		t.Fatalf("hello card = %+v, want accepts [text data] so the gateway offers room tasks with a data part", hello.Card)
+	}
+}
+
+func TestCardAdvertisesTheAgentNameThenItsDeclaredSkillsWithDescriptions(t *testing.T) {
+	g := newFakeGateway(t)
+	startAdapterWithSkills(t, g, []Skill{
+		{Name: "github.issue.investigate", Description: "Investigates a new GitHub issue."},
+		{Name: "agent.impostor", Description: "reserved prefix"},
+		{Name: "Not Valid", Description: "breaks the pattern"},
+		{Name: "github.issue.investigate", Description: "a second entry for the same name"},
+		{Name: "notes.summarize"},
+	})
+	hello := <-g.hello
+	want := []skill{
+		{Name: "agent.writer"},
+		{Name: "github.issue.investigate", Description: "Investigates a new GitHub issue."},
+		{Name: "notes.summarize"},
+	}
+	if hello.Card == nil || !slices.Equal(hello.Card.Skills, want) {
+		t.Fatalf("hello card skills = %+v, want %+v: the identity first, declared skills in order with descriptions, reserved and invalid names dropped, the first entry kept for a name", hello.Card, want)
+	}
+}
+
+func TestCardWithoutDeclaredSkillsAdvertisesOnlyTheAgentName(t *testing.T) {
+	g := newFakeGateway(t)
+	startAdapter(t, g)
+	hello := <-g.hello
+	if hello.Card == nil || !slices.Equal(hello.Card.Skills, []skill{{Name: "agent.writer"}}) {
+		t.Fatalf("hello card skills = %+v, want only agent.writer", hello.Card)
 	}
 }
 

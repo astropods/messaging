@@ -42,12 +42,13 @@ type envelope struct {
 }
 
 type skill struct {
-	Name string `json:"name"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 type card struct {
-	Name          string  `json:"name"`
-	Kind          string  `json:"kind"`
+	Name          string   `json:"name"`
+	Kind          string   `json:"kind"`
 	Skills        []skill  `json:"skills,omitempty"`
 	Accepts       []string `json:"accepts,omitempty"`
 	MaxConcurrent int      `json:"max_concurrent,omitempty"`

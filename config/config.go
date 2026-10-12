@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -198,6 +199,12 @@ type MeshConfig struct {
 	Enabled bool
 	URL     string
 	Name    string
+	Skills  []MeshSkill
+}
+
+type MeshSkill struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 // StorageConfig holds storage configuration
@@ -303,6 +310,7 @@ func Load() (*Config, error) {
 		Enabled: getEnvBool("MESH_ENABLED", false),
 		URL:     getEnv("ASTRO_MESH_URL", ""),
 		Name:    getEnv("MESH_NAME", ""),
+		Skills:  getEnvMeshSkills("MESH_SKILLS"),
 	}
 
 	// Metrics configuration
@@ -383,6 +391,19 @@ func getEnvInt(key string, defaultValue int) int {
 		}
 	}
 	return defaultValue
+}
+
+func getEnvMeshSkills(key string) []MeshSkill {
+	value := os.Getenv(key)
+	if value == "" {
+		return nil
+	}
+	var skills []MeshSkill
+	if err := json.Unmarshal([]byte(value), &skills); err != nil {
+		slog.Warn("ignoring MESH_SKILLS that is not a JSON list of skills", "err", err)
+		return nil
+	}
+	return skills
 }
 
 func getEnvList(key string, defaultValue []string) []string {

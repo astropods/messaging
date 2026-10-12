@@ -258,3 +258,31 @@ func TestLoad_SlackSocketModeDisabled_NoAppTokenRequired(t *testing.T) {
 		t.Errorf("SocketMode = %v, want false", cfg.Slack.Config.SocketMode)
 	}
 }
+
+func TestLoad_MeshSkillsParseFromJSON(t *testing.T) {
+	t.Setenv("MESH_SKILLS", `[{"name":"github.issue.investigate","description":"Investigates a new GitHub issue."},{"name":"notes.summarize"}]`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []MeshSkill{
+		{Name: "github.issue.investigate", Description: "Investigates a new GitHub issue."},
+		{Name: "notes.summarize"},
+	}
+	if len(cfg.Mesh.Skills) != len(want) || cfg.Mesh.Skills[0] != want[0] || cfg.Mesh.Skills[1] != want[1] {
+		t.Errorf("Mesh.Skills = %+v, want %+v", cfg.Mesh.Skills, want)
+	}
+}
+
+func TestLoad_MeshSkillsThatAreNotAJSONListAreIgnored(t *testing.T) {
+	t.Setenv("MESH_SKILLS", "github.issue.investigate")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want the sidecar to start with no declared skills", err)
+	}
+	if len(cfg.Mesh.Skills) != 0 {
+		t.Errorf("Mesh.Skills = %+v, want none from a value that is not JSON", cfg.Mesh.Skills)
+	}
+}

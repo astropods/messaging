@@ -15,10 +15,10 @@ import (
 	"github.com/astropods/messaging/internal/adapter/mesh"
 	"github.com/astropods/messaging/internal/adapter/slack"
 	"github.com/astropods/messaging/internal/adapter/web"
-	"github.com/astropods/messaging/internal/roomgrant"
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/grpc"
 	"github.com/astropods/messaging/internal/internalfeedback"
+	"github.com/astropods/messaging/internal/roomgrant"
 	"github.com/astropods/messaging/internal/store"
 	"github.com/astropods/messaging/internal/store/files"
 	"github.com/astropods/messaging/internal/store/sqlite"
@@ -412,8 +412,14 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			URL:   cfg.Mesh.URL,
 			Token: cfg.Authz.IdentityToken,
 			Name:  cfg.Mesh.Name,
+			Skills: func() []mesh.Skill {
+				out := make([]mesh.Skill, 0, len(cfg.Mesh.Skills))
+				for _, s := range cfg.Mesh.Skills {
+					out = append(out, mesh.Skill{Name: s.Name, Description: s.Description})
+				}
+				return out
+			}(),
 		})
-		meshAdapter.SetAgentConfigStore(agentConfigStore)
 		if err := meshAdapter.Initialize(ctx, adapter.Config{}); err != nil {
 			slog.Error("Failed to initialize Mesh adapter", "err", err)
 		} else {
