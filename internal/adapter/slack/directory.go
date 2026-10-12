@@ -48,7 +48,7 @@ func (d *slackDirectory) userName(ctx context.Context, userID string) string {
 		slog.Debug("[Slack] users.info failed; falling back to the raw id",
 			"user_id", userID, "err", err)
 	} else if user != nil {
-		name = firstNonEmpty(user.Profile.DisplayName, user.RealName, user.Name)
+		name = firstNonEmpty(user.RealName, user.Profile.DisplayName, user.Name)
 	}
 	d.store(d.users, userID, name)
 	return name
