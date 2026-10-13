@@ -542,6 +542,132 @@ func TestHandleReactionAdded_ActionableReactionForwarded(t *testing.T) {
 	}
 }
 
+// Rodric says "good job", Sohum reacts. The agent needs Rodric, and User
+// carries Sohum, so the author travels in platform_data.
+func TestHandleReactionAdded_NamesTheMessageAuthor(t *testing.T) {
+	a, handler := newTestAdapterWithReactions([]string{"ticket"})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+			"ok": true,
+			"messages": []map[string]interface{}{
+				{"ts": r.FormValue("ts"), "text": "good job sohum", "user": "U_RODRIC"},
+			},
+		})
+	})
+	mux.HandleFunc("/users.info", func(w http.ResponseWriter, r *http.Request) {
+		names := map[string]string{"U_RODRIC": "rodric", "U_SOHUM": "sohum"}
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+			"ok": true,
+			"user": map[string]interface{}{
+				"id":      r.FormValue("user"),
+				"profile": map[string]interface{}{"display_name": names[r.FormValue("user")]},
+			},
+		})
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true}) //nolint:errcheck
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	a.directory = newSlackDirectory(a.client)
+
+	a.handleReactionAdded(t.Context(), &slackevents.ReactionAddedEvent{
+		Reaction: "ticket",
+		User:     "U_SOHUM",
+		Item:     slackevents.Item{Channel: "C123456", Timestamp: "1234567890.000001"},
+	}, "T1")
+
+	msg := handler.last()
+	if msg == nil {
+		t.Fatal("expected the reaction to be forwarded")
+	}
+	if got := msg.PlatformContext.PlatformData["author_id"]; got != "U_RODRIC" {
+		t.Errorf("author_id: want whoever wrote the message, got %q", got)
+	}
+	if got := msg.PlatformContext.PlatformData["author_name"]; got != "rodric" {
+		t.Errorf("author_name: want the author's resolved name, got %q", got)
+	}
+	if got := msg.User.Id; got != "U_SOHUM" {
+		t.Errorf("User must stay the reactor, as on every other event kind; got %q", got)
+	}
+}
+
+// The author id comes off the message and needs no scope; only the name does.
+func TestHandleReactionAdded_KeepsTheAuthorIdWhenScopeMissing(t *testing.T) {
+	a, handler := newTestAdapterWithReactions([]string{"ticket"})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+			"ok": true,
+			"messages": []map[string]interface{}{
+				{"ts": r.FormValue("ts"), "text": "good job sohum", "user": "U_RODRIC"},
+			},
+		})
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "missing_scope"}) //nolint:errcheck
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	a.directory = newSlackDirectory(a.client)
+
+	a.handleReactionAdded(t.Context(), &slackevents.ReactionAddedEvent{
+		Reaction: "ticket",
+		User:     "U_SOHUM",
+		Item:     slackevents.Item{Channel: "C123456", Timestamp: "1234567890.000001"},
+	}, "T1")
+
+	msg := handler.last()
+	if msg == nil {
+		t.Fatal("a refused name lookup must not stop the reaction being forwarded")
+	}
+	if got := msg.PlatformContext.PlatformData["author_id"]; got != "U_RODRIC" {
+		t.Errorf("author_id comes off the message and needs no scope; got %q", got)
+	}
+	if got := msg.PlatformContext.PlatformData["author_name"]; got != "" {
+		t.Errorf("author_name must stay empty rather than guess; got %q", got)
+	}
+}
+
+// Slack omits `user` on a webhook post. An unknown author must stay unknown,
+// never the reactor, or someone else's words get attributed to whoever reacted.
+func TestHandleReactionAdded_LeavesTheAuthorUnsetWhenSlackGivesNone(t *testing.T) {
+	a, handler := newTestAdapterWithReactions([]string{"ticket"})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+			"ok": true,
+			"messages": []map[string]interface{}{
+				{"ts": r.FormValue("ts"), "text": "posted by a webhook", "bot_id": "B1"},
+			},
+		})
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true}) //nolint:errcheck
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	a.directory = newSlackDirectory(a.client)
+
+	a.handleReactionAdded(t.Context(), &slackevents.ReactionAddedEvent{
+		Reaction: "ticket",
+		User:     "U_SOHUM",
+		Item:     slackevents.Item{Channel: "C123456", Timestamp: "1234567890.000001"},
+	}, "T1")
+
+	msg := handler.last()
+	if msg == nil {
+		t.Fatal("an authorless message must still forward the reaction")
+	}
+	if got := msg.PlatformContext.PlatformData["author_id"]; got != "" {
+		t.Errorf("an unknown author must stay unknown, not become the reactor; got %q", got)
+	}
+}
+
 func TestHandleReactionAdded_NonActionableReactionDropped(t *testing.T) {
 	a, handler := newTestAdapterWithReactions([]string{"ticket"})
 
