@@ -390,6 +390,13 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 				webOpts = append(webOpts, web.WithRoomAPIURL(apiURL))
 			}
 		}
+		if cfg.Web.ChatModels != "" {
+			if cm, err := web.ParseChatModels(cfg.Web.ChatModels); err != nil {
+				slog.Warn("[Web] model switching disabled", "err", err)
+			} else {
+				webOpts = append(webOpts, web.WithChatModels(cm))
+			}
+		}
 		webAdapter := web.New(webOpts...)
 		if err := webAdapter.Initialize(ctx, adapter.Config{}); err != nil {
 			slog.Error("Error initializing Web adapter", "err", err)

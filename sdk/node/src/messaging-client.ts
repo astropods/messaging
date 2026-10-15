@@ -26,6 +26,14 @@ export interface Message {
    * An agent with `supportsHistory` replaces its stored history with them first.
    */
   history?: ConversationHistory | null;
+  /** The model to answer with, one of the deployment's live models, else `null`. */
+  model?: ModelChoice | null;
+}
+
+/** A model id under a models entry of astropods.yml. */
+export interface ModelChoice {
+  entry: string;
+  model: string;
 }
 
 /** The turns before a message on the conversation's active branch. */

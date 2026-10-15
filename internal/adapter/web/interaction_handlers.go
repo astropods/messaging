@@ -207,6 +207,7 @@ func (h *Handlers) injectRespond(ctx context.Context, conversationID string, p *
 		Content:        p.text,
 		ConversationId: conversationID,
 	}
+	msg.Model, _ = h.turnModel(nil)
 	if err := h.msgHandler(ctx, msg); err != nil {
 		// END withheld finish to keep the SSE open for this reply, so a failed forward must surface an error (as HandleSendMessage does) rather than hang the stream.
 		if h.turns != nil {
