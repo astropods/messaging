@@ -14,10 +14,12 @@ The channel list now governs channels only. A DM passes it.
 
 `isAllowed` is the single check for messages, mentions, and slash commands, so the change covers all three. Channel behavior is unchanged.
 
-A DM is not open to everyone as a result. `dispatch` still runs the per-user authz check on it, so interface access grants decide who can DM the agent. That matches the deprecation note on `allowed_user_ids`, which points operators at grants for per-user access. To stop DMs entirely, turn off the app's Messages tab in Slack.
+Interface access grants do not narrow this in practice. A fresh Slack deployment is seeded with an `anyone` grant (`seedFreshAuthGrants` in astropods/astro), so the per-user authz check in `dispatch` lets everyone in the workspace through. Who can DM the bot is the operator's call in the Slack app itself: the app's Messages tab turns DMs on or off, the same way channel membership decides where the bot listens.
 
 # Migration
 
-None. Deployments with `allowed_channel_ids` set start accepting DMs from users their interface access allows.
+Behavior change. A deployment with `allowed_channel_ids` set used to block every DM to the bot. It now accepts DMs from anyone its interface access allows, which by default is the whole workspace.
+
+To keep DMs off, turn off the Messages tab in the Slack app's settings (**App Home** > **Show Tabs** > **Messages Tab**).
 
 The public Astropods docs describe `allowed_channel_ids` without saying how it treats DMs. Once this ships, document that the channel list does not apply to direct messages (`docs-public/fern/docs/pages/deploy-agent.mdx` in `astropods/astro`).
