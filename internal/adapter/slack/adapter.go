@@ -497,7 +497,7 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	if !a.isAllowed(ev.Channel, ev.User) {
 		slog.Debug(fmt.Sprintf("[Slack] Message from disallowed channel=%s or user=%s", ev.Channel, ev.User))
 		metrics.MessagesDropped.WithLabelValues("slack", "allowlist").Inc()
-		if !observe {
+		if !a.observeChannels[ev.Channel] {
 			a.sendNotEnabledMessage(ctx, ev.Channel, threadID)
 		}
 		return
