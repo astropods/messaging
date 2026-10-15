@@ -424,6 +424,62 @@ func TestHandleMessage_AllowedChannelIDs_AllowedInvokesHandler(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_AllowedChannelIDs_DMInvokesHandlerWithoutNotice(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}}
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "D123456",
+		User:      "U123",
+		Text:      "hello dm",
+		TimeStamp: "1234567890.000001",
+	}
+
+	a.handleMessage(t.Context(), ev, "", nil)
+
+	if handler.count() != 1 {
+		t.Fatalf("the channel allowlist must not block a DM, got %d messages", handler.count())
+	}
+	if srv.postCount != 0 {
+		t.Errorf("a DM must not get the not-enabled notice, got %d posts: %v", srv.postCount, srv.postedTexts)
+	}
+}
+
+func TestHandleSlashCommand_AllowedChannelIDs_DMInvokesHandler(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}}
+
+	a.handleSlashCommand(t.Context(), slacklib.SlashCommand{
+		Command:   "/ask",
+		Text:      "hello",
+		ChannelID: "D123456",
+		UserID:    "U123",
+	})
+
+	if handler.count() != 1 {
+		t.Fatalf("the channel allowlist must not block a slash command in a DM, got %d messages", handler.count())
+	}
+}
+
+func TestHandleSlashCommand_AllowedChannelIDs_DisallowedChannelDoesNotInvokeHandler(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}}
+
+	a.handleSlashCommand(t.Context(), slacklib.SlashCommand{
+		Command:   "/ask",
+		Text:      "hello",
+		ChannelID: "C123456",
+		UserID:    "U123",
+	})
+
+	if handler.count() != 0 {
+		t.Errorf("a slash command in a channel off the allowlist must not invoke msgHandler, got %d messages", handler.count())
+	}
+}
+
 func TestHandleMessage_AllowedUserIDs_DisallowedDoesNotInvokeHandler(t *testing.T) {
 	a, handler := newTestAdapter()
 	a.config = adapter.Config{AllowedUserIDs: []string{"U999"}}
