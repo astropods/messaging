@@ -494,7 +494,7 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	}
 
 	// Allowlist: if configured, only allow messages from allowed channels or users
-	if !a.isAllowed(ev.Channel, ev.User, isDM) {
+	if !a.isAllowed(ev.Channel, ev.User) {
 		slog.Debug(fmt.Sprintf("[Slack] Message from disallowed channel=%s or user=%s", ev.Channel, ev.User))
 		metrics.MessagesDropped.WithLabelValues("slack", "allowlist").Inc()
 		a.sendNotEnabledMessage(ctx, ev.Channel, threadID)
@@ -982,7 +982,7 @@ func (a *SlackAdapter) handleSlashCommand(ctx context.Context, cmd slack.SlashCo
 	slog.Debug(fmt.Sprintf("[Slack] Slash command: %s %q from user=%s in channel=%s",
 		cmd.Command, cmd.Text, cmd.UserID, cmd.ChannelID))
 
-	if !a.isAllowed(cmd.ChannelID, cmd.UserID, false) {
+	if !a.isAllowed(cmd.ChannelID, cmd.UserID) {
 		slog.Debug(fmt.Sprintf("[Slack] Slash command from disallowed channel=%s or user=%s", cmd.ChannelID, cmd.UserID))
 		metrics.MessagesDropped.WithLabelValues("slack", "allowlist").Inc()
 		return
@@ -1081,7 +1081,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 	slog.Debug(fmt.Sprintf("[Slack] App mentioned: channel=%s, user=%s, text=%s", ev.Channel, ev.User, ev.Text))
 
 	// Allowlist: if configured, only allow mentions from allowed channels or users
-	if !a.isAllowed(ev.Channel, ev.User, false) {
+	if !a.isAllowed(ev.Channel, ev.User) {
 		slog.Debug(fmt.Sprintf("[Slack] App mention from disallowed channel=%s or user=%s", ev.Channel, ev.User))
 		metrics.MessagesDropped.WithLabelValues("slack", "allowlist").Inc()
 		threadID := ev.ThreadTimeStamp
@@ -1317,12 +1317,11 @@ func (a *SlackAdapter) sendNotEnabledMessage(ctx context.Context, channelID, thr
 }
 
 // isAllowed returns true if the message should be dispatched (no allowlist, or channel/user allowed).
-// botDM marks a direct message with the bot; a slash command typed in someone else's DM is not one.
-func (a *SlackAdapter) isAllowed(channelID, userID string, botDM bool) bool {
+// The channel list does not apply to direct messages.
+func (a *SlackAdapter) isAllowed(channelID, userID string) bool {
 	allowedChannels := a.config.AllowedChannelIDs
 	allowedUsers := a.config.AllowedUserIDs
-	dmExempt := botDM && a.config.AllowDirectMessages
-	if len(allowedUsers) == 0 && (len(allowedChannels) == 0 || dmExempt) {
+	if len(allowedUsers) == 0 && (len(allowedChannels) == 0 || isDMChannel(channelID)) {
 		return true
 	}
 	return slices.Contains(allowedChannels, channelID) || slices.Contains(allowedUsers, userID)

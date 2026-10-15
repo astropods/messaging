@@ -106,8 +106,7 @@ SLACK_CONFIG='{
   "actionable_reactions": ["ticket"],
   "allowed_channel_ids": [],
   "allowed_user_ids": [],
-  "observe_channel_ids": [],
-  "allow_direct_messages": false
+  "observe_channel_ids": []
 }'
 
 # gRPC
@@ -365,10 +364,6 @@ Uses PyPA trusted publishing — no token storage required.
 3. Add bot token scopes: `chat:write`, `channels:history`, `groups:history`, `im:history`, `app_mentions:read`
 4. Subscribe to events: `message.channels`, `message.groups`, `message.im`, `app_mention`
 5. Install to workspace
-
-### Channel allowlist
-
-When `allowed_channel_ids` is set, the Slack adapter answers a mention or thread reply from any other channel with a not-enabled notice. A direct message has its own channel ID, so it is blocked too. Set `allow_direct_messages: true` to let direct messages with the bot through the channel list; they still go through the per-user authz check. Slash commands always stay under the channel list.
 
 ### Observe channels
 

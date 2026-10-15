@@ -424,44 +424,33 @@ func TestHandleMessage_AllowedChannelIDs_AllowedInvokesHandler(t *testing.T) {
 	}
 }
 
-func TestHandleMessage_AllowedChannelIDs_DMNeedsAllowDirectMessages(t *testing.T) {
-	cases := []struct {
-		name                string
-		allowDirectMessages bool
-		wantMessages        int
-		wantPosts           int
-	}{
-		{name: "off blocks the DM with a notice", allowDirectMessages: false, wantMessages: 0, wantPosts: 1},
-		{name: "on lets the DM through", allowDirectMessages: true, wantMessages: 1, wantPosts: 0},
+func TestHandleMessage_AllowedChannelIDs_DMInvokesHandlerWithoutNotice(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}}
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "D123456",
+		User:      "U123",
+		Text:      "hello dm",
+		TimeStamp: "1234567890.000001",
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			a, handler := newTestAdapter()
-			a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}, AllowDirectMessages: tc.allowDirectMessages}
-			srv := newFakeSlackServer(t, "")
-			defer srv.Close()
-			a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
 
-			a.handleMessage(t.Context(), &slackevents.MessageEvent{
-				Channel:   "D123456",
-				User:      "U123",
-				Text:      "hello dm",
-				TimeStamp: "1234567890.000001",
-			}, "", nil)
+	a.handleMessage(t.Context(), ev, "", nil)
 
-			if handler.count() != tc.wantMessages {
-				t.Errorf("allow_direct_messages=%v: got %d agent messages, want %d", tc.allowDirectMessages, handler.count(), tc.wantMessages)
-			}
-			if srv.postCount != tc.wantPosts {
-				t.Errorf("allow_direct_messages=%v: got %d not-enabled notices, want %d: %v", tc.allowDirectMessages, srv.postCount, tc.wantPosts, srv.postedTexts)
-			}
-		})
+	if handler.count() != 1 {
+		t.Fatalf("the channel allowlist must not block a DM, got %d messages", handler.count())
+	}
+	if srv.postCount != 0 {
+		t.Errorf("a DM must not get the not-enabled notice, got %d posts: %v", srv.postCount, srv.postedTexts)
 	}
 }
 
-func TestHandleSlashCommand_AllowDirectMessages_DMStaysUnderChannelList(t *testing.T) {
+func TestHandleSlashCommand_AllowedChannelIDs_DMInvokesHandler(t *testing.T) {
 	a, handler := newTestAdapter()
-	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}, AllowDirectMessages: true}
+	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}}
 
 	a.handleSlashCommand(t.Context(), slacklib.SlashCommand{
 		Command:   "/ask",
@@ -470,8 +459,8 @@ func TestHandleSlashCommand_AllowDirectMessages_DMStaysUnderChannelList(t *testi
 		UserID:    "U123",
 	})
 
-	if handler.count() != 0 {
-		t.Errorf("a slash command can come from a DM the bot is not in, so allow_direct_messages must not exempt it, got %d messages", handler.count())
+	if handler.count() != 1 {
+		t.Fatalf("the channel allowlist must not block a slash command in a DM, got %d messages", handler.count())
 	}
 }
 
