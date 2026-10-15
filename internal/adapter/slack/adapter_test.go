@@ -448,7 +448,7 @@ func TestHandleMessage_AllowedChannelIDs_DMInvokesHandlerWithoutNotice(t *testin
 	}
 }
 
-func TestHandleSlashCommand_AllowedChannelIDs_DMInvokesHandler(t *testing.T) {
+func TestHandleSlashCommand_AllowedChannelIDs_DMStaysUnderChannelList(t *testing.T) {
 	a, handler := newTestAdapter()
 	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}}
 
@@ -459,8 +459,8 @@ func TestHandleSlashCommand_AllowedChannelIDs_DMInvokesHandler(t *testing.T) {
 		UserID:    "U123",
 	})
 
-	if handler.count() != 1 {
-		t.Fatalf("the channel allowlist must not block a slash command in a DM, got %d messages", handler.count())
+	if handler.count() != 0 {
+		t.Errorf("a slash command can come from a DM the bot is not in, so the channel list must still block it, got %d messages", handler.count())
 	}
 }
 

@@ -1,8 +1,8 @@
 # Summary
 
-Setting `allowed_channel_ids` blocked every direct message to the bot. A DM has its own `D…` channel ID, so it never matched the list, and the user got the not-enabled notice. Slash commands typed in a DM were dropped the same way.
+Setting `allowed_channel_ids` blocked every direct message to the bot. A DM has its own `D…` channel ID, so it never matched the list, and the user got the not-enabled notice.
 
-The channel list now governs channels only. A DM passes it.
+A direct message with the bot now passes the channel list. Slash commands stay under it.
 
 # Design
 
@@ -12,7 +12,7 @@ The channel list now governs channels only. A DM passes it.
 | set | empty | allowed (was blocked) |
 | any | set | allowed only if U is listed, as before |
 
-`isAllowed` is the single check for messages, mentions, and slash commands, so the change covers all three. Channel behavior is unchanged.
+`isAllowed` takes a `botDM` argument, and only `handleMessage` sets it. Slack sends the bot a DM message event only for its own conversations, so a `D…` channel there is always a DM with the bot. A slash command can be typed in any DM, including one between two people that the bot is not in, so `handleSlashCommand` passes `false`, as does `handleAppMention`. Channel behavior is unchanged.
 
 Interface access grants do not narrow this in practice. A fresh Slack deployment is seeded with an `anyone` grant (`seedFreshAuthGrants` in astropods/astro), so the per-user authz check in `dispatch` lets everyone in the workspace through. Who can DM the bot is the operator's call in the Slack app itself: the app's Messages tab turns DMs on or off, the same way channel membership decides where the bot listens.
 
