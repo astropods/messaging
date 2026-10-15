@@ -130,6 +130,9 @@ type Config struct {
 	// JoinObservedChannels makes the adapter join every public channel in
 	// ObserveChannelIDs at startup.
 	JoinObservedChannels bool
+
+	// AllowDirectMessages exempts direct messages with the bot from AllowedChannelIDs.
+	AllowDirectMessages bool
 }
 
 // RateLimitConfig configures rate limiting
