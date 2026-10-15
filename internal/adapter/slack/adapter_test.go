@@ -170,6 +170,57 @@ func TestHandleMessage_ObserveChannel_TopLevelForwarded(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_ObserveChannel_OffAllowlistDropsSilently(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}}
+	a.observeChannels = map[string]bool{"C123456": true}
+	a.msgDedup = newSlackMsgDedup(8)
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "C123456",
+		User:      "U123",
+		Text:      "hello everyone",
+		TimeStamp: "9999999999.000001",
+	}
+	a.handleMessage(t.Context(), ev, "", nil)
+
+	if handler.count() != 0 {
+		t.Errorf("an observed message off the allowlist must not reach the agent, got %d messages", handler.count())
+	}
+	if srv.postCount != 0 {
+		t.Errorf("an observed message did not address the bot, so it must not get the not-enabled notice, got %d posts: %v", srv.postCount, srv.postedTexts)
+	}
+}
+
+func TestHandleMessage_ObserveChannel_OffAllowlistThreadReplyPostsNotEnabled(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}}
+	a.observeChannels = map[string]bool{"C123456": true}
+	a.msgDedup = newSlackMsgDedup(8)
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	ev := &slackevents.MessageEvent{
+		Channel:         "C123456",
+		User:            "U123",
+		Text:            "reply",
+		TimeStamp:       "9999999999.000002",
+		ThreadTimeStamp: "9999999999.000001",
+	}
+	a.handleMessage(t.Context(), ev, "", nil)
+
+	if handler.count() != 0 {
+		t.Errorf("a thread reply off the allowlist must not reach the agent, got %d messages", handler.count())
+	}
+	if srv.postCount != 1 {
+		t.Errorf("a thread reply off the allowlist must get the not-enabled notice, got %d posts", srv.postCount)
+	}
+}
+
 func TestHandleMessage_ObserveChannel_BotMentionDropped(t *testing.T) {
 	a, handler := newTestAdapter()
 	a.observeChannels = map[string]bool{"C123456": true}
@@ -485,6 +536,9 @@ func TestHandleAppMention_AllowedChannelIDs_DisallowedDoesNotInvokeHandlerAndPos
 
 	if handler.count() != 0 {
 		t.Errorf("disallowed app_mention must not invoke msgHandler, got %d messages", handler.count())
+	}
+	if srv.postCount != 1 {
+		t.Errorf("disallowed app_mention must get the not-enabled notice, got %d posts", srv.postCount)
 	}
 }
 
