@@ -450,8 +450,8 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		return
 	}
 
-	isDM := ev.Channel != "" && ev.Channel[0] == 'D'
-	isChannel := ev.Channel != "" && ev.Channel[0] != 'D'
+	isDM := isDMChannel(ev.Channel)
+	isChannel := ev.Channel != "" && !isDM
 	topLevelInChannel := isChannel && ev.ThreadTimeStamp == ""
 	observe := topLevelInChannel && a.observeChannels[ev.Channel]
 
@@ -1318,13 +1318,19 @@ func (a *SlackAdapter) sendNotEnabledMessage(ctx context.Context, channelID, thr
 	}
 }
 
-// isAllowed returns true if the message should be dispatched (no allowlist, or channel/user allowed)
+// isAllowed returns true if the message should be dispatched (no allowlist, or channel/user allowed).
+// The channel list does not apply to direct messages.
 func (a *SlackAdapter) isAllowed(channelID, userID string) bool {
 	allowedChannels := a.config.AllowedChannelIDs
 	allowedUsers := a.config.AllowedUserIDs
-	return (len(allowedChannels) == 0 && len(allowedUsers) == 0) ||
-		slices.Contains(allowedChannels, channelID) ||
-		slices.Contains(allowedUsers, userID)
+	if len(allowedUsers) == 0 && (len(allowedChannels) == 0 || isDMChannel(channelID)) {
+		return true
+	}
+	return slices.Contains(allowedChannels, channelID) || slices.Contains(allowedUsers, userID)
+}
+
+func isDMChannel(channelID string) bool {
+	return strings.HasPrefix(channelID, "D")
 }
 
 // SetMessageHandler sets the handler for incoming messages from the platform
