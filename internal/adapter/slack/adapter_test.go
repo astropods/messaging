@@ -746,6 +746,51 @@ func TestHandleReactionAdded_EmptyMapDropsAll(t *testing.T) {
 	}
 }
 
+func TestHandleInnerEvent_ActionableReactionRemovalForwarded(t *testing.T) {
+	a, handler := newTestAdapterWithReactions([]string{"knife_fork_plate"})
+
+	a.handleInnerEvent(t.Context(), slackevents.EventsAPIInnerEvent{
+		Type: "reaction_removed",
+		Data: &slackevents.ReactionRemovedEvent{
+			Reaction: "knife_fork_plate",
+			User:     "U123",
+			Item:     slackevents.Item{Channel: "C123456", Timestamp: "1234567890.000001"},
+		},
+	}, "T1", nil)
+
+	msg := handler.last()
+	if msg == nil {
+		t.Fatal("expected an actionable reaction removal to be forwarded")
+	}
+	if want := "[reaction :knife_fork_plate: removed by <@U123> on message]"; msg.Content != want {
+		t.Errorf("content: want %q, got %q", want, msg.Content)
+	}
+	if got := msg.PlatformContext.EventKind; got != pb.PlatformContext_EVENT_KIND_REACTION {
+		t.Errorf("event kind: want REACTION, got %v", got)
+	}
+	if msg.PlatformContext.ChannelId != "C123456" || msg.PlatformContext.MessageId != "1234567890.000001" {
+		t.Errorf("the agent keys on channel and message ts; got channel %q, ts %q",
+			msg.PlatformContext.ChannelId, msg.PlatformContext.MessageId)
+	}
+	if msg.User.Id != "U123" {
+		t.Errorf("User must be whoever removed the reaction; got %q", msg.User.Id)
+	}
+}
+
+func TestHandleReactionRemoved_NonActionableReactionDropped(t *testing.T) {
+	a, handler := newTestAdapterWithReactions([]string{"knife_fork_plate"})
+
+	a.handleReactionRemoved(t.Context(), &slackevents.ReactionRemovedEvent{
+		Reaction: "thumbsup",
+		User:     "U123",
+		Item:     slackevents.Item{Channel: "C123456", Timestamp: "1234567890.000001"},
+	}, "")
+
+	if handler.count() != 0 {
+		t.Errorf("expected a non-actionable reaction removal to be dropped, got %d messages", handler.count())
+	}
+}
+
 // errAuthorizer always returns a transport error. Mirrors a real-world
 // failure where the authz endpoint is unreachable or returns 5xx.
 type errAuthorizer struct {
