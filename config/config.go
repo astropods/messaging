@@ -172,6 +172,8 @@ type SlackAdapterConfig struct {
 	// JoinObservedChannels makes the adapter join every public channel in
 	// ObserveChannelIDs at startup. Off by default.
 	JoinObservedChannels *bool `json:"join_observed_channels,omitempty"`
+	// AllowDirectMessages exempts direct messages from AllowedChannelIDs. Off by default.
+	AllowDirectMessages *bool `json:"allow_direct_messages,omitempty"`
 }
 
 // SlackConfig holds Slack-specific configuration
@@ -292,6 +294,8 @@ func Load() (*Config, error) {
 		ObserveChannelIDs:   cfg.Slack.AdapterConfig.ObserveChannelIDs,
 		JoinObservedChannels: cfg.Slack.AdapterConfig.JoinObservedChannels != nil &&
 			*cfg.Slack.AdapterConfig.JoinObservedChannels,
+		AllowDirectMessages: cfg.Slack.AdapterConfig.AllowDirectMessages != nil &&
+			*cfg.Slack.AdapterConfig.AllowDirectMessages,
 		RateLimit: adapter.RateLimitConfig{
 			RequestsPerSecond: getEnvFloat("SLACK_RATE_LIMIT_RPS", 3.0),
 			BurstSize:         getEnvInt("SLACK_RATE_LIMIT_BURST", 10),

@@ -91,6 +91,24 @@ func TestLoad_SlackConfigJSON_DefaultsWhenAbsent(t *testing.T) {
 	if len(cfg.Slack.Config.ObserveChannelIDs) != 0 {
 		t.Errorf("ObserveChannelIDs default = %v, want empty", cfg.Slack.Config.ObserveChannelIDs)
 	}
+	if cfg.Slack.Config.AllowDirectMessages {
+		t.Errorf("AllowDirectMessages default = true, want false so the channel list keeps blocking DMs")
+	}
+}
+
+func TestLoad_SlackConfigJSON_AllowDirectMessages(t *testing.T) {
+	t.Setenv("SLACK_ENABLED", "true")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
+	t.Setenv("SLACK_CONFIG", `{"allowed_channel_ids":["C1"],"allow_direct_messages":true}`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Slack.Config.AllowDirectMessages {
+		t.Errorf("AllowDirectMessages = false, want true from SLACK_CONFIG allow_direct_messages")
+	}
 }
 
 func TestLoad_SlackConfigJSON_ObserveChannelIDs(t *testing.T) {
