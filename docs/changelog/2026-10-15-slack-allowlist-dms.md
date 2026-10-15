@@ -1,31 +1,23 @@
 # Summary
 
-Setting `allowed_channel_ids` blocks every direct message to the bot. A DM has its own `D…` channel ID, so it never matches the list, and the user gets the not-enabled notice. An operator could not run "these channels, plus DMs", because DM IDs are per user and cannot reasonably be listed.
+Setting `allowed_channel_ids` blocked every direct message to the bot. A DM has its own `D…` channel ID, so it never matched the list, and the user got the not-enabled notice. Slash commands typed in a DM were dropped the same way.
 
-`allow_direct_messages` in `SLACK_CONFIG` now lets direct messages with the bot through the channel list. It is off by default, so the channel list stays strict and no deployment changes behavior on upgrade.
-
-```json
-{ "allowed_channel_ids": ["C0123ABCDEF"], "allow_direct_messages": true }
-```
+The channel list now governs channels only. A DM passes it.
 
 # Design
 
-| `allowed_channel_ids` | `allow_direct_messages` | DM with the bot |
+| `allowed_channel_ids` | `allowed_user_ids` | DM from user U |
 |---|---|---|
-| empty | any | allowed |
-| set | off (default) | blocked with the notice, as before |
-| set | on | allowed |
+| empty | empty | allowed |
+| set | empty | allowed (was blocked) |
+| any | set | allowed only if U is listed, as before |
 
-When `allowed_user_ids` is set, it still applies to DMs either way.
+`isAllowed` is the single check for messages, mentions, and slash commands, so the change covers all three. Channel behavior is unchanged.
 
-The exemption covers only message events, through the `botDM` argument to `isAllowed`. Slack sends a DM message event only for the bot's own conversations, so a `D…` channel there is always a DM with the bot. A slash command can be typed in any DM, including one between two people that the bot is not in. Slash commands and mentions therefore pass `botDM=false` and stay under the channel list.
-
-An exempted DM still goes through the per-user authz check in `dispatch`. A fresh Slack deployment is seeded with an `anyone` grant (`seedFreshAuthGrants` in astropods/astro), so with the option on, anyone in the workspace can DM the agent unless the deployment's interface access is narrowed.
+A DM is not open to everyone as a result. `dispatch` still runs the per-user authz check on it, so interface access grants decide who can DM the agent. That matches the deprecation note on `allowed_user_ids`, which points operators at grants for per-user access. To stop DMs entirely, turn off the app's Messages tab in Slack.
 
 # Migration
 
-None. The option is off by default, so behavior is unchanged until an operator sets it.
+None. Deployments with `allowed_channel_ids` set start accepting DMs from users their interface access allows.
 
-To accept DMs while keeping a channel list, add `"allow_direct_messages": true` to `SLACK_CONFIG`. Then narrow the Slack interface access if the default `anyone` grant is too wide.
-
-`allow_direct_messages` is not yet a field on the deploy form, which lists fixed `SLACK_CONFIG` fields (`template.go` in astropods/astro). Until it is added, set it with `--var 'SLACK_CONFIG=…'` on the CLI. Locally, set it under `dev.interfaces.messaging.slack` in `astropods.yml`. Once this ships, the public docs should describe the option on the deploy page's "Restrict the bot to channels" section.
+The public Astropods docs describe `allowed_channel_ids` without saying how it treats DMs. Once this ships, document that the channel list does not apply to direct messages (`docs-public/fern/docs/pages/deploy-agent.mdx` in `astropods/astro`).
