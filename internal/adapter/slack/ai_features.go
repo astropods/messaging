@@ -49,6 +49,11 @@ func (a *SlackAdapter) setSlackStatus(ctx context.Context, conversationID string
 	if err != nil {
 		return fmt.Errorf("failed to parse conversation ID: %w", err)
 	}
+	// assistant.threads.setStatus rejects the empty thread_ts of a top-level DM (invalid_thread_ts).
+	if threadTS == "" {
+		logctx.FromContext(ctx).Debug("[Slack] Skipping status update without a thread", "conversation_id", conversationID)
+		return nil
+	}
 
 	// Map proto status to Slack status message
 	statusMessage := a.mapStatusToMessage(status)
@@ -69,6 +74,20 @@ func (a *SlackAdapter) setSlackStatus(ctx context.Context, conversationID string
 
 	logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Set status for %s: %s %s", conversationID, emoji, statusMessage))
 	return nil
+}
+
+// clearSlackStatus clears the thread's status indicator; Slack clears it by itself only when the bot replies.
+func (a *SlackAdapter) clearSlackStatus(ctx context.Context, conversationID string) {
+	channelID, threadTS, err := a.parseConversationID(conversationID)
+	if err != nil || threadTS == "" {
+		return
+	}
+	if err := a.rateLimiter.Wait(ctx); err != nil {
+		return
+	}
+	if err := a.aiClient.SetThreadStatus(ctx, channelID, threadTS, "", ""); err != nil {
+		logctx.FromContext(ctx).Warn("[Slack] Clear status failed", "conversation_id", conversationID, "err", err)
+	}
 }
 
 // setSlackPrompts sets suggested prompts using Slack AI APIs
@@ -163,6 +182,7 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 
 		if fullContent == "" {
 			logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Skipping empty message for %s", conversationID))
+			a.clearSlackStatus(ctx, conversationID)
 			return nil
 		}
 
