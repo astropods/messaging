@@ -157,7 +157,7 @@ Scrape endpoint: `http://<host>:9091/metrics`
 | `messaging_messages_received_total` | Counter | `platform` | Messages that passed adapter filtering and reached the gRPC layer |
 | `messaging_messages_forwarded_total` | Counter | `platform` | Messages successfully sent to an agent stream |
 | `messaging_messages_dropped_total` | Counter | `platform`, `reason` | Messages dropped before reaching an agent (`no_agent`, `allowlist`, `bot_filtered`, `app_mention_dedup`) |
-| `messaging_slack_events_total` | Counter | `event_type` | Slack events by type: `dm`, `thread_reply`, `mention`, `reaction`, `observed_top` |
+| `messaging_slack_events_total` | Counter | `event_type` | Slack events by type: `dm`, `thread_reply`, `mention`, `reaction`, `reaction_removed`, `observed_top` |
 | `messaging_agent_responses_total` | Counter | `type` | Agent responses routed back to platform adapters |
 | `messaging_routing_errors_total` | Counter | `adapter` | Errors delivering agent responses to adapters |
 | `messaging_active_streams` | Gauge | — | Currently open bidirectional gRPC agent streams |
@@ -363,7 +363,8 @@ Uses PyPA trusted publishing — no token storage required.
 2. Enable **Socket Mode** and generate an app-level token (`connections:write` scope)
 3. Add bot token scopes: `chat:write`, `channels:history`, `groups:history`, `im:history`, `app_mentions:read`
 4. Subscribe to events: `message.channels`, `message.groups`, `message.im`, `app_mention`
-5. Install to workspace
+5. For `actionable_reactions`, also add the `reactions:read` scope and subscribe to `reaction_added` and `reaction_removed`
+6. Install to workspace
 
 ### Observe channels
 

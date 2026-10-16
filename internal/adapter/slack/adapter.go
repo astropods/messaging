@@ -407,6 +407,9 @@ func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackeve
 	case *slackevents.ReactionAddedEvent:
 		a.handleReactionAdded(ctx, ev, teamID)
 
+	case *slackevents.ReactionRemovedEvent:
+		a.handleReactionRemoved(ctx, ev, teamID)
+
 	case *slackevents.AssistantThreadStartedEvent:
 		a.handleAssistantThreadStarted(ctx, ev, teamID)
 
@@ -1238,6 +1241,39 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 			slog.Error(fmt.Sprintf("[Slack] Error handling reaction: %v", err))
 			a.sendErrorMessage(ctx, ev.Item.Channel, threadID, err)
 		}
+	}
+}
+
+// handleReactionRemoved forwards the removal of an actionable reaction, so an
+// agent can undo what the reaction did. The message is not fetched: the agent
+// keys on channel and message ts, and a removal needs no reply.
+func (a *SlackAdapter) handleReactionRemoved(ctx context.Context, ev *slackevents.ReactionRemovedEvent, teamID string) {
+	if !a.actionableReactions[ev.Reaction] {
+		return
+	}
+
+	metrics.SlackEvents.WithLabelValues("reaction_removed").Inc()
+
+	msg := &pb.Message{
+		Id:             uuid.NewString(),
+		Timestamp:      timestamppb.New(time.Now()),
+		Platform:       "slack",
+		Content:        fmt.Sprintf("[reaction :%s: removed by <@%s> on message]", ev.Reaction, ev.User),
+		ConversationId: fmt.Sprintf("%s-%s", ev.Item.Channel, ev.Item.Timestamp),
+		PlatformContext: &pb.PlatformContext{
+			MessageId: ev.Item.Timestamp,
+			ChannelId: ev.Item.Channel,
+			ThreadId:  ev.Item.Timestamp,
+			EventKind: pb.PlatformContext_EVENT_KIND_REACTION,
+			BotUserId: a.botUserID,
+		},
+		User: &pb.User{
+			Id: ev.User,
+		},
+	}
+
+	if err := a.dispatch(ctx, msg, teamID); err != nil {
+		slog.Error(fmt.Sprintf("[Slack] Error handling reaction removal: %v", err))
 	}
 }
 
