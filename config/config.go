@@ -191,6 +191,8 @@ type WebConfig struct {
 	// coming from this user. Used in local-mode deployments where no ingress
 	// is in front of messaging to inject the OIDC identity header.
 	AuthTestUserID string
+	// ChatModels is the raw CHAT_MODELS JSON.
+	ChatModels string
 }
 
 // MeshConfig holds agent mesh (AMP) adapter configuration. The adapter logs in
@@ -304,6 +306,7 @@ func Load() (*Config, error) {
 		ListenAddr:     getEnv("WEB_LISTEN_ADDR", ":8080"),
 		AllowedOrigins: getEnvList("WEB_ALLOWED_ORIGINS", []string{"*"}),
 		AuthTestUserID: getEnv("WEB_AUTHN_TEST_USER_ID", ""),
+		ChatModels:     getEnv("CHAT_MODELS", ""),
 	}
 
 	cfg.Mesh = MeshConfig{

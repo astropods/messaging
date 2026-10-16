@@ -457,6 +457,27 @@ describe('Proto-loader binary roundtrip: Message history', () => {
   });
 });
 
+describe('Proto-loader binary roundtrip: Message model', () => {
+  const incoming = (model?: unknown) =>
+    deserializeResponse(
+      serializeResponse({
+        conversationId: 'conv-m',
+        incomingMessage: { conversationId: 'conv-m', content: 'hi', ...(model ? { model } : {}) },
+      }),
+    ).incomingMessage;
+
+  it('decodes the chosen model', () => {
+    expect(incoming({ entry: 'default', model: 'claude-opus-4-7' }).model).toEqual({
+      entry: 'default',
+      model: 'claude-opus-4-7',
+    });
+  });
+
+  it('decodes an unset model as null', () => {
+    expect(incoming().model).toBeNull();
+  });
+});
+
 describe('Proto-loader binary roundtrip: AgentConfig supportsHistory', () => {
   it('carries supportsHistory', () => {
     const result = deserializeRequest(

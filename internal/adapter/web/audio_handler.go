@@ -108,6 +108,7 @@ func (h *Handlers) handleAudioSegmentStart(
 			},
 		},
 	}
+	msg.Model, _ = h.turnModel(nil)
 
 	if err := h.msgHandler(ctx, msg); err != nil {
 		slog.Error(fmt.Sprintf("[Web] Error forwarding audio message: %v", err))

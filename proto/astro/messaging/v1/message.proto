@@ -31,6 +31,15 @@ message Message {
   // Set when the earlier turns differ from what the agent last received. An agent
   // with supports_history replaces its stored history with them first.
   ConversationHistory history = 9;
+
+  // The model to answer with, one of the deployment's live models. Unset when it has none.
+  ModelChoice model = 10;
+}
+
+// A model id under a models entry of astropods.yml.
+message ModelChoice {
+  string entry = 1;
+  string model = 2;
 }
 
 // The turns before a message on the conversation's active branch.

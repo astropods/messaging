@@ -56,6 +56,7 @@ type WebAdapter struct {
 	// the store-derived terminal fallback (see settleFreshSubscribe).
 	freshSubscribeSettle time.Duration
 	roomAPIURL           string
+	chatModels           *ChatModels
 }
 
 // WebAdapterOption configures the WebAdapter
@@ -151,6 +152,7 @@ func (a *WebAdapter) Initialize(ctx context.Context, config adapter.Config) erro
 	a.handlers.turns = a.turns
 	a.handlers.freshSubscribeSettle = a.freshSubscribeSettle
 	a.handlers.interactions = a.interactions
+	a.handlers.chatModels = a.chatModels
 
 	slog.Info("[Web] Adapter initialized", "listen", a.listenAddr)
 	return nil

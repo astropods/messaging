@@ -13,6 +13,7 @@ from .astro.messaging.v1.message_pb2 import (
     Attachment,
     ConversationHistory,
     HistoryMessage,
+    ModelChoice,
 )
 from .astro.messaging.v1.response_pb2 import (
     AgentResponse,
@@ -56,6 +57,7 @@ __all__ = [
     "Attachment",
     "ConversationHistory",
     "HistoryMessage",
+    "ModelChoice",
     "AgentResponse",
     "SaveConversationRequest",
     "ThreadHistoryRequest",

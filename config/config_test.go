@@ -286,3 +286,14 @@ func TestLoad_MeshSkillsThatAreNotAJSONListAreIgnored(t *testing.T) {
 		t.Errorf("Mesh.Skills = %+v, want none from a value that is not JSON", cfg.Mesh.Skills)
 	}
 }
+
+func TestLoadReadsChatModels(t *testing.T) {
+	t.Setenv("CHAT_MODELS", `{"default":{"entry":"default","model":"m"},"options":[{"entry":"default","model":"m"}]}`)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Web.ChatModels == "" {
+		t.Fatal("Web.ChatModels is empty, want the CHAT_MODELS value")
+	}
+}

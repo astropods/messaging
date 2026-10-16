@@ -92,7 +92,7 @@ func (x PlatformContext_EventKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PlatformContext_EventKind.Descriptor instead.
 func (PlatformContext_EventKind) EnumDescriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{3, 0}
+	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{4, 0}
 }
 
 type Attachment_Type int32
@@ -150,7 +150,7 @@ func (x Attachment_Type) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Attachment_Type.Descriptor instead.
 func (Attachment_Type) EnumDescriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{5, 0}
+	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{6, 0}
 }
 
 // Message from user to agent (platform → agent)
@@ -173,7 +173,9 @@ type Message struct {
 	ConversationId string `protobuf:"bytes,8,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"` // Stable ID across message lifecycle
 	// Set when the earlier turns differ from what the agent last received. An agent
 	// with supports_history replaces its stored history with them first.
-	History       *ConversationHistory `protobuf:"bytes,9,opt,name=history,proto3" json:"history,omitempty"`
+	History *ConversationHistory `protobuf:"bytes,9,opt,name=history,proto3" json:"history,omitempty"`
+	// The model to answer with, one of the deployment's live models. Unset when it has none.
+	Model         *ModelChoice `protobuf:"bytes,10,opt,name=model,proto3" json:"model,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -271,6 +273,66 @@ func (x *Message) GetHistory() *ConversationHistory {
 	return nil
 }
 
+func (x *Message) GetModel() *ModelChoice {
+	if x != nil {
+		return x.Model
+	}
+	return nil
+}
+
+// A model id under a models entry of astropods.yml.
+type ModelChoice struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entry         string                 `protobuf:"bytes,1,opt,name=entry,proto3" json:"entry,omitempty"`
+	Model         string                 `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ModelChoice) Reset() {
+	*x = ModelChoice{}
+	mi := &file_astro_messaging_v1_message_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelChoice) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelChoice) ProtoMessage() {}
+
+func (x *ModelChoice) ProtoReflect() protoreflect.Message {
+	mi := &file_astro_messaging_v1_message_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelChoice.ProtoReflect.Descriptor instead.
+func (*ModelChoice) Descriptor() ([]byte, []int) {
+	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ModelChoice) GetEntry() string {
+	if x != nil {
+		return x.Entry
+	}
+	return ""
+}
+
+func (x *ModelChoice) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
 // The turns before a message on the conversation's active branch.
 type ConversationHistory struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -282,7 +344,7 @@ type ConversationHistory struct {
 
 func (x *ConversationHistory) Reset() {
 	*x = ConversationHistory{}
-	mi := &file_astro_messaging_v1_message_proto_msgTypes[1]
+	mi := &file_astro_messaging_v1_message_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -294,7 +356,7 @@ func (x *ConversationHistory) String() string {
 func (*ConversationHistory) ProtoMessage() {}
 
 func (x *ConversationHistory) ProtoReflect() protoreflect.Message {
-	mi := &file_astro_messaging_v1_message_proto_msgTypes[1]
+	mi := &file_astro_messaging_v1_message_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -307,7 +369,7 @@ func (x *ConversationHistory) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConversationHistory.ProtoReflect.Descriptor instead.
 func (*ConversationHistory) Descriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{1}
+	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ConversationHistory) GetMessages() []*HistoryMessage {
@@ -336,7 +398,7 @@ type HistoryMessage struct {
 
 func (x *HistoryMessage) Reset() {
 	*x = HistoryMessage{}
-	mi := &file_astro_messaging_v1_message_proto_msgTypes[2]
+	mi := &file_astro_messaging_v1_message_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -348,7 +410,7 @@ func (x *HistoryMessage) String() string {
 func (*HistoryMessage) ProtoMessage() {}
 
 func (x *HistoryMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_astro_messaging_v1_message_proto_msgTypes[2]
+	mi := &file_astro_messaging_v1_message_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -361,7 +423,7 @@ func (x *HistoryMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryMessage.ProtoReflect.Descriptor instead.
 func (*HistoryMessage) Descriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{2}
+	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *HistoryMessage) GetId() string {
@@ -422,7 +484,7 @@ type PlatformContext struct {
 
 func (x *PlatformContext) Reset() {
 	*x = PlatformContext{}
-	mi := &file_astro_messaging_v1_message_proto_msgTypes[3]
+	mi := &file_astro_messaging_v1_message_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -434,7 +496,7 @@ func (x *PlatformContext) String() string {
 func (*PlatformContext) ProtoMessage() {}
 
 func (x *PlatformContext) ProtoReflect() protoreflect.Message {
-	mi := &file_astro_messaging_v1_message_proto_msgTypes[3]
+	mi := &file_astro_messaging_v1_message_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -447,7 +509,7 @@ func (x *PlatformContext) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlatformContext.ProtoReflect.Descriptor instead.
 func (*PlatformContext) Descriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{3}
+	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *PlatformContext) GetMessageId() string {
@@ -535,7 +597,7 @@ type User struct {
 
 func (x *User) Reset() {
 	*x = User{}
-	mi := &file_astro_messaging_v1_message_proto_msgTypes[4]
+	mi := &file_astro_messaging_v1_message_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -547,7 +609,7 @@ func (x *User) String() string {
 func (*User) ProtoMessage() {}
 
 func (x *User) ProtoReflect() protoreflect.Message {
-	mi := &file_astro_messaging_v1_message_proto_msgTypes[4]
+	mi := &file_astro_messaging_v1_message_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -560,7 +622,7 @@ func (x *User) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use User.ProtoReflect.Descriptor instead.
 func (*User) Descriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{4}
+	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *User) GetId() string {
@@ -622,7 +684,7 @@ type Attachment struct {
 
 func (x *Attachment) Reset() {
 	*x = Attachment{}
-	mi := &file_astro_messaging_v1_message_proto_msgTypes[5]
+	mi := &file_astro_messaging_v1_message_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -634,7 +696,7 @@ func (x *Attachment) String() string {
 func (*Attachment) ProtoMessage() {}
 
 func (x *Attachment) ProtoReflect() protoreflect.Message {
-	mi := &file_astro_messaging_v1_message_proto_msgTypes[5]
+	mi := &file_astro_messaging_v1_message_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -647,7 +709,7 @@ func (x *Attachment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Attachment.ProtoReflect.Descriptor instead.
 func (*Attachment) Descriptor() ([]byte, []int) {
-	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{5}
+	return file_astro_messaging_v1_message_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Attachment) GetType() Attachment_Type {
@@ -724,7 +786,7 @@ var File_astro_messaging_v1_message_proto protoreflect.FileDescriptor
 
 const file_astro_messaging_v1_message_proto_rawDesc = "" +
 	"\n" +
-	" astro/messaging/v1/message.proto\x12\x12astro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb5\x03\n" +
+	" astro/messaging/v1/message.proto\x12\x12astro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xec\x03\n" +
 	"\aMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x128\n" +
 	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x1a\n" +
@@ -734,7 +796,12 @@ const file_astro_messaging_v1_message_proto_rawDesc = "" +
 	"\acontent\x18\x06 \x01(\tR\acontent\x12@\n" +
 	"\vattachments\x18\a \x03(\v2\x1e.astro.messaging.v1.AttachmentR\vattachments\x12'\n" +
 	"\x0fconversation_id\x18\b \x01(\tR\x0econversationId\x12A\n" +
-	"\ahistory\x18\t \x01(\v2'.astro.messaging.v1.ConversationHistoryR\ahistory\"v\n" +
+	"\ahistory\x18\t \x01(\v2'.astro.messaging.v1.ConversationHistoryR\ahistory\x125\n" +
+	"\x05model\x18\n" +
+	" \x01(\v2\x1f.astro.messaging.v1.ModelChoiceR\x05model\"9\n" +
+	"\vModelChoice\x12\x14\n" +
+	"\x05entry\x18\x01 \x01(\tR\x05entry\x12\x14\n" +
+	"\x05model\x18\x02 \x01(\tR\x05model\"v\n" +
 	"\x13ConversationHistory\x12>\n" +
 	"\bmessages\x18\x01 \x03(\v2\".astro.messaging.v1.HistoryMessageR\bmessages\x12\x1f\n" +
 	"\vis_complete\x18\x02 \x01(\bR\n" +
@@ -817,36 +884,38 @@ func file_astro_messaging_v1_message_proto_rawDescGZIP() []byte {
 }
 
 var file_astro_messaging_v1_message_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_astro_messaging_v1_message_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_astro_messaging_v1_message_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_astro_messaging_v1_message_proto_goTypes = []any{
 	(PlatformContext_EventKind)(0), // 0: astro.messaging.v1.PlatformContext.EventKind
 	(Attachment_Type)(0),           // 1: astro.messaging.v1.Attachment.Type
 	(*Message)(nil),                // 2: astro.messaging.v1.Message
-	(*ConversationHistory)(nil),    // 3: astro.messaging.v1.ConversationHistory
-	(*HistoryMessage)(nil),         // 4: astro.messaging.v1.HistoryMessage
-	(*PlatformContext)(nil),        // 5: astro.messaging.v1.PlatformContext
-	(*User)(nil),                   // 6: astro.messaging.v1.User
-	(*Attachment)(nil),             // 7: astro.messaging.v1.Attachment
-	nil,                            // 8: astro.messaging.v1.PlatformContext.PlatformDataEntry
-	nil,                            // 9: astro.messaging.v1.User.UserDataEntry
-	(*timestamppb.Timestamp)(nil),  // 10: google.protobuf.Timestamp
+	(*ModelChoice)(nil),            // 3: astro.messaging.v1.ModelChoice
+	(*ConversationHistory)(nil),    // 4: astro.messaging.v1.ConversationHistory
+	(*HistoryMessage)(nil),         // 5: astro.messaging.v1.HistoryMessage
+	(*PlatformContext)(nil),        // 6: astro.messaging.v1.PlatformContext
+	(*User)(nil),                   // 7: astro.messaging.v1.User
+	(*Attachment)(nil),             // 8: astro.messaging.v1.Attachment
+	nil,                            // 9: astro.messaging.v1.PlatformContext.PlatformDataEntry
+	nil,                            // 10: astro.messaging.v1.User.UserDataEntry
+	(*timestamppb.Timestamp)(nil),  // 11: google.protobuf.Timestamp
 }
 var file_astro_messaging_v1_message_proto_depIdxs = []int32{
-	10, // 0: astro.messaging.v1.Message.timestamp:type_name -> google.protobuf.Timestamp
-	5,  // 1: astro.messaging.v1.Message.platform_context:type_name -> astro.messaging.v1.PlatformContext
-	6,  // 2: astro.messaging.v1.Message.user:type_name -> astro.messaging.v1.User
-	7,  // 3: astro.messaging.v1.Message.attachments:type_name -> astro.messaging.v1.Attachment
-	3,  // 4: astro.messaging.v1.Message.history:type_name -> astro.messaging.v1.ConversationHistory
-	4,  // 5: astro.messaging.v1.ConversationHistory.messages:type_name -> astro.messaging.v1.HistoryMessage
-	8,  // 6: astro.messaging.v1.PlatformContext.platform_data:type_name -> astro.messaging.v1.PlatformContext.PlatformDataEntry
-	0,  // 7: astro.messaging.v1.PlatformContext.event_kind:type_name -> astro.messaging.v1.PlatformContext.EventKind
-	9,  // 8: astro.messaging.v1.User.user_data:type_name -> astro.messaging.v1.User.UserDataEntry
-	1,  // 9: astro.messaging.v1.Attachment.type:type_name -> astro.messaging.v1.Attachment.Type
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	11, // 0: astro.messaging.v1.Message.timestamp:type_name -> google.protobuf.Timestamp
+	6,  // 1: astro.messaging.v1.Message.platform_context:type_name -> astro.messaging.v1.PlatformContext
+	7,  // 2: astro.messaging.v1.Message.user:type_name -> astro.messaging.v1.User
+	8,  // 3: astro.messaging.v1.Message.attachments:type_name -> astro.messaging.v1.Attachment
+	4,  // 4: astro.messaging.v1.Message.history:type_name -> astro.messaging.v1.ConversationHistory
+	3,  // 5: astro.messaging.v1.Message.model:type_name -> astro.messaging.v1.ModelChoice
+	5,  // 6: astro.messaging.v1.ConversationHistory.messages:type_name -> astro.messaging.v1.HistoryMessage
+	9,  // 7: astro.messaging.v1.PlatformContext.platform_data:type_name -> astro.messaging.v1.PlatformContext.PlatformDataEntry
+	0,  // 8: astro.messaging.v1.PlatformContext.event_kind:type_name -> astro.messaging.v1.PlatformContext.EventKind
+	10, // 9: astro.messaging.v1.User.user_data:type_name -> astro.messaging.v1.User.UserDataEntry
+	1,  // 10: astro.messaging.v1.Attachment.type:type_name -> astro.messaging.v1.Attachment.Type
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_astro_messaging_v1_message_proto_init() }
@@ -860,7 +929,7 @@ func file_astro_messaging_v1_message_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_astro_messaging_v1_message_proto_rawDesc), len(file_astro_messaging_v1_message_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   8,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

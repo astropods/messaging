@@ -138,3 +138,12 @@ def test_message_history_roundtrip_keeps_an_empty_history_present():
     restored.ParseFromString(reset.SerializeToString())
     assert restored.HasField("history"), "an empty history means 'no earlier turns' and must survive the wire"
     assert not message_pb2.Message().HasField("history")
+
+
+def test_message_model_roundtrip():
+    from astropods_messaging import ModelChoice
+
+    msg = message_pb2.Message(conversation_id="conv-1", model=ModelChoice(entry="default", model="claude-opus-4-7"))
+    restored = message_pb2.Message.FromString(msg.SerializeToString())
+    assert (restored.model.entry, restored.model.model) == ("default", "claude-opus-4-7")
+    assert not message_pb2.Message().HasField("model")
