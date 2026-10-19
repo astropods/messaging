@@ -31,10 +31,10 @@ const (
 var jobPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 
 type Config struct {
-	URL    string
-	Token  string
-	Name   string
-	Jobs []Job
+	URL   string
+	Token string
+	Name  string
+	Jobs  []Job
 }
 
 type Job struct {

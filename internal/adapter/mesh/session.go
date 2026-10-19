@@ -49,7 +49,7 @@ type job struct {
 type card struct {
 	Name          string   `json:"name"`
 	Kind          string   `json:"kind"`
-	Jobs        []job  `json:"jobs,omitempty"`
+	Jobs          []job    `json:"jobs,omitempty"`
 	Accepts       []string `json:"accepts,omitempty"`
 	MaxConcurrent int      `json:"max_concurrent,omitempty"`
 }

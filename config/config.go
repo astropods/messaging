@@ -202,7 +202,7 @@ type MeshConfig struct {
 	Enabled bool
 	URL     string
 	Name    string
-	Jobs  []MeshJob
+	Jobs    []MeshJob
 }
 
 type MeshJob struct {
@@ -314,7 +314,7 @@ func Load() (*Config, error) {
 		Enabled: getEnvBool("MESH_ENABLED", false),
 		URL:     getEnv("ASTRO_MESH_URL", ""),
 		Name:    getEnv("MESH_NAME", ""),
-		Jobs:  getEnvMeshJobs("MESH_JOBS"),
+		Jobs:    getEnvMeshJobs("MESH_JOBS"),
 	}
 
 	// Metrics configuration
