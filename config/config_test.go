@@ -109,6 +109,21 @@ func TestLoad_SlackConfigJSON_ObserveChannelIDs(t *testing.T) {
 	}
 }
 
+func TestLoad_SlackConfigJSON_MentionUserIDs(t *testing.T) {
+	t.Setenv("SLACK_ENABLED", "true")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
+	t.Setenv("SLACK_CONFIG", `{"mention_user_ids":["U_SOHUM"]}`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Slack.Config.MentionUserIDs; len(got) != 1 || got[0] != "U_SOHUM" {
+		t.Errorf("MentionUserIDs = %v, want [U_SOHUM]: SLACK_CONFIG must reach the adapter config", got)
+	}
+}
+
 func TestLoad_SlackConfigJSON_PartialJSON(t *testing.T) {
 	t.Setenv("SLACK_ENABLED", "true")
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")

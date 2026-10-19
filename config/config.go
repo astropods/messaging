@@ -169,6 +169,9 @@ type SlackAdapterConfig struct {
 	// ObserveChannelIDs lists channel IDs where top-level (non-mention) messages
 	// are forwarded to the agent instead of being dropped.
 	ObserveChannelIDs []string `json:"observe_channel_ids,omitempty"`
+	// MentionUserIDs lists user IDs whose mention forwards a top-level message
+	// from any channel the bot is in, as if the channel were observed.
+	MentionUserIDs []string `json:"mention_user_ids,omitempty"`
 	// JoinObservedChannels makes the adapter join every public channel in
 	// ObserveChannelIDs at startup. Off by default.
 	JoinObservedChannels *bool `json:"join_observed_channels,omitempty"`
@@ -290,6 +293,7 @@ func Load() (*Config, error) {
 		AllowedChannelIDs:   cfg.Slack.AdapterConfig.AllowedChannelIDs,
 		AllowedUserIDs:      cfg.Slack.AdapterConfig.AllowedUserIDs,
 		ObserveChannelIDs:   cfg.Slack.AdapterConfig.ObserveChannelIDs,
+		MentionUserIDs:      cfg.Slack.AdapterConfig.MentionUserIDs,
 		JoinObservedChannels: cfg.Slack.AdapterConfig.JoinObservedChannels != nil &&
 			*cfg.Slack.AdapterConfig.JoinObservedChannels,
 		RateLimit: adapter.RateLimitConfig{

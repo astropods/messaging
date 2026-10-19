@@ -52,6 +52,10 @@ type SlackAdapter struct {
 	// forwarded (built from config.ObserveChannelIDs at init).
 	observeChannels map[string]bool
 
+	// mentionTokens are the <@U…> tokens whose presence observes a top-level
+	// message in any channel (built from config.MentionUserIDs at init).
+	mentionTokens []string
+
 	// botUserID is the authed bot user (U…), resolved via auth.test at init when
 	// observe channels are configured. Used to drop top-level messages that
 	// contain <@botUserID> so they don't double-deliver with app_mention.
@@ -121,10 +125,12 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 
 	// Observe channels are passive watch channels — the user didn't address the
 	// bot, so per-user authz doesn't apply. Operators opt into this by listing
-	// the channel in observe_channel_ids. Identity rewrite is also skipped: the
+	// the channel in observe_channel_ids, or a user in mention_user_ids, which
+	// forwards as EVENT_KIND_OBSERVED. Identity rewrite is also skipped: the
 	// observed user didn't address the bot, so attribution back to them on a
 	// trace would misrepresent intent.
-	observed := msg != nil && msg.PlatformContext != nil && a.observeChannels[msg.PlatformContext.ChannelId]
+	observed := msg != nil && msg.PlatformContext != nil &&
+		(a.observeChannels[msg.PlatformContext.ChannelId] || msg.PlatformContext.EventKind == pb.PlatformContext_EVENT_KIND_OBSERVED)
 
 	if !observed && a.authz != nil && msg != nil && msg.User != nil {
 		result, err := a.authz.Authorize(ctx, authz.IdentityTypeSlack, msg.User.Id, authz.AdapterSlack, teamID)
@@ -217,7 +223,12 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 			a.observeChannels[id] = true
 		}
 	}
-	if len(a.observeChannels) > 0 {
+	for _, id := range config.MentionUserIDs {
+		if id != "" {
+			a.mentionTokens = append(a.mentionTokens, "<@"+id+">")
+		}
+	}
+	if len(a.observeChannels) > 0 || len(a.mentionTokens) > 0 {
 		a.msgDedup = newSlackMsgDedup(512)
 	}
 	if config.JoinObservedChannels {
@@ -233,8 +244,8 @@ func (a *SlackAdapter) Initialize(ctx context.Context, config adapter.Config) er
 		slog.Info("[Slack] resolved bot user id from auth.test", "bot_user_id", a.botUserID)
 	}
 
-	slog.Info(fmt.Sprintf("[Slack] Adapter initialized (Socket Mode: %v, observe channels: %v, actionable reactions: %v, allowed channels: %v, allowed user IDs: %v)",
-		config.SocketMode, config.ObserveChannelIDs, config.ActionableReactions, config.AllowedChannelIDs, config.AllowedUserIDs))
+	slog.Info(fmt.Sprintf("[Slack] Adapter initialized (Socket Mode: %v, observe channels: %v, mention user IDs: %v, actionable reactions: %v, allowed channels: %v, allowed user IDs: %v)",
+		config.SocketMode, config.ObserveChannelIDs, config.MentionUserIDs, config.ActionableReactions, config.AllowedChannelIDs, config.AllowedUserIDs))
 	return nil
 }
 
@@ -441,6 +452,16 @@ func eventAttachments(payload json.RawMessage) []slack.Attachment {
 
 // handleMessage processes message events. attachments comes from
 // eventAttachments, since the parsed event does not carry it.
+// mentionsWatchedUser reports whether text <@mentions> a user in mention_user_ids.
+func (a *SlackAdapter) mentionsWatchedUser(text string) bool {
+	for _, token := range a.mentionTokens {
+		if strings.Contains(text, token) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.MessageEvent, teamID string, attachments []slack.Attachment) {
 	// Filter out bot messages
 	if ev.BotID != "" {
@@ -456,7 +477,7 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	isDM := isDMChannel(ev.Channel)
 	isChannel := ev.Channel != "" && !isDM
 	topLevelInChannel := isChannel && ev.ThreadTimeStamp == ""
-	observe := topLevelInChannel && a.observeChannels[ev.Channel]
+	observe := topLevelInChannel && (a.observeChannels[ev.Channel] || a.mentionsWatchedUser(ev.Text))
 
 	// Slack delivers both message.channels and app_mention for a mention, inside
 	// a thread as well as at top level, and app_mention handles both.
@@ -500,7 +521,7 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	if !a.isAllowed(ev.Channel, ev.User, isDM) {
 		slog.Debug(fmt.Sprintf("[Slack] Message from disallowed channel=%s or user=%s", ev.Channel, ev.User))
 		metrics.MessagesDropped.WithLabelValues("slack", "allowlist").Inc()
-		if !a.observeChannels[ev.Channel] {
+		if !a.observeChannels[ev.Channel] && !observe {
 			a.sendNotEnabledMessage(ctx, ev.Channel, threadID)
 		}
 		return

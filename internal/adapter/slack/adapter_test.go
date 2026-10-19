@@ -170,6 +170,52 @@ func TestHandleMessage_ObserveChannel_TopLevelForwarded(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_MentionUserIDs_TopLevelMentionForwardedFromAnyChannel(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.mentionTokens = []string{"<@U_SOHUM>"}
+	a.msgDedup = newSlackMsgDedup(8)
+	authz := &errAuthorizer{err: errors.New("authz must not be called for an observed message")}
+	a.authz = authz
+
+	a.handleMessage(t.Context(), &slackevents.MessageEvent{
+		Channel:   "C_NOT_OBSERVED",
+		User:      "U_RODRIC",
+		Text:      "<@U_SOHUM> can you look at the deploy form?",
+		TimeStamp: "7777777777.000001",
+	}, "", nil)
+
+	msg := handler.last()
+	if msg == nil {
+		t.Fatal("a top-level message mentioning a mention_user_ids user must forward from a channel that is not observed")
+	}
+	if msg.PlatformContext.EventKind != pb.PlatformContext_EVENT_KIND_OBSERVED {
+		t.Errorf("expected EventKind=EVENT_KIND_OBSERVED, got %v", msg.PlatformContext.EventKind)
+	}
+	if msg.PlatformContext.ThreadId != "7777777777.000001" {
+		t.Errorf("a reply must open a thread under the message: want ThreadId == TimeStamp, got %q", msg.PlatformContext.ThreadId)
+	}
+	if authz.calls != 0 {
+		t.Errorf("the mentioned user did not address the bot, so per-user authz must be skipped as for an observe channel; got %d calls", authz.calls)
+	}
+}
+
+func TestHandleMessage_MentionUserIDs_TopLevelWithoutMentionIgnored(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.mentionTokens = []string{"<@U_SOHUM>"}
+	a.msgDedup = newSlackMsgDedup(8)
+
+	a.handleMessage(t.Context(), &slackevents.MessageEvent{
+		Channel:   "C_NOT_OBSERVED",
+		User:      "U_RODRIC",
+		Text:      "<@U_SOMEONE_ELSE> can you look?",
+		TimeStamp: "7777777777.000002",
+	}, "", nil)
+
+	if handler.count() != 0 {
+		t.Errorf("a top-level message that mentions no listed user must stay dropped, got %d messages", handler.count())
+	}
+}
+
 func TestHandleMessage_ObserveChannel_OffAllowlistDropsSilently(t *testing.T) {
 	cases := []struct {
 		name     string
