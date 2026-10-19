@@ -31,8 +31,8 @@ type AgentConfig struct {
 	// files API doesn't advertise an upload that would be silently ignored.
 	// Opt-in: an unset value (older agents) reads as false.
 	SupportsFiles bool `protobuf:"varint,3,opt,name=supports_files,json=supportsFiles,proto3" json:"supports_files,omitempty"`
-	// Deprecated and ignored: declare mesh skills in astropods.yml agent.skills,
-	// which the platform passes to the Mesh adapter as MESH_SKILLS.
+	// Deprecated and ignored: declare mesh jobs in astropods.yml agent.jobs,
+	// which the platform passes to the Mesh adapter as MESH_JOBS.
 	Skills []*AgentSkill `protobuf:"bytes,4,rep,name=skills,proto3" json:"skills,omitempty"`
 	// Agent replaces its stored history with Message.history; enables message editing.
 	SupportsHistory bool `protobuf:"varint,5,opt,name=supports_history,json=supportsHistory,proto3" json:"supports_history,omitempty"`
