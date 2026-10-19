@@ -381,4 +381,14 @@ Behaviour in an observe channel:
 - Slack retries / rapid duplicates are suppressed by an in-memory dedup (2-minute window).
 - Per-user authz is bypassed — the user did not address the bot, so operator-configured grants don't apply. Tighten `allowed_channel_ids` if you need a channel-level gate.
 
+### Mention user IDs
+
+Set `mention_user_ids` to forward a top-level message from **any** channel the bot is in, when it `<@mentions>` one of the listed users. It is forwarded exactly like an observed message, so the channel needs no entry in `observe_channel_ids`. Useful for an agent that collects what is asked of one person.
+
+```json
+{ "mention_user_ids": ["U0123ABCDEF"] }
+```
+
+Thread replies already reach the agent from every channel the bot is in, so this covers the top-level case. Slack sends nothing from a channel the bot is not a member of.
+
 Every outbound `pb.Message` from the Slack adapter also carries `PlatformContext.bot_user_id` (resolved once at init from `auth.test`). The adapter strips `<@bot>` from `app_mention` content; this field lets the agent still detect "I was mentioned" — including on observed traffic.

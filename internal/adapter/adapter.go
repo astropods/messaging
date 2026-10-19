@@ -127,6 +127,10 @@ type Config struct {
 	// mentions the bot user is delivered via app_mention only (not duplicated).
 	ObserveChannelIDs []string
 
+	// MentionUserIDs lists user IDs whose <@mention> forwards a top-level
+	// message from any channel the bot is in, as an observed message.
+	MentionUserIDs []string
+
 	// JoinObservedChannels makes the adapter join every public channel in
 	// ObserveChannelIDs at startup.
 	JoinObservedChannels bool
