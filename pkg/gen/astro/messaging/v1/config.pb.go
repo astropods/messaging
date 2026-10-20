@@ -36,8 +36,11 @@ type AgentConfig struct {
 	Skills []*AgentSkill `protobuf:"bytes,4,rep,name=skills,proto3" json:"skills,omitempty"`
 	// Agent replaces its stored history with Message.history; enables message editing.
 	SupportsHistory bool `protobuf:"varint,5,opt,name=supports_history,json=supportsHistory,proto3" json:"supports_history,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Models a chat user can pick from, the first being the agent's default. The
+	// web client shows a model picker when there are two or more.
+	Models        []string `protobuf:"bytes,6,rep,name=models,proto3" json:"models,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentConfig) Reset() {
@@ -103,6 +106,13 @@ func (x *AgentConfig) GetSupportsHistory() bool {
 		return x.SupportsHistory
 	}
 	return false
+}
+
+func (x *AgentConfig) GetModels() []string {
+	if x != nil {
+		return x.Models
+	}
+	return nil
 }
 
 type AgentSkill struct {
@@ -411,13 +421,14 @@ var File_astro_messaging_v1_config_proto protoreflect.FileDescriptor
 
 const file_astro_messaging_v1_config_proto_rawDesc = "" +
 	"\n" +
-	"\x1fastro/messaging/v1/config.proto\x12\x12astro.messaging.v1\"\xf7\x01\n" +
+	"\x1fastro/messaging/v1/config.proto\x12\x12astro.messaging.v1\"\x8f\x02\n" +
 	"\vAgentConfig\x12#\n" +
 	"\rsystem_prompt\x18\x01 \x01(\tR\fsystemPrompt\x129\n" +
 	"\x05tools\x18\x02 \x03(\v2#.astro.messaging.v1.AgentToolConfigR\x05tools\x12%\n" +
 	"\x0esupports_files\x18\x03 \x01(\bR\rsupportsFiles\x126\n" +
 	"\x06skills\x18\x04 \x03(\v2\x1e.astro.messaging.v1.AgentSkillR\x06skills\x12)\n" +
-	"\x10supports_history\x18\x05 \x01(\bR\x0fsupportsHistory\"B\n" +
+	"\x10supports_history\x18\x05 \x01(\bR\x0fsupportsHistory\x12\x16\n" +
+	"\x06models\x18\x06 \x03(\tR\x06models\"B\n" +
 	"\n" +
 	"AgentSkill\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +

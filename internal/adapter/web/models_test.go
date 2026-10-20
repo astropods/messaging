@@ -5,64 +5,33 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
-const chatModelsJSON = `{"default":{"entry":"default","model":"sonnet"},"options":[{"entry":"default","model":"sonnet"},{"entry":"default","model":"opus"}]}`
-
-func testChatModels(t *testing.T) *ChatModels {
-	t.Helper()
-	cm, err := ParseChatModels(chatModelsJSON)
-	if err != nil {
-		t.Fatalf("parse chat models: %v", err)
-	}
-	return cm
-}
-
-func TestParseChatModels(t *testing.T) {
-	cm, err := ParseChatModels(chatModelsJSON)
-	if err != nil {
-		t.Fatalf("valid CHAT_MODELS: %v", err)
-	}
-	want := &ChatModels{
-		Default: ModelChoice{Entry: "default", Model: "sonnet"},
-		Options: []ModelChoice{{Entry: "default", Model: "sonnet"}, {Entry: "default", Model: "opus"}},
-	}
-	if !reflect.DeepEqual(cm, want) {
-		t.Fatalf("ParseChatModels = %+v, want %+v", cm, want)
-	}
-
-	for name, raw := range map[string]string{
-		"not json":           `[`,
-		"no options":         `{"default":{"entry":"default","model":"sonnet"},"options":[]}`,
-		"option no model":    `{"default":{"entry":"default","model":"sonnet"},"options":[{"entry":"default","model":"sonnet"},{"entry":"default"}]}`,
-		"default not listed": `{"default":{"entry":"default","model":"haiku"},"options":[{"entry":"default","model":"sonnet"}]}`,
-	} {
-		if _, err := ParseChatModels(raw); err == nil {
-			t.Errorf("%s: ParseChatModels(%s) succeeded, want an error", name, raw)
-		}
-	}
+func agentWithModels(models ...string) *store.AgentConfigStore {
+	cs := store.NewAgentConfigStore()
+	cs.Set(&pb.AgentConfig{Models: models})
+	return cs
 }
 
 func modelSendRequest(model string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/api/conversations/conv-1/messages",
-		strings.NewReader(`{"content":"hi","model":`+model+`}`))
+		strings.NewReader(`{"content":"hi","model":`+strconvQuote(model)+`}`))
 	req.Header.Set("X-User-ID", "user-1")
 	req.SetPathValue("id", "conv-1")
 	return req
 }
 
-func modelHandlers(t *testing.T, cm *ChatModels) (*Handlers, *[]*pb.Message) {
+func modelHandlers(t *testing.T, cs *store.AgentConfigStore) (*Handlers, *[]*pb.Message) {
 	t.Helper()
 	h, _ := newChatTitleHandlers(t)
-	h.chatModels = cm
+	h.agentConfigStore = cs
 	var forwarded []*pb.Message
 	h.SetMessageHandler(func(_ context.Context, msg *pb.Message) error {
 		forwarded = append(forwarded, msg)
@@ -71,22 +40,22 @@ func modelHandlers(t *testing.T, cm *ChatModels) (*Handlers, *[]*pb.Message) {
 	return h, &forwarded
 }
 
-func TestASendCarriesTheChosenModelToTheAgent(t *testing.T) {
-	h, forwarded := modelHandlers(t, testChatModels(t))
+func TestASendCarriesTheModelPickedToTheAgent(t *testing.T) {
+	h, forwarded := modelHandlers(t, agentWithModels("claude-sonnet-4-6", "claude-opus-4-7"))
 
 	w := httptest.NewRecorder()
-	h.HandleSendMessage(w, modelSendRequest(`{"entry":"default","model":"opus"}`))
+	h.HandleSendMessage(w, modelSendRequest("claude-opus-4-7"))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("send: got %d %s", w.Code, w.Body.String())
 	}
-	if got := (*forwarded)[0].GetModel(); got.GetEntry() != "default" || got.GetModel() != "opus" {
-		t.Fatalf("forwarded model = %v, want default/opus", got)
+	if got := (*forwarded)[0].GetModel(); got != "claude-opus-4-7" {
+		t.Fatalf("forwarded model = %q, want claude-opus-4-7", got)
 	}
 }
 
-func TestASendWithoutAModelCarriesTheDefault(t *testing.T) {
-	h, forwarded := modelHandlers(t, testChatModels(t))
+func TestASendWithoutAModelLeavesTheChoiceToTheAgent(t *testing.T) {
+	h, forwarded := modelHandlers(t, agentWithModels("claude-sonnet-4-6", "claude-opus-4-7"))
 
 	w := httptest.NewRecorder()
 	h.HandleSendMessage(w, sendMessageRequest("user-1", "conv-1", "hi"))
@@ -94,75 +63,42 @@ func TestASendWithoutAModelCarriesTheDefault(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("send: got %d %s", w.Code, w.Body.String())
 	}
-	if got := (*forwarded)[0].GetModel(); got.GetModel() != "sonnet" {
-		t.Fatalf("forwarded model = %v, want the default sonnet", got)
+	if got := (*forwarded)[0].GetModel(); got != "" {
+		t.Fatalf("forwarded model = %q, want none", got)
 	}
 }
 
-func TestASendWithAnUnofferedModelIsRejectedBeforeTheAgent(t *testing.T) {
-	cases := map[string]*ChatModels{
-		"not listed":           testChatModels(t),
-		"no models configured": nil,
+func TestASendWithAModelTheAgentDoesNotOfferIsRejectedBeforeTheAgent(t *testing.T) {
+	cases := map[string]*store.AgentConfigStore{
+		"not in the agent's list":  agentWithModels("claude-sonnet-4-6", "claude-opus-4-7"),
+		"agent declares no models": agentWithModels(),
+		"no agent config yet":      store.NewAgentConfigStore(),
 	}
-	for name, cm := range cases {
+	for name, cs := range cases {
 		t.Run(name, func(t *testing.T) {
-			h, forwarded := modelHandlers(t, cm)
+			h, forwarded := modelHandlers(t, cs)
 
 			w := httptest.NewRecorder()
-			h.HandleSendMessage(w, modelSendRequest(`{"entry":"default","model":"haiku"}`))
+			h.HandleSendMessage(w, modelSendRequest("gpt-4o"))
 
 			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid_model") {
 				t.Fatalf("got %d %s, want 400 invalid_model", w.Code, w.Body.String())
 			}
 			if len(*forwarded) != 0 {
-				t.Fatalf("a rejected model reached the agent")
+				t.Fatal("a model the agent does not offer reached the agent")
 			}
 		})
 	}
 }
 
-func TestASendWithoutChatModelsCarriesNoModel(t *testing.T) {
-	h, forwarded := modelHandlers(t, nil)
-
-	w := httptest.NewRecorder()
-	h.HandleSendMessage(w, sendMessageRequest("user-1", "conv-1", "hi"))
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("send: got %d %s", w.Code, w.Body.String())
-	}
-	if got := (*forwarded)[0].GetModel(); got != nil {
-		t.Fatalf("forwarded model = %v, want none", got)
-	}
-}
-
-func TestAWriteYourOwnReplyTurnCarriesTheDefaultModel(t *testing.T) {
-	h, _, _ := newEndpointHandlers(t)
-	h.turns = newTurnTracker()
-	h.chatModels = testChatModels(t)
-	var forwarded *pb.Message
-	h.SetMessageHandler(func(_ context.Context, m *pb.Message) error {
-		forwarded = m
-		return nil
-	})
-
-	h.injectRespond(context.Background(), "conv", &pendingRespond{userID: "alice", text: "Tuesday"})
-
-	if forwarded.GetModel().GetModel() != "sonnet" {
-		t.Fatalf("respond turn model = %v, want the default sonnet", forwarded.GetModel())
-	}
-}
-
-func TestHandleAgentConfigReportsChatModels(t *testing.T) {
-	models := func(cm *ChatModels) *ChatModels {
-		cs := store.NewAgentConfigStore()
-		cs.Set(&pb.AgentConfig{})
+func TestHandleAgentConfigReportsTheAgentsModels(t *testing.T) {
+	models := func(cs *store.AgentConfigStore) []string {
 		h := NewHandlers(NewConnectionManager(time.Second), &NoopSessionManager{}, nil, cs)
-		h.chatModels = cm
 		w := httptest.NewRecorder()
 		h.HandleAgentConfig(w, httptest.NewRequest(http.MethodGet, "/api/agent/config", nil))
 		var resp struct {
 			Capabilities struct {
-				Models *ChatModels `json:"models"`
+				Models []string `json:"models"`
 			} `json:"capabilities"`
 		}
 		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -171,22 +107,11 @@ func TestHandleAgentConfigReportsChatModels(t *testing.T) {
 		return resp.Capabilities.Models
 	}
 
-	cm := testChatModels(t)
-	if got := models(cm); !reflect.DeepEqual(got, cm) {
-		t.Errorf("capabilities.models = %+v, want %+v", got, cm)
+	want := []string{"claude-sonnet-4-6", "claude-opus-4-7"}
+	if got := models(agentWithModels(want...)); !slices.Equal(got, want) {
+		t.Errorf("capabilities.models = %v, want %v", got, want)
 	}
-	if got := models(nil); got != nil {
-		t.Errorf("capabilities.models without CHAT_MODELS = %+v, want absent", got)
-	}
-}
-
-func TestWithChatModelsReachesTheHandlers(t *testing.T) {
-	cm := testChatModels(t)
-	a := New(WithChatModels(cm))
-	if err := a.Initialize(context.Background(), adapter.Config{}); err != nil {
-		t.Fatalf("initialize: %v", err)
-	}
-	if a.handlers.chatModels != cm {
-		t.Fatalf("handlers.chatModels = %v, want the adapter's chat models", a.handlers.chatModels)
+	if got := models(agentWithModels()); got != nil {
+		t.Errorf("capabilities.models for an agent with none = %v, want absent", got)
 	}
 }

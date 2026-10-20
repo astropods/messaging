@@ -458,7 +458,7 @@ describe('Proto-loader binary roundtrip: Message history', () => {
 });
 
 describe('Proto-loader binary roundtrip: Message model', () => {
-  const incoming = (model?: unknown) =>
+  const incoming = (model?: string) =>
     deserializeResponse(
       serializeResponse({
         conversationId: 'conv-m',
@@ -466,15 +466,21 @@ describe('Proto-loader binary roundtrip: Message model', () => {
       }),
     ).incomingMessage;
 
-  it('decodes the chosen model', () => {
-    expect(incoming({ entry: 'default', model: 'claude-opus-4-7' }).model).toEqual({
-      entry: 'default',
-      model: 'claude-opus-4-7',
-    });
+  it('decodes the picked model', () => {
+    expect(incoming('claude-opus-4-7').model).toBe('claude-opus-4-7');
   });
 
-  it('decodes an unset model as null', () => {
-    expect(incoming().model).toBeNull();
+  it('decodes an unset model as an empty string', () => {
+    expect(incoming().model).toBe('');
+  });
+});
+
+describe('Proto-loader binary roundtrip: AgentConfig models', () => {
+  it('carries the models in order', () => {
+    const result = deserializeRequest(
+      serializeRequest({ agentConfig: { systemPrompt: '', tools: [], models: ['claude-sonnet-4-6', 'claude-opus-4-7'] } }),
+    );
+    expect(result.agentConfig.models).toEqual(['claude-sonnet-4-6', 'claude-opus-4-7']);
   });
 });
 

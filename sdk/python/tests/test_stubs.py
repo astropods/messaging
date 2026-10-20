@@ -140,10 +140,13 @@ def test_message_history_roundtrip_keeps_an_empty_history_present():
     assert not message_pb2.Message().HasField("history")
 
 
-def test_message_model_roundtrip():
-    from astropods_messaging import ModelChoice
 
-    msg = message_pb2.Message(conversation_id="conv-1", model=ModelChoice(entry="default", model="claude-opus-4-7"))
-    restored = message_pb2.Message.FromString(msg.SerializeToString())
-    assert (restored.model.entry, restored.model.model) == ("default", "claude-opus-4-7")
-    assert not message_pb2.Message().HasField("model")
+def test_message_model_and_agent_models_roundtrip():
+    from astropods_messaging.astro.messaging.v1 import config_pb2
+
+    msg = message_pb2.Message(conversation_id="conv-1", model="claude-opus-4-7")
+    assert message_pb2.Message.FromString(msg.SerializeToString()).model == "claude-opus-4-7"
+    assert message_pb2.Message().model == ""
+
+    config = config_pb2.AgentConfig(models=["claude-sonnet-4-6", "claude-opus-4-7"])
+    assert list(config_pb2.AgentConfig.FromString(config.SerializeToString()).models) == ["claude-sonnet-4-6", "claude-opus-4-7"]

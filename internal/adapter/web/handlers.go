@@ -44,7 +44,6 @@ type Handlers struct {
 	freshSubscribeSettle time.Duration
 	interactions         store.InteractionStore // shared with WebAdapter
 	rooms                *roomChats
-	chatModels           *ChatModels
 }
 
 // NewHandlers creates a new Handlers instance
@@ -159,8 +158,8 @@ type SendMessageRequest struct {
 	EditOf string `json:"edit_of,omitempty"`
 	// ParentID is the newest message the client shows; a stale one gets 409 stale_branch.
 	ParentID string `json:"parent_id,omitempty"`
-	// Model must be in CHAT_MODELS; unset sends the default.
-	Model *ModelChoice `json:"model,omitempty"`
+	// Model must be one of the agent's AgentConfig.models; unset leaves the choice to the agent.
+	Model string `json:"model,omitempty"`
 }
 
 // sendAttachmentInput is a client-declared attachment reference on a send. Only
@@ -259,8 +258,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model, ok := h.turnModel(req.Model)
-	if !ok {
+	if !h.offersModel(req.Model) {
 		writeInvalidModel(w)
 		return
 	}
@@ -338,7 +336,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		Content:        req.Content,
 		ConversationId: conversationID,
 		Attachments:    protoAtts,
-		Model:          model,
+		Model:          req.Model,
 	}
 	if roomID != "" {
 		msg.PlatformContext.PlatformData = map[string]string{"mesh_scope": roomID}
@@ -978,9 +976,9 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 		// wired AND the agent declared it consumes attachments. The client hides
 		// the composer's upload affordance when false, so an agent that never wires
 		// up the files API doesn't advertise an upload that would be ignored.
-		Files  bool        `json:"files"`
-		Edit   bool        `json:"edit"`
-		Models *ChatModels `json:"models,omitempty"`
+		Files  bool     `json:"files"`
+		Edit   bool     `json:"edit"`
+		Models []string `json:"models,omitempty"`
 	}
 	type agentConfigResp struct {
 		SystemPrompt string           `json:"systemPrompt"`
@@ -1018,7 +1016,7 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 		Capabilities: capabilitiesResp{
 			Files:  h.fileStore != nil && config.GetSupportsFiles(),
 			Edit:   h.editsSupported(),
-			Models: h.chatModels,
+			Models: config.GetModels(),
 		},
 	}
 

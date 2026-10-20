@@ -26,14 +26,8 @@ export interface Message {
    * An agent with `supportsHistory` replaces its stored history with them first.
    */
   history?: ConversationHistory | null;
-  /** The model to answer with, one of the deployment's live models, else `null`. */
-  model?: ModelChoice | null;
-}
-
-/** A model id under a models entry of astropods.yml. */
-export interface ModelChoice {
-  entry: string;
-  model: string;
+  /** The model the user picked in chat, one of `AgentConfig.models`. Empty when none was picked. */
+  model?: string;
 }
 
 /** The turns before a message on the conversation's active branch. */
@@ -412,6 +406,8 @@ export interface AgentConfig {
   skills?: AgentSkill[];
   /** Set true when the agent replaces its stored history with `Message.history`; enables message editing. */
   supportsHistory?: boolean;
+  /** Models a chat user can pick from, the first being the agent's default. Two or more show a picker. */
+  models?: string[];
 }
 
 export interface AgentSkill {

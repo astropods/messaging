@@ -32,14 +32,8 @@ message Message {
   // with supports_history replaces its stored history with them first.
   ConversationHistory history = 9;
 
-  // The model to answer with, one of the deployment's live models. Unset when it has none.
-  ModelChoice model = 10;
-}
-
-// A model id under a models entry of astropods.yml.
-message ModelChoice {
-  string entry = 1;
-  string model = 2;
+  // The model the user picked in chat, one of AgentConfig.models. Empty when none was picked.
+  string model = 10;
 }
 
 // The turns before a message on the conversation's active branch.
