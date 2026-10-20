@@ -202,10 +202,10 @@ type MeshConfig struct {
 	Enabled bool
 	URL     string
 	Name    string
-	Skills  []MeshSkill
+	Jobs    []MeshJob
 }
 
-type MeshSkill struct {
+type MeshJob struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 }
@@ -314,7 +314,7 @@ func Load() (*Config, error) {
 		Enabled: getEnvBool("MESH_ENABLED", false),
 		URL:     getEnv("ASTRO_MESH_URL", ""),
 		Name:    getEnv("MESH_NAME", ""),
-		Skills:  getEnvMeshSkills("MESH_SKILLS"),
+		Jobs:    getEnvMeshJobs("MESH_JOBS"),
 	}
 
 	// Metrics configuration
@@ -397,17 +397,17 @@ func getEnvInt(key string, defaultValue int) int {
 	return defaultValue
 }
 
-func getEnvMeshSkills(key string) []MeshSkill {
+func getEnvMeshJobs(key string) []MeshJob {
 	value := os.Getenv(key)
 	if value == "" {
 		return nil
 	}
-	var skills []MeshSkill
-	if err := json.Unmarshal([]byte(value), &skills); err != nil {
-		slog.Warn("ignoring MESH_SKILLS that is not a JSON list of skills", "err", err)
+	var jobs []MeshJob
+	if err := json.Unmarshal([]byte(value), &jobs); err != nil {
+		slog.Warn("ignoring MESH_JOBS that is not a JSON list of jobs", "err", err)
 		return nil
 	}
-	return skills
+	return jobs
 }
 
 func getEnvList(key string, defaultValue []string) []string {

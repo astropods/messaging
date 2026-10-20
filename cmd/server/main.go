@@ -410,10 +410,10 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			URL:   cfg.Mesh.URL,
 			Token: cfg.Authz.IdentityToken,
 			Name:  cfg.Mesh.Name,
-			Skills: func() []mesh.Skill {
-				out := make([]mesh.Skill, 0, len(cfg.Mesh.Skills))
-				for _, s := range cfg.Mesh.Skills {
-					out = append(out, mesh.Skill{Name: s.Name, Description: s.Description})
+			Jobs: func() []mesh.Job {
+				out := make([]mesh.Job, 0, len(cfg.Mesh.Jobs))
+				for _, s := range cfg.Mesh.Jobs {
+					out = append(out, mesh.Job{Name: s.Name, Description: s.Description})
 				}
 				return out
 			}(),

@@ -28,16 +28,16 @@ const (
 	maxConcurrent = 4
 )
 
-var skillPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+var jobPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 
 type Config struct {
-	URL    string
-	Token  string
-	Name   string
-	Skills []Skill
+	URL   string
+	Token string
+	Name  string
+	Jobs  []Job
 }
 
-type Skill struct {
+type Job struct {
 	Name        string
 	Description string
 }
@@ -122,38 +122,38 @@ func (a *Adapter) HydrateThread(context.Context, string, *store.ThreadHistorySto
 	return nil
 }
 
-func (a *Adapter) skills() []skill {
-	var out []skill
+func (a *Adapter) jobs() []job {
+	var out []job
 	add := func(name, description string) {
 		switch {
 		case strings.HasPrefix(name, agentPrefix):
-			slog.Warn("[Mesh] ignoring declared skill with the reserved agent. prefix", "skill", name)
-		case !skillPattern.MatchString(name):
-			slog.Warn("[Mesh] ignoring declared skill that is not a valid skill name", "skill", name)
-		case slices.ContainsFunc(out, func(s skill) bool { return s.Name == name }):
+			slog.Warn("[Mesh] ignoring declared job with the reserved agent. prefix", "job", name)
+		case !jobPattern.MatchString(name):
+			slog.Warn("[Mesh] ignoring declared job that is not a valid job name", "job", name)
+		case slices.ContainsFunc(out, func(s job) bool { return s.Name == name }):
 		default:
-			out = append(out, skill{Name: name, Description: description})
+			out = append(out, job{Name: name, Description: description})
 		}
 	}
-	if identity := agentPrefix + strings.ToLower(a.cfg.Name); a.cfg.Name != "" && skillPattern.MatchString(identity) {
-		out = append(out, skill{Name: identity})
+	if identity := agentPrefix + strings.ToLower(a.cfg.Name); a.cfg.Name != "" && jobPattern.MatchString(identity) {
+		out = append(out, job{Name: identity})
 	}
-	for _, s := range a.cfg.Skills {
+	for _, s := range a.cfg.Jobs {
 		add(s.Name, s.Description)
 	}
 	return out
 }
 
-func skillNames(skills []skill) []string {
-	names := make([]string, 0, len(skills))
-	for _, s := range skills {
+func jobNames(jobs []job) []string {
+	names := make([]string, 0, len(jobs))
+	for _, s := range jobs {
 		names = append(names, s.Name)
 	}
 	return names
 }
 
-func (a *Adapter) card(skills []skill) card {
-	c := card{Name: a.cfg.Name, Kind: "agent", Accepts: []string{"text", "data"}, MaxConcurrent: maxConcurrent, Skills: skills}
+func (a *Adapter) card(jobs []job) card {
+	c := card{Name: a.cfg.Name, Kind: "agent", Accepts: []string{"text", "data"}, MaxConcurrent: maxConcurrent, Jobs: jobs}
 	if c.Name == "" {
 		c.Name = "agent"
 	}
@@ -189,8 +189,8 @@ func (a *Adapter) run(ctx context.Context) {
 }
 
 func (a *Adapter) connect(ctx context.Context) error {
-	skills := a.skills()
-	s, welcome, err := dial(ctx, a.cfg.URL, a.cfg.Token, a.card(skills))
+	jobs := a.jobs()
+	s, welcome, err := dial(ctx, a.cfg.URL, a.cfg.Token, a.card(jobs))
 	if err != nil {
 		return err
 	}
@@ -200,7 +200,7 @@ func (a *Adapter) connect(ctx context.Context) error {
 		s.close()
 		a.dropTurns()
 	}()
-	slog.Info("[Mesh] joined the mesh", "address", s.address, "skills", skillNames(skills))
+	slog.Info("[Mesh] joined the mesh", "address", s.address, "jobs", jobNames(jobs))
 
 	interval := time.Duration(welcome.HeartbeatIntervalS) * time.Second
 	if interval <= 0 {

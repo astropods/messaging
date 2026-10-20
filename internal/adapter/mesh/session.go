@@ -41,7 +41,7 @@ type envelope struct {
 	Metadata json.RawMessage `json:"metadata,omitempty"`
 }
 
-type skill struct {
+type job struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 }
@@ -49,7 +49,7 @@ type skill struct {
 type card struct {
 	Name          string   `json:"name"`
 	Kind          string   `json:"kind"`
-	Skills        []skill  `json:"skills,omitempty"`
+	Jobs          []job    `json:"jobs,omitempty"`
 	Accepts       []string `json:"accepts,omitempty"`
 	MaxConcurrent int      `json:"max_concurrent,omitempty"`
 }
