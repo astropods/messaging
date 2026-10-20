@@ -1,23 +1,18 @@
 # Summary
 
-An agent can list several models in `astropods.yml`, but a chat user could not choose between them: the deploy picked one model for every turn. With `selection: live` on its model entries, astro-server now sends the list to this sidecar, and the web chat lets a user pick a model for each message. The sidecar checks the pick against the list and tells the agent which model to answer with.
+An agent answered every web-chat turn with one model, and a chat user could not switch. An agent can now declare the models a chat user may pick from when it registers. The web chat shows them in a model picker, and this sidecar checks each pick and tells the agent which model to answer with.
 
 # Design
 
-```
-CHAT_MODELS='{"default":{"entry":"default","model":"claude-sonnet-4-6"},"options":[{"entry":"default","model":"claude-sonnet-4-6"},{"entry":"default","model":"claude-opus-4-7"}]}'
-```
+- **The agent declares the list.** `AgentConfig.models` is a list of model ids, the first being the agent's default. The ids mean whatever the agent's code makes of them.
+- **`GET /api/agent/config` reports `capabilities.models`** with the agent's list, the way it reports `files` and `edit`. It is absent when the agent declares none.
+- **A send names its model.** `POST /api/conversations/{id}/messages` takes an optional `model`. A model the agent does not offer, or any model when it offers none or has not registered yet, returns 400 `invalid_model` before the agent runs.
+- **The agent receives `Message.model`**, the picked id. A send without `model`, a "write your own reply" turn, and an audio turn carry an empty value, which leaves the agent on its default.
 
-- **The list comes from the spec.** astro-server sets `CHAT_MODELS` from the live entries of `astropods.yml`, with the model chosen at deploy as the default. `ParseChatModels` refuses a value with no options, an option without an entry or a model, or a default that is not an option. A refused value logs a warning and leaves model switching off, so the chat keeps working.
-- **`GET /api/agent/config` reports `capabilities.models`** as `{default, options}` when the list is set, the way it reports `files` and `edit`.
-- **A send names its model.** `POST /api/conversations/{id}/messages` takes an optional `model: {entry, model}`. A model that is not in the list, or any model when the list is unset, returns 400 `invalid_model` before the agent runs.
-- **Every web turn carries a model when the list is set.** A send without `model`, a "write your own reply" turn, and an audio turn get the default. The agent then needs no deploy-time fallback for those paths.
-- **The agent receives `Message.model`**, a new `ModelChoice {entry, model}`. The entry is part of the choice so that an agent with several model entries knows which provider client to use.
-
-The gateway key reaches every model the gateway serves. The check here keeps a chat user on the builder's list. It does not limit the agent's own code.
+The platform's AI Gateway key reaches every model the gateway serves. This check keeps a chat user on the agent's list; it does not limit the agent's own code.
 
 # Migration
 
-None for running deployments: without `CHAT_MODELS` nothing changes, and a send without `model` behaves as before.
+None for running deployments: an agent that declares no models behaves as before, and a send without `model` is unchanged.
 
-The SDKs move to `0.4.0`: `@astropods/messaging` and `astropods-messaging` carry `Message.model` and `ModelChoice`. The packaged adapters in `astropods/adapters` hand the model to the agent's framework.
+The SDKs move to `0.4.0`: `@astropods/messaging` and `astropods-messaging` carry `Message.model` and `AgentConfig.models`. The packaged adapters in `astropods/adapters` take a `models` option and pass the pick to the agent's framework.
