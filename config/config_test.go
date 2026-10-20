@@ -109,6 +109,21 @@ func TestLoad_SlackConfigJSON_ObserveChannelIDs(t *testing.T) {
 	}
 }
 
+func TestLoad_SlackConfigJSON_MentionUserIDs(t *testing.T) {
+	t.Setenv("SLACK_ENABLED", "true")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
+	t.Setenv("SLACK_CONFIG", `{"mention_user_ids":["U_SOHUM"]}`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Slack.Config.MentionUserIDs; len(got) != 1 || got[0] != "U_SOHUM" {
+		t.Errorf("MentionUserIDs = %v, want [U_SOHUM]: SLACK_CONFIG must reach the adapter config", got)
+	}
+}
+
 func TestLoad_SlackConfigJSON_PartialJSON(t *testing.T) {
 	t.Setenv("SLACK_ENABLED", "true")
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
@@ -259,30 +274,30 @@ func TestLoad_SlackSocketModeDisabled_NoAppTokenRequired(t *testing.T) {
 	}
 }
 
-func TestLoad_MeshSkillsParseFromJSON(t *testing.T) {
-	t.Setenv("MESH_SKILLS", `[{"name":"github.issue.investigate","description":"Investigates a new GitHub issue."},{"name":"notes.summarize"}]`)
+func TestLoad_MeshJobsParseFromJSON(t *testing.T) {
+	t.Setenv("MESH_JOBS", `[{"name":"github.issue.investigate","description":"Investigates a new GitHub issue."},{"name":"notes.summarize"}]`)
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	want := []MeshSkill{
+	want := []MeshJob{
 		{Name: "github.issue.investigate", Description: "Investigates a new GitHub issue."},
 		{Name: "notes.summarize"},
 	}
-	if len(cfg.Mesh.Skills) != len(want) || cfg.Mesh.Skills[0] != want[0] || cfg.Mesh.Skills[1] != want[1] {
-		t.Errorf("Mesh.Skills = %+v, want %+v", cfg.Mesh.Skills, want)
+	if len(cfg.Mesh.Jobs) != len(want) || cfg.Mesh.Jobs[0] != want[0] || cfg.Mesh.Jobs[1] != want[1] {
+		t.Errorf("Mesh.Jobs = %+v, want %+v", cfg.Mesh.Jobs, want)
 	}
 }
 
-func TestLoad_MeshSkillsThatAreNotAJSONListAreIgnored(t *testing.T) {
-	t.Setenv("MESH_SKILLS", "github.issue.investigate")
+func TestLoad_MeshJobsThatAreNotAJSONListAreIgnored(t *testing.T) {
+	t.Setenv("MESH_JOBS", "github.issue.investigate")
 
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load() error = %v, want the sidecar to start with no declared skills", err)
+		t.Fatalf("Load() error = %v, want the sidecar to start with no declared jobs", err)
 	}
-	if len(cfg.Mesh.Skills) != 0 {
-		t.Errorf("Mesh.Skills = %+v, want none from a value that is not JSON", cfg.Mesh.Skills)
+	if len(cfg.Mesh.Jobs) != 0 {
+		t.Errorf("Mesh.Jobs = %+v, want none from a value that is not JSON", cfg.Mesh.Jobs)
 	}
 }

@@ -400,8 +400,8 @@ export interface AgentConfig {
    */
   supportsFiles?: boolean;
   /**
-   * @deprecated Ignored. Declare mesh skills in `astropods.yml` under
-   * `agent.skills`; the platform passes them to the sidecar.
+   * @deprecated Ignored. Declare mesh jobs in `astropods.yml` under
+   * `agent.jobs`; the platform passes them to the sidecar.
    */
   skills?: AgentSkill[];
   /** Set true when the agent replaces its stored history with `Message.history`; enables message editing. */

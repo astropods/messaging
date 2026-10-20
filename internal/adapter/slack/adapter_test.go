@@ -170,6 +170,52 @@ func TestHandleMessage_ObserveChannel_TopLevelForwarded(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_MentionUserIDs_TopLevelMentionForwardedFromAnyChannel(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.mentionTokens = []string{"<@U_SOHUM>"}
+	a.msgDedup = newSlackMsgDedup(8)
+	authz := &errAuthorizer{err: errors.New("authz must not be called for an observed message")}
+	a.authz = authz
+
+	a.handleMessage(t.Context(), &slackevents.MessageEvent{
+		Channel:   "C_NOT_OBSERVED",
+		User:      "U_RODRIC",
+		Text:      "<@U_SOHUM> can you look at the deploy form?",
+		TimeStamp: "7777777777.000001",
+	}, "", nil)
+
+	msg := handler.last()
+	if msg == nil {
+		t.Fatal("a top-level message mentioning a mention_user_ids user must forward from a channel that is not observed")
+	}
+	if msg.PlatformContext.EventKind != pb.PlatformContext_EVENT_KIND_OBSERVED {
+		t.Errorf("expected EventKind=EVENT_KIND_OBSERVED, got %v", msg.PlatformContext.EventKind)
+	}
+	if msg.PlatformContext.ThreadId != "7777777777.000001" {
+		t.Errorf("a reply must open a thread under the message: want ThreadId == TimeStamp, got %q", msg.PlatformContext.ThreadId)
+	}
+	if authz.calls != 0 {
+		t.Errorf("the mentioned user did not address the bot, so per-user authz must be skipped as for an observe channel; got %d calls", authz.calls)
+	}
+}
+
+func TestHandleMessage_MentionUserIDs_TopLevelWithoutMentionIgnored(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.mentionTokens = []string{"<@U_SOHUM>"}
+	a.msgDedup = newSlackMsgDedup(8)
+
+	a.handleMessage(t.Context(), &slackevents.MessageEvent{
+		Channel:   "C_NOT_OBSERVED",
+		User:      "U_RODRIC",
+		Text:      "<@U_SOMEONE_ELSE> can you look?",
+		TimeStamp: "7777777777.000002",
+	}, "", nil)
+
+	if handler.count() != 0 {
+		t.Errorf("a top-level message that mentions no listed user must stay dropped, got %d messages", handler.count())
+	}
+}
+
 func TestHandleMessage_ObserveChannel_OffAllowlistDropsSilently(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -461,6 +507,62 @@ func TestHandleMessage_AllowedChannelIDs_AllowedInvokesHandler(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_AllowedChannelIDs_DMInvokesHandlerWithoutNotice(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}}
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+
+	ev := &slackevents.MessageEvent{
+		Channel:   "D123456",
+		User:      "U123",
+		Text:      "hello dm",
+		TimeStamp: "1234567890.000001",
+	}
+
+	a.handleMessage(t.Context(), ev, "", nil)
+
+	if handler.count() != 1 {
+		t.Fatalf("the channel allowlist must not block a DM, got %d messages", handler.count())
+	}
+	if srv.postCount != 0 {
+		t.Errorf("a DM must not get the not-enabled notice, got %d posts: %v", srv.postCount, srv.postedTexts)
+	}
+}
+
+func TestHandleSlashCommand_AllowedChannelIDs_DMStaysUnderChannelList(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}}
+
+	a.handleSlashCommand(t.Context(), slacklib.SlashCommand{
+		Command:   "/ask",
+		Text:      "hello",
+		ChannelID: "D123456",
+		UserID:    "U123",
+	})
+
+	if handler.count() != 0 {
+		t.Errorf("a slash command can come from a DM the bot is not in, so the channel list must still block it, got %d messages", handler.count())
+	}
+}
+
+func TestHandleSlashCommand_AllowedChannelIDs_DisallowedChannelDoesNotInvokeHandler(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.config = adapter.Config{AllowedChannelIDs: []string{"C999"}}
+
+	a.handleSlashCommand(t.Context(), slacklib.SlashCommand{
+		Command:   "/ask",
+		Text:      "hello",
+		ChannelID: "C123456",
+		UserID:    "U123",
+	})
+
+	if handler.count() != 0 {
+		t.Errorf("a slash command in a channel off the allowlist must not invoke msgHandler, got %d messages", handler.count())
+	}
+}
+
 func TestHandleMessage_AllowedUserIDs_DisallowedDoesNotInvokeHandler(t *testing.T) {
 	a, handler := newTestAdapter()
 	a.config = adapter.Config{AllowedUserIDs: []string{"U999"}}
@@ -743,6 +845,51 @@ func TestHandleReactionAdded_EmptyMapDropsAll(t *testing.T) {
 
 	if handler.count() != 0 {
 		t.Errorf("expected all reactions dropped when no actionable reactions configured, got %d", handler.count())
+	}
+}
+
+func TestHandleInnerEvent_ActionableReactionRemovalForwarded(t *testing.T) {
+	a, handler := newTestAdapterWithReactions([]string{"knife_fork_plate"})
+
+	a.handleInnerEvent(t.Context(), slackevents.EventsAPIInnerEvent{
+		Type: "reaction_removed",
+		Data: &slackevents.ReactionRemovedEvent{
+			Reaction: "knife_fork_plate",
+			User:     "U123",
+			Item:     slackevents.Item{Channel: "C123456", Timestamp: "1234567890.000001"},
+		},
+	}, "T1", nil)
+
+	msg := handler.last()
+	if msg == nil {
+		t.Fatal("expected an actionable reaction removal to be forwarded")
+	}
+	if want := "[reaction :knife_fork_plate: removed by <@U123> on message]"; msg.Content != want {
+		t.Errorf("content: want %q, got %q", want, msg.Content)
+	}
+	if got := msg.PlatformContext.EventKind; got != pb.PlatformContext_EVENT_KIND_REACTION {
+		t.Errorf("event kind: want REACTION, got %v", got)
+	}
+	if msg.PlatformContext.ChannelId != "C123456" || msg.PlatformContext.MessageId != "1234567890.000001" {
+		t.Errorf("the agent keys on channel and message ts; got channel %q, ts %q",
+			msg.PlatformContext.ChannelId, msg.PlatformContext.MessageId)
+	}
+	if msg.User.Id != "U123" {
+		t.Errorf("User must be whoever removed the reaction; got %q", msg.User.Id)
+	}
+}
+
+func TestHandleReactionRemoved_NonActionableReactionDropped(t *testing.T) {
+	a, handler := newTestAdapterWithReactions([]string{"knife_fork_plate"})
+
+	a.handleReactionRemoved(t.Context(), &slackevents.ReactionRemovedEvent{
+		Reaction: "thumbsup",
+		User:     "U123",
+		Item:     slackevents.Item{Channel: "C123456", Timestamp: "1234567890.000001"},
+	}, "")
+
+	if handler.count() != 0 {
+		t.Errorf("expected a non-actionable reaction removal to be dropped, got %d messages", handler.count())
 	}
 }
 

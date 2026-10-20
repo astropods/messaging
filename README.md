@@ -158,7 +158,7 @@ Scrape endpoint: `http://<host>:9091/metrics`
 | `messaging_messages_received_total` | Counter | `platform` | Messages that passed adapter filtering and reached the gRPC layer |
 | `messaging_messages_forwarded_total` | Counter | `platform` | Messages successfully sent to an agent stream |
 | `messaging_messages_dropped_total` | Counter | `platform`, `reason` | Messages dropped before reaching an agent (`no_agent`, `allowlist`, `bot_filtered`, `app_mention_dedup`) |
-| `messaging_slack_events_total` | Counter | `event_type` | Slack events by type: `dm`, `thread_reply`, `mention`, `reaction`, `observed_top` |
+| `messaging_slack_events_total` | Counter | `event_type` | Slack events by type: `dm`, `thread_reply`, `mention`, `reaction`, `reaction_removed`, `observed_top` |
 | `messaging_agent_responses_total` | Counter | `type` | Agent responses routed back to platform adapters |
 | `messaging_routing_errors_total` | Counter | `adapter` | Errors delivering agent responses to adapters |
 | `messaging_active_streams` | Gauge | — | Currently open bidirectional gRPC agent streams |
@@ -364,7 +364,8 @@ Uses PyPA trusted publishing — no token storage required.
 2. Enable **Socket Mode** and generate an app-level token (`connections:write` scope)
 3. Add bot token scopes: `chat:write`, `channels:history`, `groups:history`, `im:history`, `app_mentions:read`
 4. Subscribe to events: `message.channels`, `message.groups`, `message.im`, `app_mention`
-5. Install to workspace
+5. For `actionable_reactions`, also add the `reactions:read` scope and subscribe to `reaction_added` and `reaction_removed`
+6. Install to workspace
 
 ### Observe channels
 
@@ -380,5 +381,15 @@ Behaviour in an observe channel:
 - Posts that `@`-mention the bot still flow through `app_mention` only (no double-delivery).
 - Slack retries / rapid duplicates are suppressed by an in-memory dedup (2-minute window).
 - Per-user authz is bypassed — the user did not address the bot, so operator-configured grants don't apply. Tighten `allowed_channel_ids` if you need a channel-level gate.
+
+### Mention user IDs
+
+Set `mention_user_ids` to forward a top-level message from **any** channel the bot is in, when it `<@mentions>` one of the listed users. It is forwarded exactly like an observed message, so the channel needs no entry in `observe_channel_ids`. Useful for an agent that collects what is asked of one person.
+
+```json
+{ "mention_user_ids": ["U0123ABCDEF"] }
+```
+
+Thread replies already reach the agent from every channel the bot is in, so this covers the top-level case. Slack sends nothing from a channel the bot is not a member of.
 
 Every outbound `pb.Message` from the Slack adapter also carries `PlatformContext.bot_user_id` (resolved once at init from `auth.test`). The adapter strips `<@bot>` from `app_mention` content; this field lets the agent still detect "I was mentioned" — including on observed traffic.

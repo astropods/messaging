@@ -169,6 +169,9 @@ type SlackAdapterConfig struct {
 	// ObserveChannelIDs lists channel IDs where top-level (non-mention) messages
 	// are forwarded to the agent instead of being dropped.
 	ObserveChannelIDs []string `json:"observe_channel_ids,omitempty"`
+	// MentionUserIDs lists user IDs whose mention forwards a top-level message
+	// from any channel the bot is in, as if the channel were observed.
+	MentionUserIDs []string `json:"mention_user_ids,omitempty"`
 	// JoinObservedChannels makes the adapter join every public channel in
 	// ObserveChannelIDs at startup. Off by default.
 	JoinObservedChannels *bool `json:"join_observed_channels,omitempty"`
@@ -199,10 +202,10 @@ type MeshConfig struct {
 	Enabled bool
 	URL     string
 	Name    string
-	Skills  []MeshSkill
+	Jobs    []MeshJob
 }
 
-type MeshSkill struct {
+type MeshJob struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 }
@@ -290,6 +293,7 @@ func Load() (*Config, error) {
 		AllowedChannelIDs:   cfg.Slack.AdapterConfig.AllowedChannelIDs,
 		AllowedUserIDs:      cfg.Slack.AdapterConfig.AllowedUserIDs,
 		ObserveChannelIDs:   cfg.Slack.AdapterConfig.ObserveChannelIDs,
+		MentionUserIDs:      cfg.Slack.AdapterConfig.MentionUserIDs,
 		JoinObservedChannels: cfg.Slack.AdapterConfig.JoinObservedChannels != nil &&
 			*cfg.Slack.AdapterConfig.JoinObservedChannels,
 		RateLimit: adapter.RateLimitConfig{
@@ -310,7 +314,7 @@ func Load() (*Config, error) {
 		Enabled: getEnvBool("MESH_ENABLED", false),
 		URL:     getEnv("ASTRO_MESH_URL", ""),
 		Name:    getEnv("MESH_NAME", ""),
-		Skills:  getEnvMeshSkills("MESH_SKILLS"),
+		Jobs:    getEnvMeshJobs("MESH_JOBS"),
 	}
 
 	// Metrics configuration
@@ -393,17 +397,17 @@ func getEnvInt(key string, defaultValue int) int {
 	return defaultValue
 }
 
-func getEnvMeshSkills(key string) []MeshSkill {
+func getEnvMeshJobs(key string) []MeshJob {
 	value := os.Getenv(key)
 	if value == "" {
 		return nil
 	}
-	var skills []MeshSkill
-	if err := json.Unmarshal([]byte(value), &skills); err != nil {
-		slog.Warn("ignoring MESH_SKILLS that is not a JSON list of skills", "err", err)
+	var jobs []MeshJob
+	if err := json.Unmarshal([]byte(value), &jobs); err != nil {
+		slog.Warn("ignoring MESH_JOBS that is not a JSON list of jobs", "err", err)
 		return nil
 	}
-	return skills
+	return jobs
 }
 
 func getEnvList(key string, defaultValue []string) []string {
