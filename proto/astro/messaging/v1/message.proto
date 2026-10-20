@@ -31,6 +31,9 @@ message Message {
   // Set when the earlier turns differ from what the agent last received. An agent
   // with supports_history replaces its stored history with them first.
   ConversationHistory history = 9;
+
+  // The model the user picked in chat, one of AgentConfig.models. Empty when none was picked.
+  string model = 10;
 }
 
 // The turns before a message on the conversation's active branch.
