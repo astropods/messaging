@@ -114,7 +114,8 @@ func newTestSlackAdapter(t *testing.T) (*SlackAdapter, *[]slackCall, func()) {
 func TestSlackAdapter_HandleAgentResponse_ConcurrentContentBuffers(t *testing.T) {
 	const conversationCount = 64
 
-	a := &SlackAdapter{}
+	a, _, cleanup := newTestSlackAdapter(t)
+	defer cleanup()
 	start := make(chan struct{})
 	errs := make(chan error, conversationCount)
 	var wg sync.WaitGroup
@@ -174,7 +175,7 @@ func TestSlackAdapter_HandleAgentResponse_ConcurrentContentBuffers(t *testing.T)
 	a.bufferMu.Unlock()
 
 	// Reset each buffer to empty so concurrent END chunks exercise the read and
-	// delete path without making Slack API calls.
+	// delete path without posting a message.
 	for i := 0; i < conversationCount; i++ {
 		conversationID := fmt.Sprintf("C%03d-1234567890.000001", i)
 		if err := a.HandleAgentResponse(t.Context(), &pb.AgentResponse{
@@ -521,6 +522,70 @@ func TestSlackAdapter_HandleAgentResponse_StartIgnored(t *testing.T) {
 
 	if len(*calls) != 0 {
 		t.Errorf("expected no API calls for START chunk, got %d", len(*calls))
+	}
+}
+
+func countSlackCalls(calls []slackCall, method string) int {
+	n := 0
+	for _, c := range calls {
+		if c.Method == method {
+			n++
+		}
+	}
+	return n
+}
+
+func TestSlackAdapter_HandleAgentResponse_EmptyTurnClearsStatus(t *testing.T) {
+	cases := []struct {
+		name           string
+		conversationID string
+		wantClears     int
+	}{
+		{name: "thread", conversationID: "C123-1234567890.000001", wantClears: 1},
+		{name: "top-level DM has no thread to clear", conversationID: "D123", wantClears: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, calls, cleanup := newTestSlackAdapter(t)
+			defer cleanup()
+
+			for _, chunkType := range []pb.ContentChunk_ChunkType{pb.ContentChunk_START, pb.ContentChunk_END} {
+				if err := a.HandleAgentResponse(t.Context(), &pb.AgentResponse{
+					ConversationId: tc.conversationID,
+					Payload:        &pb.AgentResponse_Content{Content: &pb.ContentChunk{Type: chunkType}},
+				}); err != nil {
+					t.Fatalf("HandleAgentResponse(%v) failed: %v", chunkType, err)
+				}
+			}
+
+			if got := countSlackCalls(*calls, "/chat.postMessage"); got != 0 {
+				t.Errorf("an empty turn must not post a message, got %d posts", got)
+			}
+			if got := countSlackCalls(*calls, "/assistant.threads.setStatus"); got != tc.wantClears {
+				t.Fatalf("an empty turn must clear the thinking status the sidecar set: got %d setStatus calls, want %d", got, tc.wantClears)
+			}
+			for _, c := range *calls {
+				if c.Method == "/assistant.threads.setStatus" && c.Body["status"] != "" {
+					t.Errorf("clearing must send an empty status, got %v", c.Body["status"])
+				}
+			}
+		})
+	}
+}
+
+func TestSlackAdapter_HandleAgentResponse_StatusInTopLevelDMIsSkipped(t *testing.T) {
+	a, calls, cleanup := newTestSlackAdapter(t)
+	defer cleanup()
+
+	err := a.HandleAgentResponse(t.Context(), &pb.AgentResponse{
+		ConversationId: "D123",
+		Payload:        &pb.AgentResponse_Status{Status: &pb.StatusUpdate{Status: pb.StatusUpdate_THINKING}},
+	})
+	if err != nil {
+		t.Fatalf("a status update in a top-level DM must be skipped, not fail: %v", err)
+	}
+	if got := countSlackCalls(*calls, "/assistant.threads.setStatus"); got != 0 {
+		t.Errorf("a top-level DM has no thread_ts, and Slack rejects an empty one: got %d setStatus calls, want 0", got)
 	}
 }
 
