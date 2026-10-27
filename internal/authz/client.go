@@ -34,10 +34,14 @@ type authorizeClient struct {
 // incoming event when UserID is empty — so we ignore those fields here.
 // Re-add them if a consumer ever needs the directory lookup result
 // without an extra round-trip.
+//
+// CanReadDeployment is a pointer so a server that predates the field (it
+// sends none) reads as a role, which is the behavior before the field existed.
 type authorizeResponse struct {
-	Allowed bool   `json:"allowed"`
-	UserID  string `json:"user_id,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Allowed           bool   `json:"allowed"`
+	UserID            string `json:"user_id,omitempty"`
+	CanReadDeployment *bool  `json:"can_read_deployment,omitempty"`
+	Error             string `json:"error,omitempty"`
 }
 
 // newAuthorizeClient constructs the HTTP client used to call astro-server.
@@ -111,7 +115,8 @@ func (c *authorizeClient) authorize(ctx context.Context, identityType, identityI
 		return Result{}, fmt.Errorf("authz: server error: %s", out.Error)
 	}
 	return Result{
-		Allowed: out.Allowed,
-		UserID:  out.UserID,
+		Allowed:           out.Allowed,
+		UserID:            out.UserID,
+		CanReadDeployment: out.Allowed && (out.CanReadDeployment == nil || *out.CanReadDeployment),
 	}, nil
 }
