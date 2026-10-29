@@ -16,6 +16,7 @@ import (
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/metrics"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/files"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/google/uuid"
 	"github.com/slack-go/slack"
@@ -67,6 +68,11 @@ type SlackAdapter struct {
 
 	// directory resolves user and channel ids to display names.
 	directory *slackDirectory
+
+	// nil skips every upload that is not inlined.
+	fileStore files.FileStore
+	// Zero means the default limit; see files.EffectiveLimit.
+	fileLimit int64
 }
 
 // SetAuthorizer wires the authorizer used to gate every incoming slack
@@ -78,6 +84,14 @@ func (a *SlackAdapter) SetAuthorizer(az authz.Authorizer) {
 
 func (a *SlackAdapter) SetInternalFeedbackHandler(handler adapter.InternalFeedbackHandler) {
 	a.internalFeedbackHandler = handler
+}
+
+func (a *SlackAdapter) SetFileStore(s files.FileStore) {
+	a.fileStore = s
+}
+
+func (a *SlackAdapter) SetFileLimit(limit int64) {
+	a.fileLimit = limit
 }
 
 // errAuthzDenied / errAuthzUnavailable are sentinel errors returned by
@@ -109,7 +123,9 @@ var (
 // langfuse.user.id, so unlinked Slack users land on their own
 // per-Slack-ID row in Insights instead of the generic Unattributed
 // bucket.
-func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID string) error {
+//
+// Files are staged after authz, so a denied user's upload never reaches the volume.
+func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID string, files ...stagedFiles) error {
 	// Preserve the raw Slack user ID on PlatformContext.UserId before any
 	// rewrite. canonicalUserID below may replace msg.User.Id with the Astro
 	// user ID, but consumers that need to call back into Slack (mentions, DMs,
@@ -152,6 +168,15 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 	}
 	if a.msgHandler == nil {
 		return nil
+	}
+	if msg != nil {
+		owner := msg.GetUser().GetId()
+		for _, sf := range files {
+			staged, skips := a.fileAttachments(ctx, sf.message, owner, false)
+			earlier, earlierSkips := a.fileAttachments(ctx, sf.thread, owner, true)
+			msg.Attachments = append(msg.Attachments, append(staged, earlier...)...)
+			msg.Content = withSkipNotes(msg.Content, append(skips, earlierSkips...))
+		}
 	}
 	return a.msgHandler(ctx, msg)
 }
@@ -469,12 +494,16 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		return
 	}
 
-	// Filter out message subtypes we don't want to process
-	if ev.SubType != "" && ev.SubType != "thread_broadcast" {
+	// Filter out message subtypes we don't want to process. file_share carries uploads.
+	if ev.SubType != "" && ev.SubType != "thread_broadcast" && ev.SubType != "file_share" {
 		return
 	}
 
 	isDM := isDMChannel(ev.Channel)
+	// The bot sees every channel thread reply; channel uploads arrive through app_mention.
+	if ev.SubType == "file_share" && !isDM {
+		return
+	}
 	isChannel := ev.Channel != "" && !isDM
 	topLevelInChannel := isChannel && ev.ThreadTimeStamp == ""
 	observe := topLevelInChannel && (a.observeChannels[ev.Channel] || a.mentionsWatchedUser(ev.Text))
@@ -552,12 +581,20 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		eventKind = pb.PlatformContext_EVENT_KIND_DM
 	}
 
+	// slack-go copies the top-level message, uploads included, into ev.Message.
+	var uploads []slack.File
+	if ev.Message != nil {
+		uploads = ev.Message.Files
+	}
+	images, imageSkips := a.imageAttachments(ctx, uploads)
+
 	// Convert to pb.Message
 	msg := &pb.Message{
 		Id:             uuid.NewString(),
 		Timestamp:      timestamppb.New(parseSlackTimestamp(ev.TimeStamp)),
 		Platform:       "slack",
-		Content:        renderMessage(ev.Text, ev.Blocks, attachments),
+		Content:        withSkipNotes(renderMessage(ev.Text, ev.Blocks, attachments), imageSkips),
+		Attachments:    images,
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
 			MessageId:    ev.TimeStamp,
@@ -574,7 +611,7 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 
 	// Call handler if registered
 	if a.msgHandler != nil {
-		if err := a.dispatch(ctx, msg, teamID); err != nil {
+		if err := a.dispatch(ctx, msg, teamID, stagedFiles{message: uploads}); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling message: %v", err))
 			a.sendErrorMessage(ctx, ev.Channel, threadID, err)
 		}
@@ -1136,11 +1173,17 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 	// When the mention is a reply inside an existing thread, prepend the thread
 	// transcript so the agent sees the discussion it was summoned into — an
 	// @-mention event carries only the mention line, not the earlier replies.
+	var earlier []slack.File
 	if ev.ThreadTimeStamp != "" {
-		if summary := a.threadTranscript(ctx, ev.Channel, ev.ThreadTimeStamp); summary != "" {
+		var summary string
+		summary, earlier = a.threadContext(ctx, ev.Channel, ev.ThreadTimeStamp, ev.TimeStamp)
+		if summary != "" {
 			text = "[slack_thread_summary]\n" + summary + "\n\n" + text
 		}
 	}
+
+	images, imageSkips := a.imageAttachments(ctx, ev.Files)
+	text = withSkipNotes(text, imageSkips)
 
 	slog.Debug(fmt.Sprintf("[Slack] Setting loading state: channel=%s, threadTS=%s", ev.Channel, threadID))
 	if err := a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "Assistant is thinking...", "thinking_face"); err != nil {
@@ -1153,7 +1196,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 		Timestamp:      timestamppb.New(parseSlackTimestamp(ev.TimeStamp)),
 		Platform:       "slack",
 		Content:        text,
-		Attachments:    a.imageAttachments(ctx, ev.Files),
+		Attachments:    images,
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
 			MessageId:    ev.TimeStamp,
@@ -1170,7 +1213,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 
 	// Call handler if registered
 	if a.msgHandler != nil {
-		if err := a.dispatch(ctx, msg, teamID); err != nil {
+		if err := a.dispatch(ctx, msg, teamID, stagedFiles{message: ev.Files, thread: earlier}); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling mention: %v", err))
 			a.sendErrorMessage(ctx, ev.Channel, threadID, err)
 			// Clear loading state on error
@@ -1205,7 +1248,8 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 	// or a :ticket: on a screenshot never reaches the agent. Resolved attachments
 	// rather than raw files: non-image uploads and failed downloads leave nothing
 	// to act on, and the agent would get a bare reaction preamble.
-	attachments := a.imageAttachments(ctx, files)
+	attachments, skips := a.imageAttachments(ctx, files)
+	skips = append(skips, oversizedImageSkips(files)...)
 	if originalText == "" && len(attachments) == 0 {
 		slog.Warn(fmt.Sprintf("[Slack] Reacted message %s in %s has no text or images; dropping reaction",
 			ev.Item.Timestamp, ev.Item.Channel))
@@ -1221,8 +1265,8 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 	}
 	conversationID := fmt.Sprintf("%s-%s", ev.Item.Channel, threadID)
 
-	content := fmt.Sprintf("[reaction :%s: added by <@%s> on message]\n%s",
-		ev.Reaction, ev.User, originalText)
+	content := withSkipNotes(fmt.Sprintf("[reaction :%s: added by <@%s> on message]\n%s",
+		ev.Reaction, ev.User, originalText), skips)
 
 	// User is the reactor, as on every other event kind, so whoever wrote the
 	// reacted message travels separately. An agent acting on a reaction is

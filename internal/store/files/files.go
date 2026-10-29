@@ -68,6 +68,11 @@ func (m FileMeta) Ready() bool {
 	return m.Status == "" || m.Status == StatusReady
 }
 
+// Unowned reports whether no real user owns the file, as for an agent-written file.
+func (m FileMeta) Unowned() bool {
+	return unowned(m.UploadedBy)
+}
+
 // UploadTarget is a direct-upload descriptor for presign-capable stores (S3):
 // the client PUTs bytes straight to URL with the given method and headers,
 // bypassing the server. Filesystem stores return ErrUnsupported from PresignPut
@@ -77,6 +82,29 @@ type UploadTarget struct {
 	Method  string            `json:"method"`
 	Headers map[string]string `json:"headers,omitempty"`
 }
+
+// DefaultMaxFileBytes is the per-file cap when FILES_MAX_MB is unset.
+const DefaultMaxFileBytes int64 = 100 << 20 // 100 MiB
+
+// NoFileLimit turns the per-file cap off; StorageReserveBytes still applies.
+const NoFileLimit int64 = -1
+
+// EffectiveLimit resolves a configured limit, where zero means DefaultMaxFileBytes.
+func EffectiveLimit(limit int64) int64 {
+	if limit == 0 {
+		return DefaultMaxFileBytes
+	}
+	return limit
+}
+
+// Exceeds reports whether size is over the configured limit.
+func Exceeds(limit, size int64) bool {
+	l := EffectiveLimit(limit)
+	return l != NoFileLimit && size > l
+}
+
+// StorageReserveBytes stays free on the volume for the chat store and metadata.
+const StorageReserveBytes = 32 << 20 // 32 MiB
 
 // Usage reports byte-level capacity of the volume backing the store. For the
 // filesystem store this is the whole underlying volume (on the shared /data PVC

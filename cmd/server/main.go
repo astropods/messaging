@@ -350,6 +350,8 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 		} else {
 			slackAdapter.SetAuthorizer(authorizer)
 			slackAdapter.SetInternalFeedbackHandler(internalFeedbackHandler)
+			slackAdapter.SetFileStore(fileStore)
+			slackAdapter.SetFileLimit(cfg.Files.MaxBytes)
 			adapters["slack"] = slackAdapter
 			slog.Info("Slack adapter initialized")
 		}
@@ -399,6 +401,7 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			webAdapter.SetAuthorizer(authorizer)
 			webAdapter.SetChatStore(chatStore)
 			webAdapter.SetFileStore(fileStore)
+			webAdapter.SetFileLimit(cfg.Files.MaxBytes)
 			adapters["web"] = webAdapter
 			slog.Info("Web adapter initialized")
 		}

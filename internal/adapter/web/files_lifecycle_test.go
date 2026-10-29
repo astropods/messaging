@@ -174,7 +174,7 @@ func TestResolveResponseAttachments_NoForeignOwnershipTransfer(t *testing.T) {
 	}
 
 	// Agent replies in user-b's conversation echoing user-a's key → omitted.
-	out := resolveResponseAttachments(ctx, fs, []*pb.ResponseAttachment{fileAtt("key-a")}, "user-b")
+	out := resolveResponseAttachments(ctx, fs, 0, []*pb.ResponseAttachment{fileAtt("key-a")}, "user-b")
 	if len(out) != 0 {
 		t.Errorf("foreign-owned file surfaced into another conversation: %+v", out)
 	}
@@ -186,7 +186,7 @@ func TestResolveResponseAttachments_NoForeignOwnershipTransfer(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "agent-out.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write agent file: %v", err)
 	}
-	out = resolveResponseAttachments(ctx, fs, []*pb.ResponseAttachment{fileAtt("agent-out.txt")}, "user-b")
+	out = resolveResponseAttachments(ctx, fs, 0, []*pb.ResponseAttachment{fileAtt("agent-out.txt")}, "user-b")
 	if len(out) != 1 || out[0].Key != "agent-out.txt" {
 		t.Fatalf("agent-written file not surfaced to owner: %+v", out)
 	}
@@ -196,7 +196,26 @@ func TestResolveResponseAttachments_NoForeignOwnershipTransfer(t *testing.T) {
 
 	// A file the agent names but that isn't in the store yields no chip: we don't
 	// persist an optimistic chip that could never be attributed (and would 404).
-	if out := resolveResponseAttachments(ctx, fs, []*pb.ResponseAttachment{fileAtt("does-not-exist.txt")}, "user-b"); len(out) != 0 {
+	if out := resolveResponseAttachments(ctx, fs, 0, []*pb.ResponseAttachment{fileAtt("does-not-exist.txt")}, "user-b"); len(out) != 0 {
 		t.Errorf("unknown agent file surfaced an optimistic chip: %+v", out)
+	}
+}
+
+func TestResolveResponseAttachmentsSkipsAFileOverTheLimit(t *testing.T) {
+	dir := t.TempDir()
+	fs, err := files.NewFSStore(dir)
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "report.csv"), []byte("more than eight bytes"), 0o644); err != nil {
+		t.Fatalf("write agent file: %v", err)
+	}
+	att := []*pb.ResponseAttachment{{AttachmentType: &pb.ResponseAttachment_File{File: &pb.FileAttachment{Filename: "report.csv"}}}}
+
+	if out := resolveResponseAttachments(t.Context(), fs, 8, att, "user-a"); len(out) != 0 {
+		t.Errorf("a file over an 8-byte limit surfaced a download chip: %+v", out)
+	}
+	if out := resolveResponseAttachments(t.Context(), fs, files.NoFileLimit, att, "user-a"); len(out) != 1 {
+		t.Errorf("with no limit the file should surface, got %+v", out)
 	}
 }

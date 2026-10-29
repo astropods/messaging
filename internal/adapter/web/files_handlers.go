@@ -26,15 +26,6 @@ import (
 const (
 	// filesMaxNameRunes caps the user-facing filename length.
 	filesMaxNameRunes = 255
-	// filesMaxUploadBytes bounds a single uploaded file. The default agent disk
-	// is small (5Gi shared), so this is a coarse guard against a single file
-	// filling it; raise alongside the volume size if needed.
-	filesMaxUploadBytes = 100 << 20 // 100 MiB
-	// filesStorageReserveBytes is headroom kept free on the shared volume when
-	// admitting a new upload, so an upload can't consume the last bytes the chat
-	// store and metadata sidecars need. Uploads that would eat into it are
-	// rejected up front (507) rather than failing mid-write.
-	filesStorageReserveBytes = 32 << 20 // 32 MiB
 )
 
 type uploadDescriptor struct {
@@ -117,7 +108,7 @@ func (h *Handlers) HandleCreateFile(w http.ResponseWriter, r *http.Request) {
 		writeFileError(w, http.StatusBadRequest, "invalid_file_name", "This file name isn't supported.")
 		return
 	}
-	if input.Size < 0 || input.Size > filesMaxUploadBytes {
+	if input.Size < 0 || files.Exceeds(h.fileLimit, input.Size) {
 		writeFileError(w, http.StatusRequestEntityTooLarge, "file_too_large", "This file is too large. Choose a smaller file and try again.")
 		return
 	}
@@ -128,7 +119,7 @@ func (h *Handlers) HandleCreateFile(w http.ResponseWriter, r *http.Request) {
 	// unavailable) skips the check; the write-time ENOSPC guard below is the
 	// backstop.
 	if usage, err := h.fileStore.Usage(r.Context()); err == nil && usage.TotalBytes > 0 {
-		if uint64(input.Size)+filesStorageReserveBytes > usage.AvailableBytes {
+		if uint64(input.Size)+files.StorageReserveBytes > usage.AvailableBytes {
 			writeFileError(w, http.StatusInsufficientStorage, "insufficient_storage", "The deployment's storage is full. Delete files to free space, then try again.")
 			return
 		}
@@ -224,7 +215,7 @@ func (h *Handlers) HandlePutFileContent(w http.ResponseWriter, r *http.Request) 
 	// meaningful: a client can't declare 1 byte to pass the reserve check and then
 	// stream 100 MiB. MaxBytesReader trips at the declared size → 413.
 	limit := meta.Size
-	if limit < 0 || limit > filesMaxUploadBytes {
+	if limit < 0 || files.Exceeds(h.fileLimit, limit) {
 		// Defensive: create already bounds this, so a stored size outside the
 		// range means corrupt metadata rather than a valid reservation.
 		writeFileError(w, http.StatusBadRequest, "invalid_file_request", "The file request is invalid.")
@@ -235,7 +226,7 @@ func (h *Handlers) HandlePutFileContent(w http.ResponseWriter, r *http.Request) 
 	// uploads created earlier can't collectively overrun the volume if space was
 	// consumed between create and PUT.
 	if usage, uerr := h.fileStore.Usage(r.Context()); uerr == nil && usage.TotalBytes > 0 {
-		if uint64(meta.Size)+filesStorageReserveBytes > usage.AvailableBytes {
+		if uint64(meta.Size)+files.StorageReserveBytes > usage.AvailableBytes {
 			writeFileError(w, http.StatusInsufficientStorage, "insufficient_storage", "The deployment's storage is full. Delete files to free space, then try again.")
 			return
 		}
