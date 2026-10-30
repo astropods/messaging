@@ -36,7 +36,7 @@ type authorizeClient struct {
 // without an extra round-trip.
 //
 // CanReadDeployment is a pointer so a server that predates the field (it
-// sends none) reads as a role, which is the behavior before the field existed.
+// sends none) reads as `true`, which is the behavior before the field existed.
 type authorizeResponse struct {
 	Allowed           bool   `json:"allowed"`
 	UserID            string `json:"user_id,omitempty"`

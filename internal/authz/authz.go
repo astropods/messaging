@@ -45,10 +45,11 @@ const DegradedCacheTTL = 10 * time.Second
 // from the incoming event, so we don't carry the echoed slack identity
 // here even though the server response includes it.
 //
-// CanReadDeployment reports whether the caller also holds a role on the agent,
-// which its system prompt and tools need (see web HandleAgentConfig). It is
-// true when the server predates the field, and false on every deny and on the
-// degraded fallback.
+// CanReadDeployment reports whether the caller can also read the agent
+// (`deployment:read`, from a role on it or an account role), which its system
+// prompt and tools need (see web HandleAgentConfig). It is true when the
+// server predates the field, and false on every deny and on the degraded
+// fallback.
 type Result struct {
 	Allowed           bool
 	UserID            string

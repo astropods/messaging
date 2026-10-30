@@ -87,8 +87,8 @@ func (h *Handlers) authenticateWithErrorWriter(
 }
 
 // authenticateWithRole is authenticateWithErrorWriter that also reports whether
-// the caller holds a role on the agent, which the system prompt and tools need.
-// With no authorizer wired, the caller has one.
+// the caller can read the agent, which the system prompt and tools need.
+// With no authorizer wired, the caller can.
 func (h *Handlers) authenticateWithRole(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -940,7 +940,7 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	// Authenticate the request (session) and authorize against this
 	// deployment's grants. The agent config exposes the system prompt and
 	// tool list — leaking it to a denied principal is a real disclosure, and
-	// they need a role on the agent besides web chat access.
+	// they need read access to the agent besides web chat access.
 	session, canReadDeployment := h.authenticateWithRole(w, r, http.Error)
 	if session == nil {
 		return
@@ -997,8 +997,9 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 		Files: h.fileStore != nil && config.GetSupportsFiles(),
 		Edit:  h.editsSupported(),
 	}
-	// A caller without a role gets the capabilities alone: every chat reads
-	// them to offer attachments and edits, a chat-only viewer's included.
+	// A caller who can't read the agent gets the capabilities alone: every
+	// chat reads them to offer attachments and edits, a chat-only viewer's
+	// included.
 	if !canReadDeployment {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(struct {
