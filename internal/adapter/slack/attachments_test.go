@@ -470,12 +470,12 @@ type slackUpload struct {
 }
 
 // The fake Slack API implements the three-step file upload.
-func uploadTestAdapter(t *testing.T) (*SlackAdapter, func() ([]slackUpload, int)) {
+func uploadTestAdapter(t *testing.T) (*SlackAdapter, func() ([]slackUpload, []string)) {
 	t.Helper()
 	var (
 		mu      sync.Mutex
 		uploads []slackUpload
-		posts   int
+		posts   []string
 		pending slackUpload
 	)
 	mux := http.NewServeMux()
@@ -514,8 +514,9 @@ func uploadTestAdapter(t *testing.T) (*SlackAdapter, func() ([]slackUpload, int)
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "files": []map[string]any{{"id": "F1"}}})
 	})
 	mux.HandleFunc("/chat.postMessage", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
 		mu.Lock()
-		posts++
+		posts = append(posts, r.Form.Get("text"))
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "1234567890.000009", "channel": "C123"})
@@ -528,10 +529,10 @@ func uploadTestAdapter(t *testing.T) (*SlackAdapter, func() ([]slackUpload, int)
 	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
 	setFakeAIClient(a, srv)
 	a.rateLimiter = NewRateLimiter(100, 10)
-	return a, func() ([]slackUpload, int) {
+	return a, func() ([]slackUpload, []string) {
 		mu.Lock()
 		defer mu.Unlock()
-		return append([]slackUpload(nil), uploads...), posts
+		return append([]slackUpload(nil), uploads...), append([]string(nil), posts...)
 	}
 }
 
@@ -574,8 +575,8 @@ func TestHandleAgentResponse_PostsAgentFileToThread(t *testing.T) {
 	sendReply(t, a, "Here is the account plan.", "account-plan.pdf")
 
 	uploads, posts := recorded()
-	if posts != 1 {
-		t.Errorf("expected the text reply to post once, got %d", posts)
+	if len(posts) != 1 {
+		t.Errorf("expected the text reply to post once, got %q", posts)
 	}
 	if len(uploads) != 1 {
 		t.Fatalf("expected one upload, got %d", len(uploads))
@@ -602,8 +603,8 @@ func TestHandleAgentResponse_FileOnlyReplyPostsFile(t *testing.T) {
 	sendReply(t, a, "", "deals.csv")
 
 	uploads, posts := recorded()
-	if posts != 0 {
-		t.Errorf("expected no text post for an empty reply, got %d", posts)
+	if len(posts) != 0 {
+		t.Errorf("expected no text post for an empty reply, got %q", posts)
 	}
 	if len(uploads) != 1 {
 		t.Fatalf("expected one upload, got %d", len(uploads))
@@ -624,8 +625,12 @@ func TestHandleAgentResponse_UserOwnedFileNotPosted(t *testing.T) {
 
 	sendReply(t, a, "Here it is.", "k1")
 
-	if uploads, _ := recorded(); len(uploads) != 0 {
+	uploads, posts := recorded()
+	if len(uploads) != 0 {
 		t.Fatalf("expected a user-owned file not to be posted, got %d uploads", len(uploads))
+	}
+	if want := ":warning: k1 could not be sent: " + sendUserFile; len(posts) != 2 || posts[1] != want {
+		t.Errorf("expected the reply and then %q, got %q", want, posts)
 	}
 }
 
@@ -911,7 +916,25 @@ func TestHandleAgentResponse_FileOverLimitNotPosted(t *testing.T) {
 
 	sendReply(t, a, "Here is the report.", "report.csv")
 
-	if uploads, posts := recorded(); len(uploads) != 0 || posts != 1 {
-		t.Fatalf("expected the text reply and no upload for a file over the limit, got %d uploads and %d posts", len(uploads), posts)
+	uploads, posts := recorded()
+	if len(uploads) != 0 {
+		t.Fatalf("expected no upload for a file over the limit, got %d", len(uploads))
+	}
+	// The limit is 8 bytes, which prints as 0 MiB.
+	if want := ":warning: report.csv could not be sent: file is larger than 0 MiB"; len(posts) != 2 || posts[1] != want {
+		t.Errorf("expected the reply and then %q, got %q", want, posts)
+	}
+}
+
+func TestHandleAgentResponse_FilesNotSentShareOneEscapedNotice(t *testing.T) {
+	a, recorded := uploadTestAdapter(t)
+	newTestFileStore(t, a)
+
+	sendReply(t, a, "Here are both.", "<!channel>.csv", "missing.md")
+
+	want := ":warning: &lt;!channel&gt;.csv could not be sent: " + sendNotFound +
+		"\n:warning: missing.md could not be sent: " + sendNotFound
+	if _, posts := recorded(); len(posts) != 2 || posts[1] != want {
+		t.Errorf("expected the reply and then %q, got %q", want, posts)
 	}
 }

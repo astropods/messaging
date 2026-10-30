@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/astropods/messaging/internal/logctx"
 	"github.com/astropods/messaging/internal/store/files"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/google/uuid"
@@ -34,6 +35,15 @@ const (
 	skipNotSaved      = "file could not be saved"
 	skipNoStore       = "file uploads are not enabled for this agent"
 	skipExternal      = "linked file, not an upload"
+)
+
+// User-visible reasons a file the agent returned was not posted.
+const (
+	sendNotFound   = "the agent did not save the file"
+	sendEmpty      = "file is empty"
+	sendUserFile   = "only a file the agent creates can be sent"
+	sendUnreadable = "file could not be read"
+	sendFailed     = "the upload to Slack failed"
 )
 
 func skipFileTooLarge(limit int64) string {
@@ -279,32 +289,37 @@ func downloadURL(f *slack.File) string {
 }
 
 // Only an unowned (agent-written) file is posted, so a user's upload never leaves its owner.
-func (a *SlackAdapter) postResponseFile(ctx context.Context, channelID, threadTS string, f *pb.FileAttachment) error {
+// On failure it also returns the reason the thread is told.
+func (a *SlackAdapter) postResponseFile(ctx context.Context, channelID, threadTS string, f *pb.FileAttachment) (string, error) {
 	if a.fileStore == nil {
-		return fmt.Errorf("files store disabled (FILES_DIR unset)")
+		return skipNoStore, fmt.Errorf("files store disabled (FILES_DIR unset)")
 	}
 	key := f.GetFilename()
 	meta, err := a.fileStore.ReadMeta(ctx, key)
+	if errors.Is(err, files.ErrNotFound) {
+		return sendNotFound, fmt.Errorf("read %q: %w", key, err)
+	}
 	if err != nil {
-		return fmt.Errorf("read %q: %w", key, err)
+		return sendUnreadable, fmt.Errorf("read %q: %w", key, err)
 	}
 	if !meta.Ready() || meta.Size <= 0 {
-		return fmt.Errorf("file %q is not ready or empty", key)
+		return sendEmpty, fmt.Errorf("file %q is not ready or empty", key)
 	}
 	if !meta.Unowned() {
-		return fmt.Errorf("file %q is owned by a user", key)
+		return sendUserFile, fmt.Errorf("file %q is owned by a user", key)
 	}
 	if files.Exceeds(a.fileLimit, meta.Size) {
-		return fmt.Errorf("file %q is %s", key, skipFileTooLarge(files.EffectiveLimit(a.fileLimit)))
+		reason := skipFileTooLarge(files.EffectiveLimit(a.fileLimit))
+		return reason, fmt.Errorf("file %q is %s", key, reason)
 	}
 	rc, err := a.fileStore.OpenBlob(ctx, key)
 	if err != nil {
-		return fmt.Errorf("open %q: %w", key, err)
+		return sendUnreadable, fmt.Errorf("open %q: %w", key, err)
 	}
 	defer func() { _ = rc.Close() }()
 
 	if err := a.rateLimiter.Wait(ctx); err != nil {
-		return fmt.Errorf("rate limit wait failed: %w", err)
+		return sendFailed, fmt.Errorf("rate limit wait failed: %w", err)
 	}
 	_, err = a.client.UploadFileContext(ctx, slack.UploadFileParameters{
 		Reader:          rc,
@@ -315,7 +330,24 @@ func (a *SlackAdapter) postResponseFile(ctx context.Context, channelID, threadTS
 		ThreadTimestamp: threadTS,
 	})
 	if err != nil {
-		return fmt.Errorf("upload %q: %w (check the Slack app's files:write scope)", key, err)
+		return sendFailed, fmt.Errorf("upload %q: %w (check the Slack app's files:write scope)", key, err)
 	}
-	return nil
+	return "", nil
+}
+
+// The agent's reply usually says the file is attached, so the thread must hear when it is not.
+func (a *SlackAdapter) postFilesNotSent(ctx context.Context, channelID, threadTS string, notSent []fileSkip) {
+	lines := make([]string, 0, len(notSent))
+	for _, f := range notSent {
+		lines = append(lines, fmt.Sprintf(":warning: %s could not be sent: %s", f.name, f.reason))
+	}
+	if err := a.rateLimiter.Wait(ctx); err != nil {
+		logctx.FromContext(ctx).Error(fmt.Sprintf("[Slack] Rate limit wait failed before the files-not-sent notice: %v", err))
+		return
+	}
+	// Escape, because the agent picks the file name and "<!channel>" would ping the channel.
+	if _, _, err := a.client.PostMessageContext(ctx, channelID,
+		slack.MsgOptionText(strings.Join(lines, "\n"), true), slack.MsgOptionTS(threadTS)); err != nil {
+		logctx.FromContext(ctx).Error(fmt.Sprintf("[Slack] Error posting the files-not-sent notice to %s: %v", channelID, err))
+	}
 }

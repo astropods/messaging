@@ -52,7 +52,7 @@ adapter-core sends the agent's files on the END chunk as `ResponseAttachment.fil
 
 - Only an unowned (agent-written) file is posted. The web adapter attributes an agent file to the conversation owner, and a Slack thread has no single owner, so a file a user owns is never posted, even when the agent names it.
 - An END with files and no text now posts the files. Before, an END with no text was skipped whole, cards included.
-- An unknown, not-ready, or empty file, or a failed upload, is logged and skipped. The text reply is never blocked.
+- An unknown, not-ready, or empty file, a file over the limit, or a failed upload is logged and skipped. The text reply is never blocked. One short note in the thread then names each file that was not posted and why, for example `:warning: report.csv could not be sent: file is larger than 100 MiB`, because the agent's reply usually says the file is attached. The note is escaped, since the agent picks the file name.
 
 # Migration
 

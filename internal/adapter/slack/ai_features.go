@@ -189,6 +189,7 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 		}
 
 		// Post any card and file attachments that came with the END chunk.
+		var notSent []fileSkip
 		for _, att := range content.Attachments {
 			if card := att.GetCard(); card != nil {
 				if cardErr := a.handleCardAttachment(ctx, channelID, threadTS, card); cardErr != nil {
@@ -196,10 +197,14 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 				}
 			}
 			if file := att.GetFile(); file != nil {
-				if fileErr := a.postResponseFile(ctx, channelID, threadTS, file); fileErr != nil {
+				if reason, fileErr := a.postResponseFile(ctx, channelID, threadTS, file); fileErr != nil {
 					logctx.FromContext(ctx).Error(fmt.Sprintf("[Slack] Error posting file attachment to %s: %v", conversationID, fileErr))
+					notSent = append(notSent, fileSkip{file.GetFilename(), reason})
 				}
 			}
+		}
+		if len(notSent) > 0 {
+			a.postFilesNotSent(ctx, channelID, threadTS, notSent)
 		}
 
 		return nil
