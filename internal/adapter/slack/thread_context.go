@@ -15,6 +15,7 @@ const (
 	// prepend so a long thread can't blow up the prompt.
 	threadSummaryMaxMessages = 50
 	threadSummaryMaxRunes    = 12000
+	threadFilesMax           = 20
 )
 
 // threadTranscript fetches a Slack thread and renders it as "<@user> text"
@@ -23,8 +24,13 @@ const (
 // Returns "" when there is no thread or the fetch fails, so callers can prepend
 // unconditionally without guarding.
 func (a *SlackAdapter) threadTranscript(ctx context.Context, channelID, threadTS string) string {
+	summary, _ := a.threadContext(ctx, channelID, threadTS, "")
+	return summary
+}
+
+func (a *SlackAdapter) threadContext(ctx context.Context, channelID, threadTS, currentTS string) (string, []slack.File) {
 	if threadTS == "" || a.client == nil {
-		return ""
+		return "", nil
 	}
 	msgs, _, _, err := a.client.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
 		ChannelID: channelID,
@@ -34,8 +40,33 @@ func (a *SlackAdapter) threadTranscript(ctx context.Context, channelID, threadTS
 	if err != nil {
 		slog.Warn("[Slack] threadTranscript: conversations.replies failed",
 			"channel", channelID, "thread", threadTS, "err", err)
-		return ""
+		return "", nil
 	}
+	return renderTranscript(msgs), threadFiles(msgs, currentTS)
+}
+
+func threadFiles(msgs []slack.Message, currentTS string) []slack.File {
+	var out []slack.File
+	seen := make(map[string]bool)
+	for i := len(msgs) - 1; i >= 0 && len(out) < threadFilesMax; i-- {
+		if msgs[i].Timestamp == currentTS {
+			continue
+		}
+		for _, f := range msgs[i].Files {
+			if f.ID != "" && seen[f.ID] {
+				continue
+			}
+			seen[f.ID] = true
+			out = append(out, f)
+			if len(out) == threadFilesMax {
+				break
+			}
+		}
+	}
+	return out
+}
+
+func renderTranscript(msgs []slack.Message) string {
 	var b strings.Builder
 	runes := 0
 	for _, m := range msgs {

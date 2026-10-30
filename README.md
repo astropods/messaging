@@ -6,6 +6,7 @@ Go messaging service that connects AI agents to messaging platforms via gRPC bid
 
 - **gRPC bidirectional streaming** — real-time message flow between agents and platforms
 - **Slack adapter** — Socket Mode, AI status indicators, suggested prompts, rate limiting, observe-channel mode
+- **Slack files**: files on a mention or DM, and earlier files in a mentioned thread, are staged in the files store for the agent; files the agent returns are uploaded into the thread. The Slack app needs the `files:read` and `files:write` bot scopes
 - **Web adapter** — HTTP/SSE for browser-based clients
 - **Thread history** — tracks edits and deletions in memory
 - **Storage** — Redis or in-memory conversation store
@@ -127,6 +128,13 @@ REDIS_URL=redis://localhost:6379
 THREAD_HISTORY_MAX_SIZE=1000
 THREAD_HISTORY_MAX_MESSAGES=50
 THREAD_HISTORY_TTL_HOURS=24
+
+# Files store (web uploads, Slack files, agent output). Unset disables it.
+# astro-server points this at a subtree of the agent's shared disk.
+FILES_DIR=
+# Largest file, in MiB, moved in either direction through any adapter.
+# Unset uses 100; 0 turns the per-file limit off.
+FILES_MAX_MB=
 
 # Chat persistence (deployment web chat)
 # SQLite file backing the chat-page API (conversations + messages). In deployed

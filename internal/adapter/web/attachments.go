@@ -93,7 +93,7 @@ func resolveAttachment(ctx context.Context, fileStore files.FileStore, key, owne
 // That keeps the reply's download chip working for that user while hiding the
 // file from other members of the same account. Non-file attachments
 // (image/card/link) are ignored for now.
-func resolveResponseAttachments(ctx context.Context, fileStore files.FileStore, atts []*pb.ResponseAttachment, owner string) []chatAttachment {
+func resolveResponseAttachments(ctx context.Context, fileStore files.FileStore, fileLimit int64, atts []*pb.ResponseAttachment, owner string) []chatAttachment {
 	if len(atts) == 0 || fileStore == nil {
 		return nil
 	}
@@ -124,6 +124,11 @@ func resolveResponseAttachments(ctx context.Context, fileStore files.FileStore, 
 			// The agent referenced a reserved/uploading file that never committed;
 			// don't surface a permanently-broken download chip.
 			slog.Warn("[Web] agent referenced a not-ready file; skipping attachment", "key", key)
+			continue
+		}
+		if files.Exceeds(fileLimit, meta.Size) {
+			slog.Warn("[Web] agent file is over the file limit; skipping attachment",
+				"key", key, "size", meta.Size, "max", files.EffectiveLimit(fileLimit))
 			continue
 		}
 		if owner != "" {

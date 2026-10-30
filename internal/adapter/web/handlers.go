@@ -37,6 +37,8 @@ type Handlers struct {
 	// fileStore backs the agent files API (upload/download) on the shared
 	// persistent volume. nil disables the feature (no FILES_DIR configured).
 	fileStore files.FileStore
+	// Zero means the default limit; see files.EffectiveLimit.
+	fileLimit int64
 	// turns tracks per-conversation streaming state so a client stop can drop
 	// the agent's late output and persist the partial. Shared with WebAdapter.
 	turns *turnTracker
