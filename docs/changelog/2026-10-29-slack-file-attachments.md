@@ -2,7 +2,7 @@
 
 Files did not travel between a Slack user and an agent, in either direction.
 
-- Inbound: a file a user attached in Slack never reached the agent unless it was an image. A rep could not hand an agent a deal doc and say "update SFDC from this". A DM with an upload was dropped completely, because Slack sends it as a `file_share` message and the adapter ignored that subtype.
+- Inbound: a file a user attached in Slack never reached the agent unless it was an image. A DM with an upload was dropped completely, because Slack sends it as a `file_share` message and the adapter ignored that subtype.
 - Outbound: the adapter ignored the files an agent returned on its reply, so an agent could not hand back a generated doc or PDF.
 
 Files on an @-mention or a DM now reach the agent on its files volume, the same way a web chat upload does. Files the agent returns are uploaded into the reply's thread.
@@ -15,7 +15,7 @@ The adapter streams each file with the bot token straight into the files store, 
 
 - Files are staged in `dispatch` after authz passes. A denied user's upload never lands on the agent's volume.
 - The thread owns a staged file: `UploadedBy` is `slack:<conversation id>`. Everyone in a thread can see its files in Slack, and nobody outside it can, so the thread is the owner that matches Slack. The user who mentions the agent is often not the one who uploaded the file. No web chat user owns a Slack file, so it is in no one's web file list.
-- An in-thread mention also stages the files on earlier messages in the thread, the newest 20, each once. The adapter already fetches the thread for `[slack_thread_summary]`, so this costs no extra call. A rep can drop a deal doc in a thread and later ask "@agent update SFDC from that". Earlier images are staged as files, not inlined, so a long thread cannot overrun the gRPC frame.
+- An in-thread mention also stages the files on earlier messages in the thread, the newest 20, each once. The adapter already fetches the thread for `[slack_thread_summary]`, so this costs no extra call. A user can drop a document in a thread and later ask the agent about it. Earlier images are staged as files, not inlined, so a long thread cannot overrun the gRPC frame.
 - A staged file is keyed `slack-<file ID>`. A file already in the store is reused without a download, so mentions in a long thread do not download its files again.
 - `handleMessage` accepts the `file_share` subtype in DMs and reads the files from `ev.Message`, which slack-go fills from the top-level event. Images in a DM are inlined, the same as on a mention. In channels the bot receives every thread reply, so a `file_share` there is still dropped. A file dropped in a thread without a mention reaches the agent with the next mention in that thread.
 - A staged file is held to the files limit (see "One files limit" below). The limit applies to the declared size before the download and to the bytes written, so a file larger than Slack declared is still stopped.
