@@ -170,7 +170,7 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 		return nil
 	}
 	if msg != nil {
-		owner := msg.GetUser().GetId()
+		owner := threadOwner(msg.GetConversationId())
 		for _, sf := range files {
 			staged, skips := a.fileAttachments(ctx, sf.message, owner, false)
 			earlier, earlierSkips := a.fileAttachments(ctx, sf.thread, owner, true)

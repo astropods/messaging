@@ -197,7 +197,7 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 				}
 			}
 			if file := att.GetFile(); file != nil {
-				if reason, fileErr := a.postResponseFile(ctx, channelID, threadTS, file); fileErr != nil {
+				if reason, fileErr := a.postResponseFile(ctx, channelID, threadTS, threadOwner(conversationID), file); fileErr != nil {
 					logctx.FromContext(ctx).Error(fmt.Sprintf("[Slack] Error posting file attachment to %s: %v", conversationID, fileErr))
 					notSent = append(notSent, fileSkip{file.GetFilename(), reason})
 				}

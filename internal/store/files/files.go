@@ -51,11 +51,12 @@ type FileMeta struct {
 	Size        int64     `json:"size"`
 	ContentType string    `json:"content_type"`
 	UpdatedAt   time.Time `json:"updated_at"`
-	// UploadedBy records the opaque user id that owns the file. File access is
+	// UploadedBy records the opaque user id that owns the file, or for a Slack
+	// file the thread ("slack:<conversation id>"). File access is
 	// per-user: this is the access-control key (see web.ownsFile), not merely
 	// audit metadata. Agent-written plain files are unowned ("agent") until
-	// attributed to a conversation owner via AttributeOwner. Once a real user
-	// owns a file the value is immutable.
+	// attributed to a conversation owner via AttributeOwner. Once a real owner
+	// is set the value is immutable.
 	UploadedBy string `json:"uploaded_by,omitempty"`
 	// Status is the lifecycle state (see the Status* constants). Empty means
 	// ready (adopted plain files and legacy metadata predating this field).
@@ -66,11 +67,6 @@ type FileMeta struct {
 // downloaded, or attached. Empty status is ready (adopted/legacy).
 func (m FileMeta) Ready() bool {
 	return m.Status == "" || m.Status == StatusReady
-}
-
-// Unowned reports whether no real user owns the file, as for an agent-written file.
-func (m FileMeta) Unowned() bool {
-	return unowned(m.UploadedBy)
 }
 
 // UploadTarget is a direct-upload descriptor for presign-capable stores (S3):

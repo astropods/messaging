@@ -41,10 +41,14 @@ const (
 const (
 	sendNotFound   = "the agent did not save the file"
 	sendEmpty      = "file is empty"
-	sendUserFile   = "only a file the agent creates can be sent"
 	sendUnreadable = "file could not be read"
 	sendFailed     = "the upload to Slack failed"
 )
+
+// Everyone who can see a thread can see its files, so the thread owns them.
+func threadOwner(conversationID string) string {
+	return "slack:" + conversationID
+}
 
 func skipFileTooLarge(limit int64) string {
 	return fmt.Sprintf("file is larger than %d MiB", limit>>20)
@@ -288,9 +292,8 @@ func downloadURL(f *slack.File) string {
 	return f.URLPrivate
 }
 
-// Only an unowned (agent-written) file is posted, so a user's upload never leaves its owner.
 // On failure it also returns the reason the thread is told.
-func (a *SlackAdapter) postResponseFile(ctx context.Context, channelID, threadTS string, f *pb.FileAttachment) (string, error) {
+func (a *SlackAdapter) postResponseFile(ctx context.Context, channelID, threadTS, owner string, f *pb.FileAttachment) (string, error) {
 	if a.fileStore == nil {
 		return skipNoStore, fmt.Errorf("files store disabled (FILES_DIR unset)")
 	}
@@ -305,12 +308,15 @@ func (a *SlackAdapter) postResponseFile(ctx context.Context, channelID, threadTS
 	if !meta.Ready() || meta.Size <= 0 {
 		return sendEmpty, fmt.Errorf("file %q is not ready or empty", key)
 	}
-	if !meta.Unowned() {
-		return sendUserFile, fmt.Errorf("file %q is owned by a user", key)
-	}
 	if files.Exceeds(a.fileLimit, meta.Size) {
 		reason := skipFileTooLarge(files.EffectiveLimit(a.fileLimit))
 		return reason, fmt.Errorf("file %q is %s", key, reason)
+	}
+	// Another owner's file reads as not found, so a name reveals nothing.
+	if _, err := a.fileStore.AttributeOwner(ctx, key, owner); errors.Is(err, files.ErrOwnedByOther) {
+		return sendNotFound, fmt.Errorf("file %q has another owner", key)
+	} else if err != nil {
+		return sendUnreadable, fmt.Errorf("claim %q: %w", key, err)
 	}
 	rc, err := a.fileStore.OpenBlob(ctx, key)
 	if err != nil {

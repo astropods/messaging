@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -372,7 +373,7 @@ func TestHandleAppMention_FileAttachmentStaged(t *testing.T) {
 		att.MimeType != "application/pdf" || att.SizeBytes != int64(len(pdf)) {
 		t.Fatalf("attachment: %+v", att)
 	}
-	assertStoredFile(t, store, att.StorageKey, pdf, "U123")
+	assertStoredFile(t, store, att.StorageKey, pdf, threadOwner(msg.ConversationId))
 }
 
 func TestHandleMessage_DMFileShareStaged(t *testing.T) {
@@ -398,7 +399,7 @@ func TestHandleMessage_DMFileShareStaged(t *testing.T) {
 	if msg == nil || len(msg.Attachments) != 1 {
 		t.Fatalf("expected one attachment, got %v", msg)
 	}
-	assertStoredFile(t, store, msg.Attachments[0].StorageKey, csv, "U123")
+	assertStoredFile(t, store, msg.Attachments[0].StorageKey, csv, threadOwner(msg.ConversationId))
 }
 
 func TestHandleAppMention_FileNotStagedWhenDenied(t *testing.T) {
@@ -536,9 +537,15 @@ func uploadTestAdapter(t *testing.T) (*SlackAdapter, func() ([]slackUpload, []st
 	}
 }
 
+const replyConvID = "C123-1234567890.000001"
+
 func sendReply(t *testing.T, a *SlackAdapter, text string, filenames ...string) {
 	t.Helper()
-	const convID = "C123-1234567890.000001"
+	sendReplyIn(t, a, replyConvID, text, filenames...)
+}
+
+func sendReplyIn(t *testing.T, a *SlackAdapter, convID, text string, filenames ...string) {
+	t.Helper()
 	end := &pb.ContentChunk{Type: pb.ContentChunk_END}
 	for _, name := range filenames {
 		end.Attachments = append(end.Attachments, &pb.ResponseAttachment{
@@ -611,26 +618,64 @@ func TestHandleAgentResponse_FileOnlyReplyPostsFile(t *testing.T) {
 	}
 }
 
-func TestHandleAgentResponse_UserOwnedFileNotPosted(t *testing.T) {
+func TestHandleAgentResponse_FileOwnedElsewhereNotPosted(t *testing.T) {
+	for name, owner := range map[string]string{
+		"another thread": threadOwner("C999-1.1"),
+		"a web user":     "user_01WEB",
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, recorded := uploadTestAdapter(t)
+			store := newTestFileStore(t, a)
+			if _, err := store.WriteBlob(t.Context(), "k1", strings.NewReader("private")); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.WriteMeta(t.Context(), files.FileMeta{
+				Key: "k1", Name: "private.pdf", Size: 7, UpdatedAt: time.Now(), UploadedBy: owner, Status: files.StatusReady,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			sendReply(t, a, "Here it is.", "k1")
+
+			uploads, posts := recorded()
+			if len(uploads) != 0 {
+				t.Fatalf("expected a file owned elsewhere not to be posted, got %d uploads", len(uploads))
+			}
+			if want := ":warning: k1 could not be sent: " + sendNotFound; len(posts) != 2 || posts[1] != want {
+				t.Errorf("expected the reply and then %q, got %q", want, posts)
+			}
+			if meta, _ := store.ReadMeta(t.Context(), "k1"); meta.UploadedBy != owner {
+				t.Errorf("owner changed to %q", meta.UploadedBy)
+			}
+		})
+	}
+}
+
+func TestHandleAgentResponse_PostedFileStaysInItsThread(t *testing.T) {
 	a, recorded := uploadTestAdapter(t)
-	store := newTestFileStore(t, a)
-	if _, err := store.WriteBlob(t.Context(), "k1", strings.NewReader("private")); err != nil {
+	dir := t.TempDir()
+	store, err := files.NewFSStore(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteMeta(t.Context(), files.FileMeta{
-		Key: "k1", Name: "private.pdf", Size: 7, UpdatedAt: time.Now(), UploadedBy: "U999", Status: files.StatusReady,
-	}); err != nil {
+	a.SetFileStore(store)
+	if err := os.WriteFile(filepath.Join(dir, "summary.md"), []byte("# Deck summary"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	sendReply(t, a, "Here it is.", "k1")
+	sendReply(t, a, "Here is the summary.", "summary.md")
+	sendReplyIn(t, a, "C456-1234567890.000002", "Here it is.", "summary.md")
+	sendReply(t, a, "Here it is again.", "summary.md")
 
 	uploads, posts := recorded()
-	if len(uploads) != 0 {
-		t.Fatalf("expected a user-owned file not to be posted, got %d uploads", len(uploads))
+	if len(uploads) != 2 || uploads[0].channel != "C123" || uploads[1].channel != "C123" {
+		t.Fatalf("expected two uploads, both to the first thread, got %+v", uploads)
 	}
-	if want := ":warning: k1 could not be sent: " + sendUserFile; len(posts) != 2 || posts[1] != want {
-		t.Errorf("expected the reply and then %q, got %q", want, posts)
+	if want := ":warning: summary.md could not be sent: " + sendNotFound; len(posts) != 4 || posts[2] != want {
+		t.Errorf("expected the other thread to hear %q, got %q", want, posts)
+	}
+	if _, err := store.AttributeOwner(t.Context(), "summary.md", "user_01WEB"); !errors.Is(err, files.ErrOwnedByOther) {
+		t.Errorf("expected a web user's claim to fail with ErrOwnedByOther, got %v", err)
 	}
 }
 
@@ -728,7 +773,7 @@ func TestHandleAppMention_OversizedImageStagedAsFile(t *testing.T) {
 	if strings.Contains(msg.Content, "slack_file_skipped") {
 		t.Errorf("expected no skip note, got %q", msg.Content)
 	}
-	assertStoredFile(t, store, msg.Attachments[0].StorageKey, png, "U123")
+	assertStoredFile(t, store, msg.Attachments[0].StorageKey, png, threadOwner(msg.ConversationId))
 }
 
 func TestHandleAppMention_ConfiguredLimitStopsLongerDownload(t *testing.T) {
@@ -833,7 +878,8 @@ func TestHandleAppMention_InThreadStagesEarlierFiles(t *testing.T) {
 	if names["deal.pdf"] != "slack-F1" || names["shot.png"] != "slack-F2" {
 		t.Fatalf("expected both earlier files keyed by Slack ID, got %v", names)
 	}
-	assertStoredFile(t, store, "slack-F1", pdf, "U3")
+	// U1 uploaded it and U3 asked, but the thread owns it.
+	assertStoredFile(t, store, "slack-F1", pdf, "slack:C1-11.1")
 }
 
 func TestStageFile_ReusesAFileAlreadyStaged(t *testing.T) {
@@ -843,8 +889,8 @@ func TestStageFile_ReusesAFileAlreadyStaged(t *testing.T) {
 	url, downloads := threadServer(t, a, nil, pdf)
 	f := slacklib.File{ID: "F9", Name: "plan.pdf", Mimetype: "application/pdf", Size: len(pdf), URLPrivateDownload: url}
 
-	first, _ := a.stageFile(t.Context(), &f, "U1")
-	second, _ := a.stageFile(t.Context(), &f, "U2")
+	first, _ := a.stageFile(t.Context(), &f, threadOwner("C1-1.1"))
+	second, _ := a.stageFile(t.Context(), &f, threadOwner("C2-2.2"))
 
 	if first == nil || second == nil || first.StorageKey != "slack-F9" || second.StorageKey != "slack-F9" {
 		t.Fatalf("expected both stagings to use key slack-F9, got %v and %v", first, second)
@@ -852,7 +898,7 @@ func TestStageFile_ReusesAFileAlreadyStaged(t *testing.T) {
 	if got := downloads(); got != 1 {
 		t.Errorf("expected one download for a file staged twice, got %d", got)
 	}
-	assertStoredFile(t, store, "slack-F9", pdf, "U1")
+	assertStoredFile(t, store, "slack-F9", pdf, threadOwner("C1-1.1"))
 }
 
 func TestThreadFiles_SkipsCurrentMessageDedupesAndCaps(t *testing.T) {
@@ -898,7 +944,7 @@ func TestHandleAppMention_NoFileLimitStagesALargeFile(t *testing.T) {
 	if msg == nil || len(msg.Attachments) != 1 {
 		t.Fatalf("expected the file staged with no limit, got %v", msg)
 	}
-	assertStoredFile(t, store, "slack-F1", body, "U123")
+	assertStoredFile(t, store, "slack-F1", body, threadOwner(msg.ConversationId))
 }
 
 func TestHandleAgentResponse_FileOverLimitNotPosted(t *testing.T) {
