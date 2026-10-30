@@ -82,18 +82,31 @@ func (h *Handlers) authenticateWithErrorWriter(
 	r *http.Request,
 	writeError func(http.ResponseWriter, string, int),
 ) *Session {
+	session, _ := h.authenticateWithRole(w, r, writeError)
+	return session
+}
+
+// authenticateWithRole is authenticateWithErrorWriter that also reports whether
+// the caller can read the agent, which the system prompt and tools need.
+// With no authorizer wired, the caller can.
+func (h *Handlers) authenticateWithRole(
+	w http.ResponseWriter,
+	r *http.Request,
+	writeError func(http.ResponseWriter, string, int),
+) (*Session, bool) {
 	ctx := r.Context()
 
 	session, err := h.sessionManager.ValidateRequest(ctx, r)
 	if err != nil {
 		writeError(w, "Authentication error", http.StatusInternalServerError)
-		return nil
+		return nil, false
 	}
 	if session == nil {
 		writeError(w, "Unauthorized", http.StatusUnauthorized)
-		return nil
+		return nil, false
 	}
 
+	canReadDeployment := true
 	if h.authz != nil {
 		// Web identity is a globally-unique WorkOS user_id, so no scope.
 		// The resolved user_id is the same value we sent in — no need to
@@ -104,16 +117,17 @@ func (h *Handlers) authenticateWithErrorWriter(
 			// than to silently drop the check.
 			slog.Warn("[Web] authz check failed", "user_id", session.UserID, "err", err) //nolint:gosec // session.UserID is from a trusted ALB OIDC header
 			writeError(w, "Authorization unavailable", http.StatusServiceUnavailable)
-			return nil
+			return nil, false
 		}
 		if !res.Allowed {
 			slog.Warn("[Web] authz denied", "user_id", session.UserID) //nolint:gosec // session.UserID is from a trusted ALB OIDC header
 			writeError(w, "Forbidden", http.StatusForbidden)
-			return nil
+			return nil, false
 		}
+		canReadDeployment = res.CanReadDeployment
 	}
 
-	return session
+	return session, canReadDeployment
 }
 
 // SetMessageHandler sets the message handler
@@ -925,8 +939,10 @@ func (h *Handlers) HandleReady(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	// Authenticate the request (session) and authorize against this
 	// deployment's grants. The agent config exposes the system prompt and
-	// tool list — leaking it to a denied principal is a real disclosure.
-	if h.authenticate(w, r) == nil {
+	// tool list — leaking it to a denied principal is a real disclosure, and
+	// they need read access to the agent besides web chat access.
+	session, canReadDeployment := h.authenticateWithRole(w, r, http.Error)
+	if session == nil {
 		return
 	}
 
@@ -977,6 +993,23 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 		Capabilities capabilitiesResp `json:"capabilities"`
 	}
 
+	capabilities := capabilitiesResp{
+		Files: h.fileStore != nil && config.GetSupportsFiles(),
+		Edit:  h.editsSupported(),
+	}
+	// A caller who can't read the agent gets the capabilities alone: every
+	// chat reads them to offer attachments and edits, a chat-only viewer's
+	// included.
+	if !canReadDeployment {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(struct {
+			Capabilities capabilitiesResp `json:"capabilities"`
+		}{capabilities}); err != nil {
+			slog.Error(fmt.Sprintf("[Web] Encode error on agent config: %v", err))
+		}
+		return
+	}
+
 	tools := make([]toolConfig, 0, len(config.Tools))
 	for _, t := range config.Tools {
 		tc := toolConfig{
@@ -1004,10 +1037,7 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	resp := agentConfigResp{
 		SystemPrompt: config.SystemPrompt,
 		Tools:        tools,
-		Capabilities: capabilitiesResp{
-			Files: h.fileStore != nil && config.GetSupportsFiles(),
-			Edit:  h.editsSupported(),
-		},
+		Capabilities: capabilities,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

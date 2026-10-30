@@ -44,9 +44,16 @@ const DegradedCacheTTL = 10 * time.Second
 // slack users the slack adapter falls back to the raw slack id directly
 // from the incoming event, so we don't carry the echoed slack identity
 // here even though the server response includes it.
+//
+// CanReadDeployment reports whether the caller can also read the agent
+// (`deployment:read`, from a role on it or an account role), which its system
+// prompt and tools need (see web HandleAgentConfig). It is true when the
+// server predates the field, and false on every deny and on the degraded
+// fallback.
 type Result struct {
-	Allowed bool
-	UserID  string
+	Allowed           bool
+	UserID            string
+	CanReadDeployment bool
 }
 
 // Authorizer is the entry point used by adapters to check whether a request
@@ -182,6 +189,7 @@ func (a *realAuthorizer) Authorize(ctx context.Context, identityType, identityID
 		if slices.Contains(a.anyoneAdapters, adapter) {
 			a.logger.Warn("authorize call failed; serving via anyone-adapters token claim",
 				"identity_type", identityType, "adapter", adapter, "error", err)
+			// No role is known without the server, so the agent config stays trimmed.
 			degraded := Result{Allowed: true}
 			a.cache.putWithTTL(key, degraded, DegradedCacheTTL)
 			return degraded, nil
@@ -222,9 +230,9 @@ func (allowAll) Authorize(_ context.Context, identityType, identityID, _, _ stri
 	// falls back to the raw slack id from the incoming event, matching
 	// what canonicalUserID does against a real server for unmapped users.
 	if identityType == IdentityTypeSlack {
-		return Result{Allowed: true}, nil
+		return Result{Allowed: true, CanReadDeployment: true}, nil
 	}
-	return Result{Allowed: true, UserID: identityID}, nil
+	return Result{Allowed: true, UserID: identityID, CanReadDeployment: true}, nil
 }
 
 // DenyAll returns an Authorizer that denies every request. Used as the

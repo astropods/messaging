@@ -15,11 +15,13 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/files"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
@@ -96,6 +98,49 @@ func TestAuthz_AgentConfig_NoSession_LeaksSystemPrompt(t *testing.T) {
 	}
 	if bytes.Contains(w.Body.Bytes(), []byte("TOP-SECRET-SYSTEM-PROMPT")) {
 		t.Errorf("HandleAgentConfig leaked the system prompt to an anonymous request: %s", w.Body.String())
+	}
+}
+
+// roleAuthorizer admits every caller, with a fixed answer for whether they hold
+// a role on the agent.
+type roleAuthorizer struct{ canReadDeployment bool }
+
+func (a roleAuthorizer) Authorize(_ context.Context, _, identityID, _, _ string) (authz.Result, error) {
+	return authz.Result{Allowed: true, UserID: identityID, CanReadDeployment: a.canReadDeployment}, nil
+}
+
+// Web chat access admits a caller to the chat, but the system prompt and tools
+// also need a role on the agent. The capabilities stay for everyone the chat
+// admits: they decide whether it offers attachments and edits.
+func TestAuthz_AgentConfig_ShowsPromptAndToolsOnlyToARoleHolder(t *testing.T) {
+	configStore := store.NewAgentConfigStore()
+	configStore.Set(&pb.AgentConfig{
+		SystemPrompt:  "TOP-SECRET-SYSTEM-PROMPT",
+		Tools:         []*pb.AgentToolConfig{{Name: "secret_tool", Type: "other"}},
+		SupportsFiles: true,
+	})
+	fs, err := files.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("file store: %v", err)
+	}
+	get := func(canReadDeployment bool) *httptest.ResponseRecorder {
+		h := NewHandlers(NewConnectionManager(30*time.Second), &NoopSessionManager{}, nil, configStore)
+		h.fileStore = fs
+		h.SetAuthorizer(roleAuthorizer{canReadDeployment: canReadDeployment})
+		w := httptest.NewRecorder()
+		h.HandleAgentConfig(w, httptest.NewRequest(http.MethodGet, "/api/agent/config", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("agent/config: got %d, body=%q", w.Code, w.Body.String())
+		}
+		return w
+	}
+
+	if body := get(true).Body.Bytes(); !bytes.Contains(body, []byte("TOP-SECRET-SYSTEM-PROMPT")) || !bytes.Contains(body, []byte("secret_tool")) {
+		t.Errorf("a role holder should get the system prompt and tools: %s", body)
+	}
+	const capabilitiesOnly = `{"capabilities":{"files":true,"edit":false}}`
+	if got := strings.TrimSpace(get(false).Body.String()); got != capabilitiesOnly {
+		t.Errorf("a caller with no role got %s, want only %s", got, capabilitiesOnly)
 	}
 }
 

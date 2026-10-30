@@ -348,3 +348,64 @@ func TestNewAuthorizer_HappyPath(t *testing.T) {
 		t.Fatal("expected non-nil Authorizer")
 	}
 }
+
+func rawResp(body string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{},
+	}
+}
+
+// can_read_deployment says whether a web caller holds a role on the agent. A
+// server that predates the field sends none, which keeps the old behavior.
+func TestAuthorize_CanReadDeploymentIsParsedAndCached(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "holds a role", body: `{"allowed":true,"user_id":"u1","can_read_deployment":true}`, want: true},
+		{name: "may only chat", body: `{"allowed":true,"user_id":"u1","can_read_deployment":false}`, want: false},
+		{name: "server predates the field", body: `{"allowed":true,"user_id":"u1"}`, want: true},
+		{name: "denied", body: `{"allowed":false}`, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, stub := newTestAuthorizer(t, nil, func(*http.Request) (*http.Response, error) {
+				return rawResp(tc.body), nil
+			})
+			for range 2 {
+				res, err := a.Authorize(context.Background(), IdentityTypeUser, "u1", AdapterWeb, "")
+				if err != nil {
+					t.Fatalf("authorize: %v", err)
+				}
+				if res.CanReadDeployment != tc.want {
+					t.Errorf("CanReadDeployment = %v, want %v", res.CanReadDeployment, tc.want)
+				}
+			}
+			if got := stub.callCount.Load(); got != 1 {
+				t.Errorf("server calls = %d, want 1: the answer is cached with the decision", got)
+			}
+		})
+	}
+}
+
+// The outage fallback knows no role, so the agent config stays trimmed.
+func TestAuthorize_AnyoneAdapterFallbackHasNoRole(t *testing.T) {
+	a, _ := newTestAuthorizer(t, []string{AdapterWeb}, func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("connection refused")
+	})
+	res, err := a.Authorize(context.Background(), IdentityTypeUser, "u1", AdapterWeb, "")
+	if err != nil || !res.Allowed || res.CanReadDeployment {
+		t.Fatalf("got %+v, %v; want allowed without a role", res, err)
+	}
+}
+
+// Dev mode has no server to ask, and the person running it owns the agent.
+func TestAllowAll_HasARole(t *testing.T) {
+	res, err := AllowAll().Authorize(context.Background(), IdentityTypeUser, "u1", AdapterWeb, "")
+	if err != nil || !res.CanReadDeployment {
+		t.Fatalf("got %+v, %v; want a role", res, err)
+	}
+}
