@@ -158,6 +158,8 @@ type SendMessageRequest struct {
 	EditOf string `json:"edit_of,omitempty"`
 	// ParentID is the newest message the client shows; a stale one gets 409 stale_branch.
 	ParentID string `json:"parent_id,omitempty"`
+	// Model must be one of the agent's AgentConfig.models; unset leaves the choice to the agent.
+	Model string `json:"model,omitempty"`
 }
 
 // sendAttachmentInput is a client-declared attachment reference on a send. Only
@@ -256,6 +258,11 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.offersModel(req.Model) {
+		writeInvalidModel(w)
+		return
+	}
+
 	// One turn at a time, paused-on-interaction included; interaction responses forward directly, not through here.
 	if h.turns != nil {
 		if !h.turns.claim(conversationID) {
@@ -329,6 +336,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		Content:        req.Content,
 		ConversationId: conversationID,
 		Attachments:    protoAtts,
+		Model:          req.Model,
 	}
 	if roomID != "" {
 		msg.PlatformContext.PlatformData = map[string]string{"mesh_scope": roomID}
@@ -968,8 +976,9 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 		// wired AND the agent declared it consumes attachments. The client hides
 		// the composer's upload affordance when false, so an agent that never wires
 		// up the files API doesn't advertise an upload that would be ignored.
-		Files bool `json:"files"`
-		Edit  bool `json:"edit"`
+		Files  bool     `json:"files"`
+		Edit   bool     `json:"edit"`
+		Models []string `json:"models,omitempty"`
 	}
 	type agentConfigResp struct {
 		SystemPrompt string           `json:"systemPrompt"`
@@ -1005,8 +1014,9 @@ func (h *Handlers) HandleAgentConfig(w http.ResponseWriter, r *http.Request) {
 		SystemPrompt: config.SystemPrompt,
 		Tools:        tools,
 		Capabilities: capabilitiesResp{
-			Files: h.fileStore != nil && config.GetSupportsFiles(),
-			Edit:  h.editsSupported(),
+			Files:  h.fileStore != nil && config.GetSupportsFiles(),
+			Edit:   h.editsSupported(),
+			Models: config.GetModels(),
 		},
 	}
 

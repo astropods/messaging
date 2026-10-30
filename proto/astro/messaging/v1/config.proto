@@ -18,6 +18,9 @@ message AgentConfig {
   repeated AgentSkill skills = 4;
   // Agent replaces its stored history with Message.history; enables message editing.
   bool supports_history = 5;
+  // Models a chat user can pick from, the first being the agent's default. The
+  // web client shows a model picker when there are two or more.
+  repeated string models = 6;
 }
 
 message AgentSkill {

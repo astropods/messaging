@@ -173,7 +173,9 @@ type Message struct {
 	ConversationId string `protobuf:"bytes,8,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"` // Stable ID across message lifecycle
 	// Set when the earlier turns differ from what the agent last received. An agent
 	// with supports_history replaces its stored history with them first.
-	History       *ConversationHistory `protobuf:"bytes,9,opt,name=history,proto3" json:"history,omitempty"`
+	History *ConversationHistory `protobuf:"bytes,9,opt,name=history,proto3" json:"history,omitempty"`
+	// The model the user picked in chat, one of AgentConfig.models. Empty when none was picked.
+	Model         string `protobuf:"bytes,10,opt,name=model,proto3" json:"model,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -269,6 +271,13 @@ func (x *Message) GetHistory() *ConversationHistory {
 		return x.History
 	}
 	return nil
+}
+
+func (x *Message) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
 }
 
 // The turns before a message on the conversation's active branch.
@@ -724,7 +733,7 @@ var File_astro_messaging_v1_message_proto protoreflect.FileDescriptor
 
 const file_astro_messaging_v1_message_proto_rawDesc = "" +
 	"\n" +
-	" astro/messaging/v1/message.proto\x12\x12astro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb5\x03\n" +
+	" astro/messaging/v1/message.proto\x12\x12astro.messaging.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xcb\x03\n" +
 	"\aMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x128\n" +
 	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x1a\n" +
@@ -734,7 +743,9 @@ const file_astro_messaging_v1_message_proto_rawDesc = "" +
 	"\acontent\x18\x06 \x01(\tR\acontent\x12@\n" +
 	"\vattachments\x18\a \x03(\v2\x1e.astro.messaging.v1.AttachmentR\vattachments\x12'\n" +
 	"\x0fconversation_id\x18\b \x01(\tR\x0econversationId\x12A\n" +
-	"\ahistory\x18\t \x01(\v2'.astro.messaging.v1.ConversationHistoryR\ahistory\"v\n" +
+	"\ahistory\x18\t \x01(\v2'.astro.messaging.v1.ConversationHistoryR\ahistory\x12\x14\n" +
+	"\x05model\x18\n" +
+	" \x01(\tR\x05model\"v\n" +
 	"\x13ConversationHistory\x12>\n" +
 	"\bmessages\x18\x01 \x03(\v2\".astro.messaging.v1.HistoryMessageR\bmessages\x12\x1f\n" +
 	"\vis_complete\x18\x02 \x01(\bR\n" +

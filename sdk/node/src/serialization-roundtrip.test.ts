@@ -457,6 +457,33 @@ describe('Proto-loader binary roundtrip: Message history', () => {
   });
 });
 
+describe('Proto-loader binary roundtrip: Message model', () => {
+  const incoming = (model?: string) =>
+    deserializeResponse(
+      serializeResponse({
+        conversationId: 'conv-m',
+        incomingMessage: { conversationId: 'conv-m', content: 'hi', ...(model ? { model } : {}) },
+      }),
+    ).incomingMessage;
+
+  it('decodes the picked model', () => {
+    expect(incoming('claude-opus-4-7').model).toBe('claude-opus-4-7');
+  });
+
+  it('decodes an unset model as an empty string', () => {
+    expect(incoming().model).toBe('');
+  });
+});
+
+describe('Proto-loader binary roundtrip: AgentConfig models', () => {
+  it('carries the models in order', () => {
+    const result = deserializeRequest(
+      serializeRequest({ agentConfig: { systemPrompt: '', tools: [], models: ['claude-sonnet-4-6', 'claude-opus-4-7'] } }),
+    );
+    expect(result.agentConfig.models).toEqual(['claude-sonnet-4-6', 'claude-opus-4-7']);
+  });
+});
+
 describe('Proto-loader binary roundtrip: AgentConfig supportsHistory', () => {
   it('carries supportsHistory', () => {
     const result = deserializeRequest(
