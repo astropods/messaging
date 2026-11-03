@@ -500,10 +500,6 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	}
 
 	isDM := isDMChannel(ev.Channel)
-	// The bot sees every channel thread reply; channel uploads arrive through app_mention.
-	if ev.SubType == "file_share" && !isDM {
-		return
-	}
 	isChannel := ev.Channel != "" && !isDM
 	topLevelInChannel := isChannel && ev.ThreadTimeStamp == ""
 	observe := topLevelInChannel && (a.observeChannels[ev.Channel] || a.mentionsWatchedUser(ev.Text))
