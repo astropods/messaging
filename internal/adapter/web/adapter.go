@@ -42,6 +42,7 @@ type WebAdapter struct {
 	agentReadiness   adapter.AgentReadiness
 	chatStore        *sqlite.Store
 	fileStore        files.FileStore
+	fileLimit        int64
 	interactions     store.InteractionStore
 	server           *http.Server
 	handlers         *Handlers
@@ -425,7 +426,7 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 		// Resolve any agent-produced file attachments (present on the END chunk)
 		// to the canonical shape, attributing them to the conversation owner so
 		// per-user file access control applies to the agent's outputs too.
-		agentAttachments := resolveResponseAttachments(ctx, a.fileStore, payload.Content.Attachments, a.conversationOwner(ctx, conversationID))
+		agentAttachments := resolveResponseAttachments(ctx, a.fileStore, a.fileLimit, payload.Content.Attachments, a.conversationOwner(ctx, conversationID))
 
 		// Content chunk
 		event := NewChunkEvent(payload.Content, response.ResponseId, agentAttachments)
@@ -580,7 +581,7 @@ func (a *WebAdapter) HydrateThread(ctx context.Context, conversationID string, t
 func (a *WebAdapter) StreamContent(ctx context.Context, conversationID string, chunks []*pb.ContentChunk) error {
 	owner := a.conversationOwner(ctx, conversationID)
 	for _, chunk := range chunks {
-		event := NewChunkEvent(chunk, "", resolveResponseAttachments(ctx, a.fileStore, chunk.Attachments, owner))
+		event := NewChunkEvent(chunk, "", resolveResponseAttachments(ctx, a.fileStore, a.fileLimit, chunk.Attachments, owner))
 		a.connManager.Broadcast(conversationID, event)
 
 		// Send finish on END
@@ -632,6 +633,14 @@ func (a *WebAdapter) SetFileStore(s files.FileStore) {
 	a.fileStore = s
 	if a.handlers != nil {
 		a.handlers.fileStore = s
+	}
+}
+
+// SetFileLimit sets the per-file cap; see files.EffectiveLimit.
+func (a *WebAdapter) SetFileLimit(limit int64) {
+	a.fileLimit = limit
+	if a.handlers != nil {
+		a.handlers.fileLimit = limit
 	}
 }
 

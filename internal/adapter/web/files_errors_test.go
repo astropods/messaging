@@ -33,7 +33,7 @@ func TestCreateFileErrorsUseStandardEnvelope(t *testing.T) {
 		{name: "invalid name", body: `{"name":"bad/name","size":1}`, user: "user-a", status: http.StatusBadRequest, code: "invalid_file_name"},
 		{
 			name:   "too large",
-			body:   fmt.Sprintf(`{"name":"large.bin","size":%d}`, filesMaxUploadBytes+1),
+			body:   fmt.Sprintf(`{"name":"large.bin","size":%d}`, files.DefaultMaxFileBytes+1),
 			user:   "user-a",
 			status: http.StatusRequestEntityTooLarge,
 			code:   "file_too_large",
@@ -80,5 +80,27 @@ func TestCreateFileStorageUnavailableUsesStandardEnvelope(t *testing.T) {
 	}
 	if w.Code != http.StatusNotFound || apiErr.Error != "file_storage_unavailable" {
 		t.Fatalf("expected 404 file_storage_unavailable, got %d %+v", w.Code, apiErr)
+	}
+}
+
+func TestCreateFileHonorsTheConfiguredFileLimit(t *testing.T) {
+	store, err := files.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	create := func(limit, size int64) int {
+		h := &Handlers{sessionManager: NewHeaderSessionManager("X-User-ID", "", ""), fileStore: store, fileLimit: limit}
+		req := httptest.NewRequest(http.MethodPost, "/api/files", strings.NewReader(fmt.Sprintf(`{"name":"f.bin","size":%d}`, size)))
+		req.Header.Set("X-User-ID", "user-a")
+		w := httptest.NewRecorder()
+		h.HandleCreateFile(w, req)
+		return w.Code
+	}
+
+	if got := create(1<<20, 2<<20); got != http.StatusRequestEntityTooLarge {
+		t.Errorf("2 MiB under a 1 MiB limit: status %d, want 413", got)
+	}
+	if got := create(files.NoFileLimit, files.DefaultMaxFileBytes+1); got != http.StatusOK {
+		t.Errorf("over the default with no limit: status %d, want 200", got)
 	}
 }

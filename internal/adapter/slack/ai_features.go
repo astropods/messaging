@@ -161,7 +161,7 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 			ctx = logctx.WithTraceparent(ctx, traceContext.Traceparent)
 		}
 
-		if fullContent == "" {
+		if fullContent == "" && len(content.Attachments) == 0 {
 			logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Skipping empty message for %s", conversationID))
 			return nil
 		}
@@ -175,24 +175,36 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 			return nil
 		}
 
-		if err := a.rateLimiter.Wait(ctx); err != nil {
-			return fmt.Errorf("rate limit wait failed: %w", err)
+		if fullContent != "" {
+			if err := a.rateLimiter.Wait(ctx); err != nil {
+				return fmt.Errorf("rate limit wait failed: %w", err)
+			}
+
+			_, err = a.aiClient.PostMessageWithFeedback(ctx, channelID, fullContent, threadTS, traceContext)
+			if err != nil {
+				return fmt.Errorf("failed to send message: %w", err)
+			}
+
+			logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Sent content to %s (%d chars)", conversationID, len(fullContent)))
 		}
 
-		_, err = a.aiClient.PostMessageWithFeedback(ctx, channelID, fullContent, threadTS, traceContext)
-		if err != nil {
-			return fmt.Errorf("failed to send message: %w", err)
-		}
-
-		logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Sent content to %s (%d chars)", conversationID, len(fullContent)))
-
-		// Post any card attachments that came with the END chunk.
+		// Post any card and file attachments that came with the END chunk.
+		var notSent []fileSkip
 		for _, att := range content.Attachments {
 			if card := att.GetCard(); card != nil {
 				if cardErr := a.handleCardAttachment(ctx, channelID, threadTS, card); cardErr != nil {
 					logctx.FromContext(ctx).Error(fmt.Sprintf("[Slack] Error posting card attachment to %s: %v", conversationID, cardErr))
 				}
 			}
+			if file := att.GetFile(); file != nil {
+				if reason, fileErr := a.postResponseFile(ctx, channelID, threadTS, threadOwner(conversationID), file); fileErr != nil {
+					logctx.FromContext(ctx).Error(fmt.Sprintf("[Slack] Error posting file attachment to %s: %v", conversationID, fileErr))
+					notSent = append(notSent, fileSkip{file.GetFilename(), reason})
+				}
+			}
+		}
+		if len(notSent) > 0 {
+			a.postFilesNotSent(ctx, channelID, threadTS, notSent)
 		}
 
 		return nil

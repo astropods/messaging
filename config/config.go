@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strconv"
 	"strings"
 
 	"github.com/astropods/messaging/internal/adapter"
+	"github.com/astropods/messaging/internal/store/files"
 )
 
 // Config holds the overall messaging service configuration
@@ -61,6 +63,8 @@ type FilesConfig struct {
 	// Backend selects the storage implementation: "fs" (default) uses Dir; "s3"
 	// is reserved for a future presigned-object implementation.
 	Backend string
+	// MaxBytes caps one file in either direction; files.NoFileLimit turns it off.
+	MaxBytes int64
 }
 
 // Agent transports select how the messaging sidecar reaches the agent. A new
@@ -348,8 +352,9 @@ func Load() (*Config, error) {
 	// persistent volume in deployed sidecars; unset locally, which disables the
 	// files API.
 	cfg.Files = FilesConfig{
-		Dir:     getEnv("FILES_DIR", ""),
-		Backend: getEnv("FILES_BACKEND", "fs"),
+		Dir:      getEnv("FILES_DIR", ""),
+		Backend:  getEnv("FILES_BACKEND", "fs"),
+		MaxBytes: filesMaxBytes(os.Getenv("FILES_MAX_MB")),
 	}
 
 	// Agent transport (opt-in). Empty AGENT_TRANSPORT keeps the default gRPC
@@ -443,4 +448,20 @@ func derefBool(p *bool, fallback bool) bool {
 		return *p
 	}
 	return fallback
+}
+
+func filesMaxBytes(raw string) int64 {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return files.DefaultMaxFileBytes
+	}
+	mb, err := strconv.ParseInt(raw, 10, 64)
+	switch {
+	case err != nil || mb < 0:
+		slog.Warn("config: FILES_MAX_MB is not a whole number of MiB, using the default", "value", raw)
+		return files.DefaultMaxFileBytes
+	case mb == 0 || mb > math.MaxInt64>>20:
+		return files.NoFileLimit
+	}
+	return mb << 20
 }

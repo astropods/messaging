@@ -51,11 +51,12 @@ type FileMeta struct {
 	Size        int64     `json:"size"`
 	ContentType string    `json:"content_type"`
 	UpdatedAt   time.Time `json:"updated_at"`
-	// UploadedBy records the opaque user id that owns the file. File access is
+	// UploadedBy records the opaque user id that owns the file, or for a Slack
+	// file the thread ("slack:<conversation id>"). File access is
 	// per-user: this is the access-control key (see web.ownsFile), not merely
 	// audit metadata. Agent-written plain files are unowned ("agent") until
-	// attributed to a conversation owner via AttributeOwner. Once a real user
-	// owns a file the value is immutable.
+	// attributed to a conversation owner via AttributeOwner. Once a real owner
+	// is set the value is immutable.
 	UploadedBy string `json:"uploaded_by,omitempty"`
 	// Status is the lifecycle state (see the Status* constants). Empty means
 	// ready (adopted plain files and legacy metadata predating this field).
@@ -77,6 +78,29 @@ type UploadTarget struct {
 	Method  string            `json:"method"`
 	Headers map[string]string `json:"headers,omitempty"`
 }
+
+// DefaultMaxFileBytes is the per-file cap when FILES_MAX_MB is unset.
+const DefaultMaxFileBytes int64 = 100 << 20 // 100 MiB
+
+// NoFileLimit turns the per-file cap off; StorageReserveBytes still applies.
+const NoFileLimit int64 = -1
+
+// EffectiveLimit resolves a configured limit, where zero means DefaultMaxFileBytes.
+func EffectiveLimit(limit int64) int64 {
+	if limit == 0 {
+		return DefaultMaxFileBytes
+	}
+	return limit
+}
+
+// Exceeds reports whether size is over the configured limit.
+func Exceeds(limit, size int64) bool {
+	l := EffectiveLimit(limit)
+	return l != NoFileLimit && size > l
+}
+
+// StorageReserveBytes stays free on the volume for the chat store and metadata.
+const StorageReserveBytes = 32 << 20 // 32 MiB
 
 // Usage reports byte-level capacity of the volume backing the store. For the
 // filesystem store this is the whole underlying volume (on the shared /data PVC

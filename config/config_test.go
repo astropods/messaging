@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/astropods/messaging/internal/store/files"
 	"testing"
 )
 
@@ -299,5 +300,30 @@ func TestLoad_MeshJobsThatAreNotAJSONListAreIgnored(t *testing.T) {
 	}
 	if len(cfg.Mesh.Jobs) != 0 {
 		t.Errorf("Mesh.Jobs = %+v, want none from a value that is not JSON", cfg.Mesh.Jobs)
+	}
+}
+
+func TestLoad_FilesMaxMB(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want int64
+	}{
+		{"", files.DefaultMaxFileBytes},
+		{"250", 250 << 20},
+		{"0", files.NoFileLimit},
+		{"-1", files.DefaultMaxFileBytes},
+		{"lots", files.DefaultMaxFileBytes},
+	}
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			t.Setenv("FILES_MAX_MB", tt.raw)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v: a bad cap must not stop the sidecar", err)
+			}
+			if cfg.Files.MaxBytes != tt.want {
+				t.Errorf("FILES_MAX_MB=%q: MaxBytes = %d, want %d", tt.raw, cfg.Files.MaxBytes, tt.want)
+			}
+		})
 	}
 }
