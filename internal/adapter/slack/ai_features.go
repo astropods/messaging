@@ -64,7 +64,7 @@ func (a *SlackAdapter) setSlackStatus(ctx context.Context, conversationID string
 	if err := a.rateLimiter.Wait(ctx); err != nil {
 		return fmt.Errorf("rate limit wait failed: %w", err)
 	}
-	if a.turnStopped(conversationID) {
+	if a.statusesStopped(conversationID) {
 		return nil
 	}
 
@@ -171,7 +171,7 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 		if err != nil {
 			return fmt.Errorf("failed to parse conversation ID: %w", err)
 		}
-		defer a.setSessionStatus(ctx, channelID, threadTS, slack.AgentSessionStatusActive)
+		defer a.endSession(ctx, channelID, threadTS)
 
 		if fullContent == "" && len(content.Attachments) == 0 {
 			logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Skipping empty message for %s", conversationID))
@@ -302,7 +302,7 @@ func (a *SlackAdapter) handleError(ctx context.Context, conversationID string, e
 	if err != nil {
 		return fmt.Errorf("failed to parse conversation ID: %w", err)
 	}
-	defer a.setSessionStatus(ctx, channelID, threadTS, slack.AgentSessionStatusActive)
+	defer a.endSession(ctx, channelID, threadTS)
 
 	if !a.canPostToThread(ctx, channelID, threadTS) {
 		return nil

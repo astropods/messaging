@@ -71,6 +71,12 @@ func respond(t *testing.T, a *SlackAdapter, responses ...*pb.AgentResponse) {
 
 func TestAgentSessionStopped_EventReachesAgentAsStop(t *testing.T) {
 	a, calls, feedback := newStopTestAdapter(t)
+	sessionCallsAtStop := -1
+	a.feedbackHandler = func(_ context.Context, fb *pb.PlatformFeedback) error {
+		sessionCallsAtStop = len(callsTo(calls, "agents.sessions.setStatus"))
+		*feedback = append(*feedback, fb)
+		return nil
+	}
 	payload := `{"type":"event_callback","team_id":"T1","event":{"type":"agent_session_stopped",` +
 		`"channel":"C1","thread_ts":"1700000000.000001","user":"U1","event_ts":"1700000000.000005","streaming_message_ts":[]}}`
 	parsed, err := slackevents.ParseEvent(json.RawMessage(payload), slackevents.OptionNoVerifyToken())
@@ -92,6 +98,9 @@ func TestAgentSessionStopped_EventReachesAgentAsStop(t *testing.T) {
 	}
 	if fb.GetUser().GetId() != "U1" {
 		t.Errorf("STOP must carry the Slack user who pressed Stop, got %q", fb.GetUser().GetId())
+	}
+	if sessionCallsAtStop != 0 {
+		t.Errorf("STOP must reach the agent before the Slack session call, but %d session calls ran first", sessionCallsAtStop)
 	}
 
 	setStatus := callsTo(calls, "agents.sessions.setStatus")
@@ -190,11 +199,11 @@ func TestStoppedConversation(t *testing.T) {
 
 func TestStopTurn_BoundsTrackedStops(t *testing.T) {
 	a, _ := newTestAdapter()
-	for i := range maxStoppedTurns + 10 {
+	for i := range maxTrackedTurns + 10 {
 		a.stopTurn(strings.Repeat("x", i+1))
 	}
-	if n := len(a.stoppedTurns); n != maxStoppedTurns {
-		t.Errorf("stopped turns that never restart must stay bounded at %d, got %d", maxStoppedTurns, n)
+	if n := len(a.stoppedTurns); n != maxTrackedTurns {
+		t.Errorf("stopped turns that never restart must stay bounded at %d, got %d", maxTrackedTurns, n)
 	}
 }
 
@@ -229,15 +238,29 @@ func TestAppMention_EndsTheAgentSessionWhenDispatchFails(t *testing.T) {
 
 func TestAgentReply_EndsTheAgentSessionAfterPosting(t *testing.T) {
 	a, calls, _ := newStopTestAdapter(t)
+	a.openSession(t.Context(), "C1", "1.1")
 
 	respond(t, a, chunk("C1-1.1", pb.ContentChunk_START, ""), chunk("C1-1.1", pb.ContentChunk_DELTA, "answer"), chunk("C1-1.1", pb.ContentChunk_END, ""))
 
-	if got := sessionStatuses(calls); !slices.Equal(got, []string{"active C1 1.1"}) {
+	if got := sessionStatuses(calls); !slices.Equal(got, []string{"processing C1 1.1", "active C1 1.1"}) {
 		t.Fatalf("a finished reply must move the session out of processing; got session updates %v", got)
 	}
-	posted, ended := methodIndex(calls, "chat.postMessage"), methodIndex(calls, "agents.sessions.setStatus")
+	posted := methodIndex(calls, "chat.postMessage")
+	ended := slices.IndexFunc(*calls, func(c slackCall) bool {
+		return c.Method == "/agents.sessions.setStatus" && c.Body["status"] == "active"
+	})
 	if posted == -1 || posted > ended {
 		t.Errorf("the session must end after the reply posts (post at %d, session update at %d)", posted, ended)
+	}
+}
+
+func TestAgentReply_LeavesASessionItDidNotOpenAlone(t *testing.T) {
+	a, calls, _ := newStopTestAdapter(t)
+
+	respond(t, a, chunk("C1-1.1", pb.ContentChunk_START, ""), chunk("C1-1.1", pb.ContentChunk_DELTA, "answer"), chunk("C1-1.1", pb.ContentChunk_END, ""))
+
+	if got := sessionStatuses(calls); len(got) != 0 {
+		t.Errorf("a reply in a thread the adapter opened no session for must not call Slack's session API, got %v", got)
 	}
 }
 
@@ -248,8 +271,9 @@ func TestAgentReply_EmptyReplyOrErrorStillEndsTheAgentSession(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			a, calls, _ := newStopTestAdapter(t)
+			a.openSession(t.Context(), "C1", "1.1")
 			respond(t, a, chunk("C1-1.1", pb.ContentChunk_START, ""), closing)
-			if got := sessionStatuses(calls); !slices.Equal(got, []string{"active C1 1.1"}) {
+			if got := sessionStatuses(calls); !slices.Equal(got, []string{"processing C1 1.1", "active C1 1.1"}) {
 				t.Errorf("the session must leave processing, got session updates %v", got)
 			}
 		})
@@ -296,5 +320,29 @@ func TestSetSlackStatus_DropsAStatusForATurnStoppedWhileItWaited(t *testing.T) {
 
 	if n := len(callsTo(calls, "assistant.threads.setStatus")); n != 0 {
 		t.Errorf("a status that waited past the stop must not reopen the loading state, got %d calls", n)
+	}
+}
+
+func TestAgentSessionStopped_NextMessageLetsStatusesThroughBeforeStart(t *testing.T) {
+	a, calls, _ := newStopTestAdapter(t)
+	a.msgHandler = func(context.Context, *pb.Message) error { return nil }
+	const conv = "C1-1.1"
+	a.handleAgentSessionStopped(t.Context(), &slackevents.AgentSessionStoppedEvent{Channel: "C1", ThreadTimestamp: "1.1", User: "U1"})
+
+	a.handleAppMention(t.Context(), &slackevents.AppMentionEvent{
+		Channel: "C1", User: "U1", Text: "<@B1> again", TimeStamp: "1.2", ThreadTimeStamp: "1.1",
+	}, "T1")
+	before := len(callsTo(calls, "assistant.threads.setStatus"))
+	respond(t, a,
+		&pb.AgentResponse{ConversationId: conv, Payload: &pb.AgentResponse_Status{Status: &pb.StatusUpdate{Status: pb.StatusUpdate_THINKING}}},
+		chunk(conv, pb.ContentChunk_DELTA, "stale"),
+		chunk(conv, pb.ContentChunk_END, ""),
+	)
+
+	if after := len(callsTo(calls, "assistant.threads.setStatus")); after != before+1 {
+		t.Errorf("the next turn's status before its START must show, got %d new status calls", after-before)
+	}
+	if posts := callsTo(calls, "chat.postMessage"); len(posts) != 0 {
+		t.Errorf("content stays dropped until the next turn's START, got posts %v", posts)
 	}
 }

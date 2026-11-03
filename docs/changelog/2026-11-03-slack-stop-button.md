@@ -8,11 +8,11 @@ Slack also shows Stop only for a session that the app set to `processing` with `
 
 # Design
 
-`handleInnerEvent` routes `slackevents.AgentSessionStoppedEvent` to `handleAgentSessionStopped`, which does three things:
+`handleInnerEvent` routes `slackevents.AgentSessionStoppedEvent` to `handleAgentSessionStopped`, which does three things, in this order:
 
 1. It marks the turn stopped and drops its buffered reply. `HandleAgentResponse` then drops the turn's status updates, content, and error. A START opens the next turn. An END or an error closes the stopped turn, so an agent that ignores the stop does not post into the thread after it.
-2. It calls `agents.sessions.setStatus` with `active`. Slack leaves the session in `processing`, with the Stop button showing, until the app moves it.
-3. It forwards `PlatformFeedback{stream_control: STOP}` with the session's conversation ID and the Slack user who pressed Stop. adapter-core in TypeScript and Python already aborts the in-flight turn for that conversation, as it does for a web chat stop.
+2. It forwards `PlatformFeedback{stream_control: STOP}` with the session's conversation ID and the Slack user who pressed Stop. adapter-core in TypeScript and Python already aborts the in-flight turn for that conversation, as it does for a web chat stop. The STOP goes before any Slack call, so Slack latency does not delay the abort.
+3. It calls `agents.sessions.setStatus` with `active`. Slack leaves the session in `processing`, with the Stop button showing, until the app moves it.
 
 ## Session status
 
@@ -26,11 +26,13 @@ The adapter keeps the session in step with the turn:
 | The mention fails to reach the agent | `active` |
 | A user presses Stop | `active` |
 
-Without the `active` steps, Slack keeps the Stop button up after a finished reply until the one-hour processing timeout. The adapter still sets `assistant.threads.setStatus` too, because only that call carries status text such as "Running create_file". The adapter sets no session for a DM, the same as it sets no loading state there. An agent that sets its own session in a DM can still be stopped. An app that is not an agent rejects `agents.sessions.setStatus`, and the adapter logs that at debug level.
+Without the `active` steps, Slack keeps the Stop button up after a finished reply until the one-hour processing timeout. The adapter records each session it opens and sends `active` only for those, so a reply in any other thread, or from an app that is not an agent, costs no extra Slack call. A press of Stop always sends `active`, because the event proves a session exists. The adapter still sets `assistant.threads.setStatus` too, because only that call carries status text such as "Running create_file". The adapter sets no session for a DM, the same as it sets no loading state there. An agent that sets its own session in a DM can still be stopped. An app that is not an agent rejects `agents.sessions.setStatus`, and the adapter logs that at debug level.
 
 ## The stop gate
 
 A status update or reply can pass the gate just before a stop, then wait on the rate limiter or the thread lookup. The adapter checks the gate again just before the Slack call, so that output is dropped too.
+
+The protocol lets an agent send a turn's status updates before its START. So when the user's next message reaches the agent, the gate lets status updates through again. Content stays dropped until the next START, the same as the web adapter's gate.
 
 ## Conversation ID
 
@@ -40,7 +42,7 @@ The conversation ID is `<channel>-<thread_ts>`, as for every threaded Slack conv
 
 Anyone who can see the session can press Stop, the same as the feedback buttons. The stop is not checked against the agent's authz grants.
 
-The stopped-turn set holds at most 1,000 conversations. An agent that honors the stop sends nothing more for the turn, so its entry stays until the next START.
+The stopped-turn set and the open-session set each hold at most 1,000 conversations. An agent that honors the stop sends nothing more for the turn, so its entry stays until the next START.
 
 ## slack-go upgrade
 
