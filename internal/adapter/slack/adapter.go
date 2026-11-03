@@ -1193,6 +1193,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 	if err := a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "Assistant is thinking...", "thinking_face"); err != nil {
 		slog.Error(fmt.Sprintf("[Slack] ERROR: Failed to set loading state: %v", err))
 	}
+	a.setSessionStatus(ctx, ev.Channel, threadID, slack.AgentSessionStatusProcessing)
 
 	// Convert to pb.Message
 	msg := &pb.Message{
@@ -1222,6 +1223,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 			a.sendErrorMessage(ctx, ev.Channel, threadID, err)
 			// Clear loading state on error
 			_ = a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "", "")
+			a.setSessionStatus(ctx, ev.Channel, threadID, slack.AgentSessionStatusActive)
 		}
 	}
 }

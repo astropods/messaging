@@ -24,16 +24,7 @@ func (a *SlackAdapter) handleAgentSessionStopped(ctx context.Context, ev *slacke
 		"conversation_id", conversationID, "user_id", ev.User)
 
 	// Slack leaves the session processing, with its Stop button, until the app moves it.
-	if a.client != nil {
-		if _, err := a.client.SetAgentSessionStatusContext(ctx, slack.AgentSessionSetStatusParameters{
-			Status:    slack.AgentSessionStatusActive,
-			ChannelID: ev.Channel,
-			ThreadTS:  ev.ThreadTimestamp,
-		}); err != nil {
-			slog.Warn("[Slack] Could not end the stopped agent session",
-				"channel_id", ev.Channel, "thread_ts", ev.ThreadTimestamp, "err", err)
-		}
-	}
+	a.setSessionStatus(ctx, ev.Channel, ev.ThreadTimestamp, slack.AgentSessionStatusActive)
 
 	a.forwardFeedback(ctx, &pb.PlatformFeedback{
 		ConversationId: conversationID,
@@ -46,6 +37,28 @@ func (a *SlackAdapter) handleAgentSessionStopped(ctx context.Context, ev *slacke
 			},
 		},
 	})
+}
+
+// Slack shows the Stop button only while the session is processing.
+func (a *SlackAdapter) setSessionStatus(ctx context.Context, channelID, threadTS, status string) {
+	if a.client == nil || threadTS == "" {
+		return
+	}
+	if _, err := a.client.SetAgentSessionStatusContext(ctx, slack.AgentSessionSetStatusParameters{
+		Status:    status,
+		ChannelID: channelID,
+		ThreadTS:  threadTS,
+	}); err != nil {
+		slog.Debug("[Slack] Could not set agent session status",
+			"channel_id", channelID, "thread_ts", threadTS, "status", status, "err", err)
+	}
+}
+
+func (a *SlackAdapter) turnStopped(conversationID string) bool {
+	a.bufferMu.Lock()
+	defer a.bufferMu.Unlock()
+	_, stopped := a.stoppedTurns[conversationID]
+	return stopped
 }
 
 // A top-level DM conversation is keyed by the channel, but its session by the message.

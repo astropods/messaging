@@ -64,6 +64,9 @@ func (a *SlackAdapter) setSlackStatus(ctx context.Context, conversationID string
 	if err := a.rateLimiter.Wait(ctx); err != nil {
 		return fmt.Errorf("rate limit wait failed: %w", err)
 	}
+	if a.turnStopped(conversationID) {
+		return nil
+	}
 
 	// Call Slack AI API to set thread status
 	if err := a.aiClient.SetThreadStatus(ctx, channelID, threadTS, statusMessage, emoji); err != nil {
@@ -164,14 +167,15 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 			ctx = logctx.WithTraceparent(ctx, traceContext.Traceparent)
 		}
 
-		if fullContent == "" && len(content.Attachments) == 0 {
-			logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Skipping empty message for %s", conversationID))
-			return nil
-		}
-
 		channelID, threadTS, err := a.parseConversationID(conversationID)
 		if err != nil {
 			return fmt.Errorf("failed to parse conversation ID: %w", err)
+		}
+		defer a.setSessionStatus(ctx, channelID, threadTS, slack.AgentSessionStatusActive)
+
+		if fullContent == "" && len(content.Attachments) == 0 {
+			logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Skipping empty message for %s", conversationID))
+			return nil
 		}
 
 		if !a.canPostToThread(ctx, channelID, threadTS) {
@@ -182,7 +186,13 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 			if err := a.rateLimiter.Wait(ctx); err != nil {
 				return fmt.Errorf("rate limit wait failed: %w", err)
 			}
+		}
+		// A stop can arrive while the reply waits on the thread lookup or the rate limiter.
+		if a.turnStopped(conversationID) {
+			return nil
+		}
 
+		if fullContent != "" {
 			_, err = a.aiClient.PostMessageWithFeedback(ctx, channelID, fullContent, threadTS, traceContext)
 			if err != nil {
 				return fmt.Errorf("failed to send message: %w", err)
@@ -292,6 +302,7 @@ func (a *SlackAdapter) handleError(ctx context.Context, conversationID string, e
 	if err != nil {
 		return fmt.Errorf("failed to parse conversation ID: %w", err)
 	}
+	defer a.setSessionStatus(ctx, channelID, threadTS, slack.AgentSessionStatusActive)
 
 	if !a.canPostToThread(ctx, channelID, threadTS) {
 		return nil

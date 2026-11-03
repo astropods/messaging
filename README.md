@@ -373,7 +373,7 @@ Uses PyPA trusted publishing — no token storage required.
 3. Add bot token scopes: `chat:write`, `channels:history`, `groups:history`, `im:history`, `app_mentions:read`
 4. Subscribe to events: `message.channels`, `message.groups`, `message.im`, `app_mention`
 5. For `actionable_reactions`, also add the `reactions:read` scope and subscribe to `reaction_added` and `reaction_removed`
-6. For Slack's Stop button, declare the app as an agent in its settings, which adds `assistant:write`, and subscribe to `agent_session_stopped`
+6. For Slack's Stop button, turn on the agent experience on the app's **Agents** page, which adds `assistant:write`, and subscribe to `agent_session_stopped`. An app on the outdated experience shows no Stop button
 7. Install to workspace
 
 ### Observe channels

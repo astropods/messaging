@@ -3,10 +3,16 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
+	slacklib "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 )
 
@@ -31,6 +37,20 @@ func callsTo(calls *[]slackCall, method string) []string {
 		}
 	}
 	return bodies
+}
+
+func sessionStatuses(calls *[]slackCall) []string {
+	var out []string
+	for _, c := range *calls {
+		if c.Method == "/agents.sessions.setStatus" {
+			out = append(out, fmt.Sprintf("%v %v %v", c.Body["status"], c.Body["channel_id"], c.Body["thread_ts"]))
+		}
+	}
+	return out
+}
+
+func methodIndex(calls *[]slackCall, method string) int {
+	return slices.IndexFunc(*calls, func(c slackCall) bool { return c.Method == "/"+method })
 }
 
 func chunk(conversationID string, kind pb.ContentChunk_ChunkType, text string) *pb.AgentResponse {
@@ -175,5 +195,106 @@ func TestStopTurn_BoundsTrackedStops(t *testing.T) {
 	}
 	if n := len(a.stoppedTurns); n != maxStoppedTurns {
 		t.Errorf("stopped turns that never restart must stay bounded at %d, got %d", maxStoppedTurns, n)
+	}
+}
+
+func TestAppMention_OpensAnAgentSessionSoSlackShowsStop(t *testing.T) {
+	a, calls, _ := newStopTestAdapter(t)
+	var dispatched int
+	a.msgHandler = func(context.Context, *pb.Message) error {
+		dispatched++
+		return nil
+	}
+
+	a.handleAppMention(t.Context(), &slackevents.AppMentionEvent{Channel: "C1", User: "U1", Text: "<@B1> hi", TimeStamp: "1.1"}, "T1")
+
+	if dispatched != 1 {
+		t.Fatalf("the mention must reach the agent, got %d dispatches", dispatched)
+	}
+	if got := sessionStatuses(calls); !slices.Equal(got, []string{"processing C1 1.1"}) {
+		t.Errorf("Slack shows Stop only for a processing session; got session updates %v", got)
+	}
+}
+
+func TestAppMention_EndsTheAgentSessionWhenDispatchFails(t *testing.T) {
+	a, calls, _ := newStopTestAdapter(t)
+	a.msgHandler = func(context.Context, *pb.Message) error { return errors.New("agent unreachable") }
+
+	a.handleAppMention(t.Context(), &slackevents.AppMentionEvent{Channel: "C1", User: "U1", Text: "<@B1> hi", TimeStamp: "1.1"}, "T1")
+
+	if got := sessionStatuses(calls); !slices.Equal(got, []string{"processing C1 1.1", "active C1 1.1"}) {
+		t.Errorf("a failed mention must not leave the session processing; got session updates %v", got)
+	}
+}
+
+func TestAgentReply_EndsTheAgentSessionAfterPosting(t *testing.T) {
+	a, calls, _ := newStopTestAdapter(t)
+
+	respond(t, a, chunk("C1-1.1", pb.ContentChunk_START, ""), chunk("C1-1.1", pb.ContentChunk_DELTA, "answer"), chunk("C1-1.1", pb.ContentChunk_END, ""))
+
+	if got := sessionStatuses(calls); !slices.Equal(got, []string{"active C1 1.1"}) {
+		t.Fatalf("a finished reply must move the session out of processing; got session updates %v", got)
+	}
+	posted, ended := methodIndex(calls, "chat.postMessage"), methodIndex(calls, "agents.sessions.setStatus")
+	if posted == -1 || posted > ended {
+		t.Errorf("the session must end after the reply posts (post at %d, session update at %d)", posted, ended)
+	}
+}
+
+func TestAgentReply_EmptyReplyOrErrorStillEndsTheAgentSession(t *testing.T) {
+	for name, closing := range map[string]*pb.AgentResponse{
+		"empty END": chunk("C1-1.1", pb.ContentChunk_END, ""),
+		"error":     {ConversationId: "C1-1.1", Payload: &pb.AgentResponse_Error{Error: &pb.ErrorResponse{Message: "boom"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, calls, _ := newStopTestAdapter(t)
+			respond(t, a, chunk("C1-1.1", pb.ContentChunk_START, ""), closing)
+			if got := sessionStatuses(calls); !slices.Equal(got, []string{"active C1 1.1"}) {
+				t.Errorf("the session must leave processing, got session updates %v", got)
+			}
+		})
+	}
+}
+
+func TestAgentSessionStopped_DropsAReplyAlreadyOnItsWayToSlack(t *testing.T) {
+	a, _ := newTestAdapter()
+	const conv = "C1-1.1"
+	var posts int
+	ok := func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, _ *http.Request) {
+		a.stopTurn(conv)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "messages": []map[string]any{{"ts": "1.1"}}})
+	})
+	mux.HandleFunc("/chat.postMessage", func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		ok(w, r)
+	})
+	mux.HandleFunc("/", ok)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	a.client = slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/"))
+	a.aiClient = &SlackAIClient{botToken: "xoxb-fake", httpClient: srv.Client(), baseURL: srv.URL}
+	a.rateLimiter = NewRateLimiter(1000, 1000)
+
+	respond(t, a, chunk(conv, pb.ContentChunk_START, ""), chunk(conv, pb.ContentChunk_DELTA, "answer"), chunk(conv, pb.ContentChunk_END, ""))
+
+	if posts != 0 {
+		t.Errorf("a stop during the thread lookup must keep the reply out of Slack, got %d posts", posts)
+	}
+}
+
+func TestSetSlackStatus_DropsAStatusForATurnStoppedWhileItWaited(t *testing.T) {
+	a, calls, _ := newStopTestAdapter(t)
+	a.stopTurn("C1-1.1")
+
+	if err := a.setSlackStatus(t.Context(), "C1-1.1", &pb.StatusUpdate{Status: pb.StatusUpdate_THINKING}); err != nil {
+		t.Fatalf("setSlackStatus: %v", err)
+	}
+
+	if n := len(callsTo(calls, "assistant.threads.setStatus")); n != 0 {
+		t.Errorf("a status that waited past the stop must not reopen the loading state, got %d calls", n)
 	}
 }
