@@ -486,6 +486,21 @@ func TestHandleMessage_ChannelThreadFileShareReachesAgent(t *testing.T) {
 	assertStoredFile(t, store, msg.Attachments[0].StorageKey, csv, threadOwner(msg.ConversationId))
 }
 
+func TestHandleMessage_ChannelThreadFileShareNotStagedWhenDenied(t *testing.T) {
+	a, handler := newTestAdapter()
+	store := newTestFileStore(t, a)
+	a.SetAuthorizer(&denyAuthorizer{})
+	csv := []byte("a,b\n")
+	url := fileTestServer(t, a, csv)
+
+	a.handleMessage(t.Context(), channelFileShare(url, csv, "updated numbers", "1234567890.000001"), "", nil)
+
+	if handler.count() != 0 {
+		t.Fatalf("a denied user's thread reply must not reach the agent, got %d dispatches", handler.count())
+	}
+	assertNoStoredFiles(t, store)
+}
+
 func TestHandleMessage_TopLevelChannelFileShareLeftToAppMention(t *testing.T) {
 	a, handler := newTestAdapter()
 	store := newTestFileStore(t, a)

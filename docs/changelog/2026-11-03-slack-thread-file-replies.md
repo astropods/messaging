@@ -19,7 +19,7 @@ Files are handled as they already are for a DM. Images of 2 MiB or less are inli
 
 Slack's Bolt framework treats these messages the same way: no default middleware drops `file_share` messages or thread replies, and its `Assistant` accepts `file_share` as a user message. A Bolt app downloads `url_private` itself with its bot token. Agents here hold no Slack token, so the adapter downloads for them before dispatch.
 
-For an app that subscribes to `message.channels` or `message.groups`, the adapter now downloads every file in a forwarded thread reply to the agent's volume, even when the agent ignores the reply. The agent already receives the text of those replies. `FILES_MAX_MB` and the volume reserve bound each download, and the adapter names any file it skips in the message.
+For an app that subscribes to `message.channels` or `message.groups`, the adapter now downloads every file in a forwarded thread reply to the agent's volume, even when the agent ignores the reply. The agent already receives the text of those replies. `FILES_MAX_MB` and the volume reserve bound each download, and the adapter names any file it skips in the message. Staged files have no retention, so they stay on the volume. Images of 2 MiB or less are inlined before authz runs, as they already are for mentions and DMs. So an image in a denied user's thread reply is downloaded and then discarded: it never reaches the agent or the volume.
 
 # Migration
 
