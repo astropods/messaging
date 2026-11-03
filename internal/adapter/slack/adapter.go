@@ -44,6 +44,7 @@ type SlackAdapter struct {
 	bufferMu       sync.Mutex
 	contentBuffers map[string]string
 	traceBuffers   map[string]*pb.TraceContext
+	stoppedTurns   map[string]struct{}
 
 	// actionableReactions is the set of emoji names forwarded to the agent.
 	// Built from config at initialization; empty map means no reactions are forwarded.
@@ -448,6 +449,9 @@ func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackeve
 
 	case *slackevents.AssistantThreadStartedEvent:
 		a.handleAssistantThreadStarted(ctx, ev, teamID)
+
+	case *slackevents.AgentSessionStoppedEvent:
+		a.handleAgentSessionStopped(ctx, ev)
 
 	default:
 		slog.Debug(fmt.Sprintf("[Slack] Unhandled inner event type: %s", innerEvent.Type))

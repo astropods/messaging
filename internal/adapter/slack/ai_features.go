@@ -19,6 +19,9 @@ func (a *SlackAdapter) HandleAgentResponse(ctx context.Context, response *pb.Age
 	if response.TraceContext != nil {
 		ctx = logctx.WithTraceparent(ctx, response.TraceContext.Traceparent)
 	}
+	if a.dropStopped(response) {
+		return nil
+	}
 
 	switch payload := response.Payload.(type) {
 	case *pb.AgentResponse_Status:

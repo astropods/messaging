@@ -44,7 +44,7 @@ messaging/
 
 ### Prerequisites
 
-- Go 1.25+
+- Go 1.26+
 - Redis (or set `STORAGE_TYPE=memory` to use the in-memory store)
 - A Slack app with Socket Mode enabled, only if you use the Slack adapter (bot token + app token)
 
@@ -373,7 +373,8 @@ Uses PyPA trusted publishing — no token storage required.
 3. Add bot token scopes: `chat:write`, `channels:history`, `groups:history`, `im:history`, `app_mentions:read`
 4. Subscribe to events: `message.channels`, `message.groups`, `message.im`, `app_mention`
 5. For `actionable_reactions`, also add the `reactions:read` scope and subscribe to `reaction_added` and `reaction_removed`
-6. Install to workspace
+6. For Slack's Stop button, declare the app as an agent in its settings, which adds `assistant:write`, and subscribe to `agent_session_stopped`
+7. Install to workspace
 
 ### Observe channels
 

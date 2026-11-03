@@ -1,6 +1,6 @@
 module github.com/astropods/messaging
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.42.1
@@ -12,7 +12,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.17.2
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
-	github.com/slack-go/slack v0.23.1
+	github.com/slack-go/slack v0.33.0
 	golang.org/x/sys v0.44.0
 	google.golang.org/grpc v1.78.0
 	google.golang.org/protobuf v1.36.11
