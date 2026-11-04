@@ -47,6 +47,8 @@ type SlackAdapter struct {
 	stoppedTurns   map[string]bool
 	openSessions   map[string]struct{}
 
+	events channelQueue
+
 	// actionableReactions is the set of emoji names forwarded to the agent.
 	// Built from config at initialization; empty map means no reactions are forwarded.
 	actionableReactions map[string]bool
@@ -373,7 +375,7 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 		if evt.Request != nil {
 			payload = evt.Request.Payload
 		}
-		a.handleInnerEvent(ctx, eventsAPIEvent.InnerEvent, eventsAPIEvent.TeamID, payload)
+		a.queueInnerEvent(ctx, eventsAPIEvent, payload)
 
 	case socketmode.EventTypeInteractive:
 		// Handle block actions (feedback buttons, etc.) and view submissions

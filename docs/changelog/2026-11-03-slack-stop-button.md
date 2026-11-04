@@ -6,6 +6,8 @@ A press of Stop in Slack now stops the run the same way web chat's stop does: th
 
 Slack also shows Stop only for a session that the app set to `processing` with `agents.sessions.setStatus`. The adapter set its loading state only with the older `assistant.threads.setStatus`, which never shows Stop.
 
+The adapter also handled Slack events one at a time for the whole app. A large file download in one DM delayed every other event, a Stop press included. Events from different channels now run in parallel.
+
 # Design
 
 `handleInnerEvent` routes `slackevents.AgentSessionStoppedEvent` to `handleAgentSessionStopped`, which does three things, in this order:
@@ -37,6 +39,14 @@ The protocol lets an agent send a turn's status updates before its START. So whe
 ## Conversation ID
 
 The conversation ID is `<channel>-<thread_ts>`, as for every threaded Slack conversation. A top-level DM is one conversation keyed by the channel alone. When the stopped thread has no turn in flight and the DM does, the stop goes to the DM conversation. Then an agent that set its own session status on a top-level DM message can still be stopped.
+
+## Event order
+
+`handleSocketEvent` acks each Events API event and hands it to `queueInnerEvent`. That runs the event on a queue for its Slack channel (`channelQueue` in `event_queue.go`). A channel with waiting events has one goroutine, which runs them in arrival order and exits when the queue is empty. Different channels and DMs run in parallel.
+
+Per-channel order keeps a thread's messages in order for the agent. It also keeps a Stop press ahead of the next message in its thread, which the stop gate needs. One goroutine per event would lose both. A queue has no length cap: Slack sends an app at most 30,000 events per workspace per hour.
+
+Interactive events and slash commands still run on the socket loop. They download nothing, and the loop no longer waits on Events API work. Adapter state was already locked, because agent responses arrive on the gRPC side while events run.
 
 ## Access and limits
 
