@@ -446,7 +446,7 @@ func TestHandleAppMention_FileSignInPageSkipped(t *testing.T) {
 	assertNoStoredFiles(t, store)
 }
 
-func channelFileShare(url, text, threadTS string) *slackevents.MessageEvent {
+func channelFileShare(url string, body []byte, text, threadTS string) *slackevents.MessageEvent {
 	return &slackevents.MessageEvent{
 		Channel:         "C123456",
 		User:            "U123",
@@ -454,33 +454,49 @@ func channelFileShare(url, text, threadTS string) *slackevents.MessageEvent {
 		SubType:         "file_share",
 		ThreadTimeStamp: threadTS,
 		TimeStamp:       "1234567890.000002",
-		Message: &slacklib.Msg{Files: []slacklib.File{
-			{ID: "F1", Name: "deals.csv", Mimetype: "text/csv", Size: 24, URLPrivateDownload: url},
-			{ID: "F2", Name: "chart.png", Mimetype: "image/png", Size: 24, URLPrivateDownload: url},
-		}},
+		Message: &slacklib.Msg{Files: []slacklib.File{{
+			Name:               "deals.csv",
+			Mimetype:           "text/csv",
+			Size:               len(body),
+			URLPrivateDownload: url,
+		}}},
 	}
 }
 
-const unmentionedNotes = "[slack_file_skipped] deals.csv: " + skipNotMentioned + "\n[slack_file_skipped] chart.png: " + skipNotMentioned
-
-func TestHandleMessage_ChannelThreadFileShareNamesFilesWithoutDownloading(t *testing.T) {
+func TestHandleMessage_ChannelThreadFileShareReachesAgent(t *testing.T) {
 	a, handler := newTestAdapter()
 	store := newTestFileStore(t, a)
-	url, downloads := threadServer(t, a, nil, []byte("account,arr\n"))
+	csv := []byte("account,arr\nAcme,120000\n")
+	url := fileTestServer(t, a, csv)
 
-	a.handleMessage(t.Context(), channelFileShare(url, "updated numbers", "1234567890.000001"), "", nil)
+	a.handleMessage(t.Context(), channelFileShare(url, csv, "updated numbers", "1234567890.000001"), "", nil)
 
 	msg := handler.last()
 	if msg == nil {
 		t.Fatal("a thread reply with a file must reach the agent like a text reply")
 	}
-	if msg.Content != "updated numbers\n\n"+unmentionedNotes || msg.ConversationId != "C123456-1234567890.000001" ||
+	if msg.Content != "updated numbers" || msg.ConversationId != "C123456-1234567890.000001" ||
 		msg.PlatformContext.EventKind != pb.PlatformContext_EVENT_KIND_THREAD_REPLY {
-		t.Errorf("the reply must keep its text and thread and name its files, got content %q, conversation %q, kind %v",
+		t.Errorf("the reply must keep its text and thread, got content %q, conversation %q, kind %v",
 			msg.Content, msg.ConversationId, msg.PlatformContext.EventKind)
 	}
-	if len(msg.Attachments) != 0 || downloads() != 0 {
-		t.Errorf("only a mention may download a channel file, got %d attachments and %d downloads", len(msg.Attachments), downloads())
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("the reply's file must be staged for the agent, got %d attachments", len(msg.Attachments))
+	}
+	assertStoredFile(t, store, msg.Attachments[0].StorageKey, csv, threadOwner(msg.ConversationId))
+}
+
+func TestHandleMessage_ChannelThreadFileShareNotStagedWhenDenied(t *testing.T) {
+	a, handler := newTestAdapter()
+	store := newTestFileStore(t, a)
+	a.SetAuthorizer(&denyAuthorizer{})
+	csv := []byte("a,b\n")
+	url := fileTestServer(t, a, csv)
+
+	a.handleMessage(t.Context(), channelFileShare(url, csv, "updated numbers", "1234567890.000001"), "", nil)
+
+	if handler.count() != 0 {
+		t.Fatalf("a denied user's thread reply must not reach the agent, got %d dispatches", handler.count())
 	}
 	assertNoStoredFiles(t, store)
 }
@@ -488,9 +504,10 @@ func TestHandleMessage_ChannelThreadFileShareNamesFilesWithoutDownloading(t *tes
 func TestHandleMessage_TopLevelChannelFileShareLeftToAppMention(t *testing.T) {
 	a, handler := newTestAdapter()
 	store := newTestFileStore(t, a)
-	url := fileTestServer(t, a, []byte("a,b\n"))
+	csv := []byte("a,b\n")
+	url := fileTestServer(t, a, csv)
 
-	a.handleMessage(t.Context(), channelFileShare(url, "fyi", ""), "", nil)
+	a.handleMessage(t.Context(), channelFileShare(url, csv, "fyi", ""), "", nil)
 
 	if handler.count() != 0 {
 		t.Fatalf("a top-level channel upload outside an observe channel is not addressed to the bot, got %d dispatches", handler.count())
@@ -498,32 +515,33 @@ func TestHandleMessage_TopLevelChannelFileShareLeftToAppMention(t *testing.T) {
 	assertNoStoredFiles(t, store)
 }
 
-func TestHandleMessage_ObserveChannelFileShareNamesFilesWithoutDownloading(t *testing.T) {
+func TestHandleMessage_ObserveChannelFileShareReachesAgent(t *testing.T) {
 	a, handler := newTestAdapter()
 	a.observeChannels = map[string]bool{"C123456": true}
 	store := newTestFileStore(t, a)
-	url, downloads := threadServer(t, a, nil, []byte("a,b\n"))
+	csv := []byte("a,b\n")
+	url := fileTestServer(t, a, csv)
 
-	a.handleMessage(t.Context(), channelFileShare(url, "fyi", ""), "", nil)
+	a.handleMessage(t.Context(), channelFileShare(url, csv, "fyi", ""), "", nil)
 
 	msg := handler.last()
 	if msg == nil || msg.PlatformContext.EventKind != pb.PlatformContext_EVENT_KIND_OBSERVED {
 		t.Fatalf("an observe channel forwards every top-level message, uploads included, got %v", msg)
 	}
-	if msg.Content != "fyi\n\n"+unmentionedNotes || len(msg.Attachments) != 0 || downloads() != 0 {
-		t.Errorf("an observed upload must be named, not downloaded, got content %q, %d attachments, %d downloads",
-			msg.Content, len(msg.Attachments), downloads())
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("the observed upload must be staged, got %d attachments", len(msg.Attachments))
 	}
-	assertNoStoredFiles(t, store)
+	assertStoredFile(t, store, msg.Attachments[0].StorageKey, csv, threadOwner(msg.ConversationId))
 }
 
 func TestHandleMessage_ChannelFileShareMentioningBotLeftToAppMention(t *testing.T) {
 	a, handler := newTestAdapter()
 	a.botUserID = "U0BOT"
 	store := newTestFileStore(t, a)
-	url := fileTestServer(t, a, []byte("a,b\n"))
+	csv := []byte("a,b\n")
+	url := fileTestServer(t, a, csv)
 
-	a.handleMessage(t.Context(), channelFileShare(url, "<@U0BOT> read this", "1234567890.000001"), "", nil)
+	a.handleMessage(t.Context(), channelFileShare(url, csv, "<@U0BOT> read this", "1234567890.000001"), "", nil)
 
 	if handler.count() != 0 {
 		t.Fatalf("app_mention already delivers an upload that mentions the bot, got %d extra dispatches", handler.count())

@@ -35,7 +35,6 @@ const (
 	skipNotSaved      = "file could not be saved"
 	skipNoStore       = "file uploads are not enabled for this agent"
 	skipExternal      = "linked file, not an upload"
-	skipNotMentioned  = "not downloaded until the bot is mentioned in this thread"
 )
 
 // User-visible reasons a file the agent returned was not posted.
@@ -183,15 +182,6 @@ func oversizedImageSkips(files []slack.File) []fileSkip {
 		if strings.HasPrefix(files[i].Mimetype, "image/") && files[i].Size > maxInlineImageBytes {
 			skips = append(skips, fileSkip{files[i].Name, skipImageTooLarge})
 		}
-	}
-	return skips
-}
-
-// threadContext stages these when the bot is next mentioned in the thread.
-func unmentionedFileSkips(files []slack.File) []fileSkip {
-	var skips []fileSkip
-	for i := range files {
-		skips = append(skips, fileSkip{files[i].Name, skipNotMentioned})
 	}
 	return skips
 }

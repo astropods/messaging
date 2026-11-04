@@ -6,7 +6,7 @@ Go messaging service that connects AI agents to messaging platforms via gRPC bid
 
 - **gRPC bidirectional streaming** — real-time message flow between agents and platforms
 - **Slack adapter** — Socket Mode, AI status indicators, suggested prompts, rate limiting, observe-channel mode
-- **Slack files**: files on a mention or DM, and earlier files in a mentioned thread, are staged in the files store for the agent. A thread reply or observed message names its files and leaves them for the next mention. Files the agent returns are uploaded into the thread. The Slack app needs the `files:read` and `files:write` bot scopes
+- **Slack files**: files on any message the adapter forwards (a mention, DM, thread reply, or observed message), and earlier files in a mentioned thread, are staged in the files store for the agent; files the agent returns are uploaded into the thread. The Slack app needs the `files:read` and `files:write` bot scopes
 - **Web adapter** — HTTP/SSE for browser-based clients
 - **Thread history** — tracks edits and deletions in memory
 - **Storage** — Redis or in-memory conversation store

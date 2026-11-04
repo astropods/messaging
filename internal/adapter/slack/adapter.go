@@ -582,22 +582,14 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	if ev.Message != nil {
 		uploads = ev.Message.Files
 	}
-	var images []*pb.Attachment
-	var skips []fileSkip
-	if isDM {
-		images, skips = a.imageAttachments(ctx, uploads)
-	} else {
-		// The bot receives every reply in its threads, and staged files are never deleted.
-		skips = unmentionedFileSkips(uploads)
-		uploads = nil
-	}
+	images, imageSkips := a.imageAttachments(ctx, uploads)
 
 	// Convert to pb.Message
 	msg := &pb.Message{
 		Id:             uuid.NewString(),
 		Timestamp:      timestamppb.New(parseSlackTimestamp(ev.TimeStamp)),
 		Platform:       "slack",
-		Content:        withSkipNotes(renderMessage(ev.Text, ev.Blocks, attachments), skips),
+		Content:        withSkipNotes(renderMessage(ev.Text, ev.Blocks, attachments), imageSkips),
 		Attachments:    images,
 		ConversationId: conversationID,
 		PlatformContext: &pb.PlatformContext{
