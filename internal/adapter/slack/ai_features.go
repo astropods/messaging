@@ -19,6 +19,9 @@ func (a *SlackAdapter) HandleAgentResponse(ctx context.Context, response *pb.Age
 	if response.TraceContext != nil {
 		ctx = logctx.WithTraceparent(ctx, response.TraceContext.Traceparent)
 	}
+	if a.dropStopped(response) {
+		return nil
+	}
 
 	switch payload := response.Payload.(type) {
 	case *pb.AgentResponse_Status:
@@ -60,6 +63,9 @@ func (a *SlackAdapter) setSlackStatus(ctx context.Context, conversationID string
 	// Apply rate limiting
 	if err := a.rateLimiter.Wait(ctx); err != nil {
 		return fmt.Errorf("rate limit wait failed: %w", err)
+	}
+	if a.statusesStopped(conversationID) {
+		return nil
 	}
 
 	// Call Slack AI API to set thread status
@@ -161,14 +167,15 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 			ctx = logctx.WithTraceparent(ctx, traceContext.Traceparent)
 		}
 
-		if fullContent == "" && len(content.Attachments) == 0 {
-			logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Skipping empty message for %s", conversationID))
-			return nil
-		}
-
 		channelID, threadTS, err := a.parseConversationID(conversationID)
 		if err != nil {
 			return fmt.Errorf("failed to parse conversation ID: %w", err)
+		}
+		defer a.endSession(ctx, channelID, threadTS)
+
+		if fullContent == "" && len(content.Attachments) == 0 {
+			logctx.FromContext(ctx).Debug(fmt.Sprintf("[Slack] Skipping empty message for %s", conversationID))
+			return nil
 		}
 
 		if !a.canPostToThread(ctx, channelID, threadTS) {
@@ -179,7 +186,13 @@ func (a *SlackAdapter) handleContentChunk(ctx context.Context, conversationID st
 			if err := a.rateLimiter.Wait(ctx); err != nil {
 				return fmt.Errorf("rate limit wait failed: %w", err)
 			}
+		}
+		// A stop can arrive while the reply waits on the thread lookup or the rate limiter.
+		if a.turnStopped(conversationID) {
+			return nil
+		}
 
+		if fullContent != "" {
 			_, err = a.aiClient.PostMessageWithFeedback(ctx, channelID, fullContent, threadTS, traceContext)
 			if err != nil {
 				return fmt.Errorf("failed to send message: %w", err)
@@ -289,6 +302,7 @@ func (a *SlackAdapter) handleError(ctx context.Context, conversationID string, e
 	if err != nil {
 		return fmt.Errorf("failed to parse conversation ID: %w", err)
 	}
+	defer a.endSession(ctx, channelID, threadTS)
 
 	if !a.canPostToThread(ctx, channelID, threadTS) {
 		return nil

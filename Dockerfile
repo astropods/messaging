@@ -4,7 +4,7 @@
 # Supports multi-platform builds (linux/amd64, linux/arm64)
 
 # Stage 1: Build Go binary
-FROM --platform=$BUILDPLATFORM golang:1.25 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
 
 WORKDIR /app
 

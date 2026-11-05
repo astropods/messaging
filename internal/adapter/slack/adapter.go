@@ -44,6 +44,10 @@ type SlackAdapter struct {
 	bufferMu       sync.Mutex
 	contentBuffers map[string]string
 	traceBuffers   map[string]*pb.TraceContext
+	stoppedTurns   map[string]bool
+	openSessions   map[string]struct{}
+
+	events channelQueue
 
 	// actionableReactions is the set of emoji names forwarded to the agent.
 	// Built from config at initialization; empty map means no reactions are forwarded.
@@ -177,6 +181,7 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 			msg.Attachments = append(msg.Attachments, append(staged, earlier...)...)
 			msg.Content = withSkipNotes(msg.Content, append(skips, earlierSkips...))
 		}
+		a.allowStatuses(msg.GetConversationId())
 	}
 	return a.msgHandler(ctx, msg)
 }
@@ -370,7 +375,7 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 		if evt.Request != nil {
 			payload = evt.Request.Payload
 		}
-		a.handleInnerEvent(ctx, eventsAPIEvent.InnerEvent, eventsAPIEvent.TeamID, payload)
+		a.queueInnerEvent(ctx, eventsAPIEvent, payload)
 
 	case socketmode.EventTypeInteractive:
 		// Handle block actions (feedback buttons, etc.) and view submissions
@@ -448,6 +453,9 @@ func (a *SlackAdapter) handleInnerEvent(ctx context.Context, innerEvent slackeve
 
 	case *slackevents.AssistantThreadStartedEvent:
 		a.handleAssistantThreadStarted(ctx, ev, teamID)
+
+	case *slackevents.AgentSessionStoppedEvent:
+		a.handleAgentSessionStopped(ctx, ev)
 
 	default:
 		slog.Debug(fmt.Sprintf("[Slack] Unhandled inner event type: %s", innerEvent.Type))
@@ -1189,6 +1197,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 	if err := a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "Assistant is thinking...", "thinking_face"); err != nil {
 		slog.Error(fmt.Sprintf("[Slack] ERROR: Failed to set loading state: %v", err))
 	}
+	a.openSession(ctx, ev.Channel, threadID)
 
 	// Convert to pb.Message
 	msg := &pb.Message{
@@ -1218,6 +1227,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 			a.sendErrorMessage(ctx, ev.Channel, threadID, err)
 			// Clear loading state on error
 			_ = a.aiClient.SetThreadStatus(ctx, ev.Channel, threadID, "", "")
+			a.endSession(ctx, ev.Channel, threadID)
 		}
 	}
 }

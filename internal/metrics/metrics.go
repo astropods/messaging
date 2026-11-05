@@ -26,10 +26,10 @@ var (
 	}, []string{"platform", "reason"})
 
 	// SlackEvents counts Slack events by interaction type before any filtering.
-	// event_type: dm | thread_reply | mention | reaction | observed_top
+	// event_type: dm | thread_reply | mention | reaction | observed_top | session_stopped
 	SlackEvents = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "messaging_slack_events_total",
-		Help: "Total Slack events received, by type: dm, thread_reply, mention, reaction, observed_top.",
+		Help: "Total Slack events received, by type: dm, thread_reply, mention, reaction, observed_top, session_stopped.",
 	}, []string{"event_type"})
 
 	// SaveConversations counts conversations agents copied in, by outcome:
