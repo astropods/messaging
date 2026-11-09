@@ -446,21 +446,107 @@ func TestHandleAppMention_FileSignInPageSkipped(t *testing.T) {
 	assertNoStoredFiles(t, store)
 }
 
-func TestHandleMessage_ChannelFileShareDropped(t *testing.T) {
-	a, handler := newTestAdapter()
-
-	a.handleMessage(t.Context(), &slackevents.MessageEvent{
+func channelFileShare(url string, body []byte, text, threadTS string) *slackevents.MessageEvent {
+	return &slackevents.MessageEvent{
 		Channel:         "C123456",
 		User:            "U123",
-		Text:            "fyi",
+		Text:            text,
 		SubType:         "file_share",
-		ThreadTimeStamp: "1234567890.000001",
+		ThreadTimeStamp: threadTS,
 		TimeStamp:       "1234567890.000002",
-	}, "", nil)
+		Message: &slacklib.Msg{Files: []slacklib.File{{
+			Name:               "deals.csv",
+			Mimetype:           "text/csv",
+			Size:               len(body),
+			URLPrivateDownload: url,
+		}}},
+	}
+}
+
+func TestHandleMessage_ChannelThreadFileShareReachesAgent(t *testing.T) {
+	a, handler := newTestAdapter()
+	store := newTestFileStore(t, a)
+	csv := []byte("account,arr\nAcme,120000\n")
+	url := fileTestServer(t, a, csv)
+
+	a.handleMessage(t.Context(), channelFileShare(url, csv, "updated numbers", "1234567890.000001"), "", nil)
+
+	msg := handler.last()
+	if msg == nil {
+		t.Fatal("a thread reply with a file must reach the agent like a text reply")
+	}
+	if msg.Content != "updated numbers" || msg.ConversationId != "C123456-1234567890.000001" ||
+		msg.PlatformContext.EventKind != pb.PlatformContext_EVENT_KIND_THREAD_REPLY {
+		t.Errorf("the reply must keep its text and thread, got content %q, conversation %q, kind %v",
+			msg.Content, msg.ConversationId, msg.PlatformContext.EventKind)
+	}
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("the reply's file must be staged for the agent, got %d attachments", len(msg.Attachments))
+	}
+	assertStoredFile(t, store, msg.Attachments[0].StorageKey, csv, threadOwner(msg.ConversationId))
+}
+
+func TestHandleMessage_ChannelThreadFileShareNotStagedWhenDenied(t *testing.T) {
+	a, handler := newTestAdapter()
+	store := newTestFileStore(t, a)
+	a.SetAuthorizer(&denyAuthorizer{})
+	csv := []byte("a,b\n")
+	url := fileTestServer(t, a, csv)
+
+	a.handleMessage(t.Context(), channelFileShare(url, csv, "updated numbers", "1234567890.000001"), "", nil)
 
 	if handler.count() != 0 {
-		t.Fatalf("expected channel file_share to be dropped, got %d", handler.count())
+		t.Fatalf("a denied user's thread reply must not reach the agent, got %d dispatches", handler.count())
 	}
+	assertNoStoredFiles(t, store)
+}
+
+func TestHandleMessage_TopLevelChannelFileShareLeftToAppMention(t *testing.T) {
+	a, handler := newTestAdapter()
+	store := newTestFileStore(t, a)
+	csv := []byte("a,b\n")
+	url := fileTestServer(t, a, csv)
+
+	a.handleMessage(t.Context(), channelFileShare(url, csv, "fyi", ""), "", nil)
+
+	if handler.count() != 0 {
+		t.Fatalf("a top-level channel upload outside an observe channel is not addressed to the bot, got %d dispatches", handler.count())
+	}
+	assertNoStoredFiles(t, store)
+}
+
+func TestHandleMessage_ObserveChannelFileShareReachesAgent(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.observeChannels = map[string]bool{"C123456": true}
+	store := newTestFileStore(t, a)
+	csv := []byte("a,b\n")
+	url := fileTestServer(t, a, csv)
+
+	a.handleMessage(t.Context(), channelFileShare(url, csv, "fyi", ""), "", nil)
+
+	msg := handler.last()
+	if msg == nil || msg.PlatformContext.EventKind != pb.PlatformContext_EVENT_KIND_OBSERVED {
+		t.Fatalf("an observe channel forwards every top-level message, uploads included, got %v", msg)
+	}
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("the observed upload must be staged, got %d attachments", len(msg.Attachments))
+	}
+	assertStoredFile(t, store, msg.Attachments[0].StorageKey, csv, threadOwner(msg.ConversationId))
+}
+
+func TestHandleMessage_ChannelFileShareMentioningBotLeftToAppMention(t *testing.T) {
+	a, handler := newTestAdapter()
+	a.botUserID = "U0BOT"
+	store := newTestFileStore(t, a)
+	csv := []byte("a,b\n")
+	url := fileTestServer(t, a, csv)
+
+	a.handleMessage(t.Context(), channelFileShare(url, csv, "<@U0BOT> read this", "1234567890.000001"), "", nil)
+
+	if handler.count() != 0 {
+		t.Fatalf("app_mention already delivers an upload that mentions the bot, got %d extra dispatches", handler.count())
+	}
+	assertNoStoredFiles(t, store)
 }
 
 type slackUpload struct {
