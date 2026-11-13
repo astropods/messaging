@@ -1187,6 +1187,24 @@ func TestSendErrorMessage_AuthzUnavailable_PostsSanitized(t *testing.T) {
 	}
 }
 
+func TestSendErrorMessage_MessageTooLarge_PostsHint(t *testing.T) {
+	srv := newFakeSlackServer(t, "")
+	defer srv.Close()
+	a := &SlackAdapter{
+		client:         slacklib.New("xoxb-fake", slacklib.OptionAPIURL(srv.URL+"/")),
+		contentBuffers: make(map[string]string),
+	}
+
+	a.sendErrorMessage(t.Context(), "C123", "1234.0001", fmt.Errorf("failed to send to agent: %w (5000000 bytes, limit 4194304)", adapter.ErrMessageTooLarge))
+
+	if srv.postCount != 1 {
+		t.Fatalf("expected exactly one post, got %d", srv.postCount)
+	}
+	if text := srv.postedTexts[0]; !strings.Contains(text, "fewer or smaller files") || strings.Contains(text, "bytes") {
+		t.Errorf("expected the size hint without internals, got %q", text)
+	}
+}
+
 func TestSendErrorMessage_SuppressesInfraError(t *testing.T) {
 	srv := newFakeSlackServer(t, "")
 	defer srv.Close()

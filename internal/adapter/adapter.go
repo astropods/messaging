@@ -13,6 +13,9 @@ import (
 // rather than surfacing it to end users.
 var ErrNoAgentStream = errors.New("no active agent stream available")
 
+// ErrMessageTooLarge means a message exceeded the agent stream's frame limit; the stream stays open.
+var ErrMessageTooLarge = errors.New("message is too large to send to the agent")
+
 // ErrAgentUnreachable is returned when the agent runtime refused or rejected an
 // invocation.
 var ErrAgentUnreachable = errors.New("agent runtime unreachable")

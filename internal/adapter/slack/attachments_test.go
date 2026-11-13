@@ -888,13 +888,59 @@ func TestHandleAppMention_ConfiguredLimitStopsLongerDownload(t *testing.T) {
 }
 
 func TestOversizedImageSkips(t *testing.T) {
-	if got := oversizedImageSkips([]slacklib.File{
+	got := oversizedImageSkips([]slacklib.File{
 		{Name: "big.png", Mimetype: "image/png", Size: maxInlineImageBytes + 1},
-		{Name: "small.png", Mimetype: "image/png", Size: 10},
+		{Name: "late.png", Mimetype: "image/png", Size: 10},
 		{Name: "big.pdf", Mimetype: "application/pdf", Size: maxInlineImageBytes + 1},
-	}); len(got) != 1 || got[0].name != "big.png" || got[0].reason != skipImageTooLarge {
-		t.Errorf("oversizedImageSkips = %v, want only big.png", got)
+	})
+	want := []fileSkip{{"big.png", skipImageTooLarge}, {"late.png", skipInlineFull}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("oversizedImageSkips = %v, want %v", got, want)
 	}
+}
+
+func TestHandleAppMention_ImagesPastInlineBudgetStaged(t *testing.T) {
+	a, handler := newTestAdapter()
+	store := newTestFileStore(t, a)
+	png := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0}, maxInlineImageBytes/3-8)...)
+	url := fileTestServer(t, a, png)
+
+	var shots []slacklib.File
+	for i := range 4 {
+		shots = append(shots, slacklib.File{ID: fmt.Sprintf("F%d", i), Name: fmt.Sprintf("shot%d.png", i), Mimetype: "image/png", Size: len(png), URLPrivateDownload: url})
+	}
+	a.handleAppMention(t.Context(), &slackevents.AppMentionEvent{
+		User:      "U123",
+		Channel:   "C123",
+		Text:      "<@U0BOT> compare these",
+		TimeStamp: "1234567890.000001",
+		Files:     shots,
+	}, "")
+
+	msg := handler.last()
+	if msg == nil || len(msg.Attachments) != 4 {
+		t.Fatalf("expected 4 attachments, got %v", msg)
+	}
+	inlined := 0
+	for i, att := range msg.Attachments {
+		want := pb.Attachment_IMAGE
+		if i == 3 {
+			want = pb.Attachment_FILE
+		}
+		if att.Type != want {
+			t.Errorf("attachment %d (%s): got %v, want %v", i, att.Filename, att.Type, want)
+		}
+		if att.Type == pb.Attachment_IMAGE {
+			inlined += int(att.SizeBytes)
+		}
+	}
+	if inlined > maxInlineImageBytes {
+		t.Errorf("inlined %d bytes, budget %d", inlined, maxInlineImageBytes)
+	}
+	if strings.Contains(msg.Content, "slack_file_skipped") {
+		t.Errorf("expected no skip note, got %q", msg.Content)
+	}
+	assertStoredFile(t, store, msg.Attachments[3].StorageKey, png, threadOwner(msg.ConversationId))
 }
 
 func threadServer(t *testing.T, a *SlackAdapter, messages []map[string]any, body []byte) (url string, downloads func() int) {
