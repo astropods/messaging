@@ -176,9 +176,14 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 	if msg != nil {
 		owner := threadOwner(msg.GetConversationId())
 		for _, sf := range files {
-			staged, skips := a.fileAttachments(ctx, sf.message, owner, false)
-			earlier, earlierSkips := a.fileAttachments(ctx, sf.thread, owner, true)
+			staged, skips := a.fileAttachments(ctx, sf.message, owner)
+			earlier, earlierSkips := a.fileAttachments(ctx, sf.thread, owner)
 			msg.Attachments = append(msg.Attachments, append(staged, earlier...)...)
+			for _, f := range staged {
+				if img := adapter.StagedImage(f); img != nil {
+					msg.Attachments = append(msg.Attachments, img)
+				}
+			}
 			msg.Content = withSkipNotes(msg.Content, append(skips, earlierSkips...))
 		}
 		a.allowStatuses(msg.GetConversationId())
@@ -590,7 +595,7 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	if ev.Message != nil {
 		uploads = ev.Message.Files
 	}
-	images, imageSkips := a.imageAttachments(ctx, uploads)
+	images, rest, imageSkips := a.imageAttachments(ctx, uploads)
 
 	// Convert to pb.Message
 	msg := &pb.Message{
@@ -615,7 +620,7 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 
 	// Call handler if registered
 	if a.msgHandler != nil {
-		if err := a.dispatch(ctx, msg, teamID, stagedFiles{message: uploads}); err != nil {
+		if err := a.dispatch(ctx, msg, teamID, stagedFiles{message: rest}); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling message: %v", err))
 			a.sendErrorMessage(ctx, ev.Channel, threadID, err)
 		}
@@ -1186,7 +1191,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 		}
 	}
 
-	images, imageSkips := a.imageAttachments(ctx, ev.Files)
+	images, rest, imageSkips := a.imageAttachments(ctx, ev.Files)
 	text = withSkipNotes(text, imageSkips)
 
 	slog.Debug(fmt.Sprintf("[Slack] Setting loading state: channel=%s, threadTS=%s", ev.Channel, threadID))
@@ -1218,7 +1223,7 @@ func (a *SlackAdapter) handleAppMention(ctx context.Context, ev *slackevents.App
 
 	// Call handler if registered
 	if a.msgHandler != nil {
-		if err := a.dispatch(ctx, msg, teamID, stagedFiles{message: ev.Files, thread: earlier}); err != nil {
+		if err := a.dispatch(ctx, msg, teamID, stagedFiles{message: rest, thread: earlier}); err != nil {
 			slog.Error(fmt.Sprintf("[Slack] Error handling mention: %v", err))
 			a.sendErrorMessage(ctx, ev.Channel, threadID, err)
 			// Clear loading state on error
@@ -1254,8 +1259,8 @@ func (a *SlackAdapter) handleReactionAdded(ctx context.Context, ev *slackevents.
 	// or a :ticket: on a screenshot never reaches the agent. Resolved attachments
 	// rather than raw files: non-image uploads and failed downloads leave nothing
 	// to act on, and the agent would get a bare reaction preamble.
-	attachments, skips := a.imageAttachments(ctx, files)
-	skips = append(skips, oversizedImageSkips(files)...)
+	attachments, rest, skips := a.imageAttachments(ctx, files)
+	skips = append(skips, oversizedImageSkips(rest)...)
 	if originalText == "" && len(attachments) == 0 {
 		slog.Warn(fmt.Sprintf("[Slack] Reacted message %s in %s has no text or images; dropping reaction",
 			ev.Item.Timestamp, ev.Item.Channel))
@@ -1389,6 +1394,8 @@ func (a *SlackAdapter) sendErrorMessage(ctx context.Context, channelID, threadTS
 		content = ":lock: You're not authorized to use this app. Contact your workspace admin if you think this is a mistake."
 	case errors.Is(err, errAuthzUnavailable):
 		content = ":hourglass_flowing_sand: Couldn't verify your access right now. Please try again in a moment."
+	case errors.Is(err, adapter.ErrMessageTooLarge):
+		content = ":x: This message is too large for the agent. Try again with fewer or smaller files."
 	default:
 		content = fmt.Sprintf(":x: Error: %s", err.Error())
 	}

@@ -309,10 +309,13 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		attachments = append(attachments, att)
-		protoAtts = append(protoAtts, toProtoAttachment(att))
+		file := toProtoAttachment(att)
+		protoAtts = append(protoAtts, file)
 		if img := inlineImageAttachment(ctx, h.fileStore, att, inlineBudget); img != nil {
 			protoAtts = append(protoAtts, img)
 			inlineBudget -= img.SizeBytes
+		} else if img := adapter.StagedImage(file); img != nil && att.Size > inlineBudget {
+			protoAtts = append(protoAtts, img)
 		}
 	}
 
