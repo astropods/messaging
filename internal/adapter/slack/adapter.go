@@ -179,6 +179,11 @@ func (a *SlackAdapter) dispatch(ctx context.Context, msg *pb.Message, teamID str
 			staged, skips := a.fileAttachments(ctx, sf.message, owner)
 			earlier, earlierSkips := a.fileAttachments(ctx, sf.thread, owner)
 			msg.Attachments = append(msg.Attachments, append(staged, earlier...)...)
+			for _, f := range staged {
+				if img := adapter.StagedImage(f); img != nil {
+					msg.Attachments = append(msg.Attachments, img)
+				}
+			}
 			msg.Content = withSkipNotes(msg.Content, append(skips, earlierSkips...))
 		}
 		a.allowStatuses(msg.GetConversationId())

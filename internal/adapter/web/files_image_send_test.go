@@ -56,6 +56,16 @@ func onlyOfType(atts []*pb.Attachment, typ pb.Attachment_Type) []*pb.Attachment 
 	return out
 }
 
+func stagedImages(atts []*pb.Attachment) []*pb.Attachment {
+	var out []*pb.Attachment
+	for _, a := range onlyOfType(atts, pb.Attachment_IMAGE) {
+		if a.Url == "" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 func TestSendMessage_ImageForwardedInline(t *testing.T) {
 	raw, err := base64.StdEncoding.DecodeString(onePixelPNG)
 	if err != nil {
@@ -115,7 +125,7 @@ func TestSendMessage_MislabelledImageNotInlined(t *testing.T) {
 
 	atts := sendWithAttachment(t, fs, "fake-1")
 	if len(onlyOfType(atts, pb.Attachment_IMAGE)) != 0 {
-		t.Errorf("mislabelled file must not be inlined, got %+v", atts)
+		t.Errorf("mislabelled file must not be inlined or staged as an image, got %+v", atts)
 	}
 	if len(onlyOfType(atts, pb.Attachment_FILE)) != 1 {
 		t.Errorf("expected the FILE attachment to survive, got %+v", atts)
@@ -136,8 +146,11 @@ func TestSendMessage_InlineBudgetSpansMessage(t *testing.T) {
 	storeFile(t, fs, "img-b", "b.png", "image/png", padded)
 
 	atts := sendWithAttachment(t, fs, "img-a", "img-b")
-	if got := len(onlyOfType(atts, pb.Attachment_IMAGE)); got != 1 {
+	if got := len(onlyOfType(atts, pb.Attachment_IMAGE)) - len(stagedImages(atts)); got != 1 {
 		t.Errorf("inlined %d images, want 1 (budget must stop the second)", got)
+	}
+	if staged := stagedImages(atts); len(staged) != 1 || staged[0].StorageKey != "img-b" {
+		t.Errorf("staged images = %+v, want only img-b, by storage key", staged)
 	}
 	if got := len(onlyOfType(atts, pb.Attachment_FILE)); got != 2 {
 		t.Errorf("got %d FILE attachments, want 2 (both files must survive)", got)
@@ -145,7 +158,9 @@ func TestSendMessage_InlineBudgetSpansMessage(t *testing.T) {
 
 	var inlined int64
 	for _, a := range onlyOfType(atts, pb.Attachment_IMAGE) {
-		inlined += a.SizeBytes
+		if a.Url != "" {
+			inlined += a.SizeBytes
+		}
 	}
 	if inlined > maxInlineImageBytes {
 		t.Errorf("inlined %d raw bytes, over the %d budget", inlined, maxInlineImageBytes)
@@ -165,8 +180,12 @@ func TestSendMessage_OversizedImageNotInlined(t *testing.T) {
 	storeFile(t, fs, "big-1", "big.png", "image/png", big)
 
 	atts := sendWithAttachment(t, fs, "big-1")
-	if len(onlyOfType(atts, pb.Attachment_IMAGE)) != 0 {
-		t.Errorf("oversized image must not be inlined, got %d attachments", len(atts))
+	staged := stagedImages(atts)
+	if len(onlyOfType(atts, pb.Attachment_IMAGE)) != len(staged) {
+		t.Errorf("oversized image must not be inlined, got %+v", atts)
+	}
+	if len(staged) != 1 || staged[0].StorageKey != "big-1" {
+		t.Errorf("expected the image staged by storage key, got %+v", staged)
 	}
 	if len(onlyOfType(atts, pb.Attachment_FILE)) != 1 {
 		t.Errorf("expected the FILE attachment to survive, got %+v", atts)

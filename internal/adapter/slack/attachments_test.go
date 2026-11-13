@@ -853,8 +853,11 @@ func TestHandleAppMention_OversizedImageStagedAsFile(t *testing.T) {
 	}, "")
 
 	msg := handler.last()
-	if msg == nil || len(msg.Attachments) != 1 || msg.Attachments[0].Type != pb.Attachment_FILE {
-		t.Fatalf("expected one FILE attachment, got %v", msg)
+	if msg == nil || len(msg.Attachments) != 2 || msg.Attachments[0].Type != pb.Attachment_FILE {
+		t.Fatalf("expected a FILE and its staged IMAGE, got %v", msg)
+	}
+	if img := msg.Attachments[1]; img.Type != pb.Attachment_IMAGE || img.Url != "" || img.StorageKey != msg.Attachments[0].StorageKey {
+		t.Errorf("expected an IMAGE with the file's storage key and no url, got %+v", img)
 	}
 	if strings.Contains(msg.Content, "slack_file_skipped") {
 		t.Errorf("expected no skip note, got %q", msg.Content)
@@ -918,21 +921,22 @@ func TestHandleAppMention_ImagesPastInlineBudgetStaged(t *testing.T) {
 	}, "")
 
 	msg := handler.last()
-	if msg == nil || len(msg.Attachments) != 4 {
-		t.Fatalf("expected 4 attachments, got %v", msg)
+	if msg == nil || len(msg.Attachments) != 5 {
+		t.Fatalf("expected 3 inline images, a FILE, and its staged IMAGE, got %v", msg)
 	}
 	inlined := 0
-	for i, att := range msg.Attachments {
-		want := pb.Attachment_IMAGE
-		if i == 3 {
-			want = pb.Attachment_FILE
+	for i, att := range msg.Attachments[:3] {
+		if att.Type != pb.Attachment_IMAGE || att.Url == "" {
+			t.Errorf("attachment %d (%s): want an inline IMAGE, got %v", i, att.Filename, att.Type)
 		}
-		if att.Type != want {
-			t.Errorf("attachment %d (%s): got %v, want %v", i, att.Filename, att.Type, want)
-		}
-		if att.Type == pb.Attachment_IMAGE {
-			inlined += int(att.SizeBytes)
-		}
+		inlined += int(att.SizeBytes)
+	}
+	file, staged := msg.Attachments[3], msg.Attachments[4]
+	if file.Type != pb.Attachment_FILE || file.Filename != "shot3.png" {
+		t.Errorf("attachment 3: want shot3.png as FILE, got %+v", file)
+	}
+	if staged.Type != pb.Attachment_IMAGE || staged.Url != "" || staged.StorageKey != file.StorageKey {
+		t.Errorf("attachment 4: want shot3.png as a staged IMAGE, got %+v", staged)
 	}
 	if inlined > maxInlineImageBytes {
 		t.Errorf("inlined %d bytes, budget %d", inlined, maxInlineImageBytes)
