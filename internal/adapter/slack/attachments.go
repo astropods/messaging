@@ -19,15 +19,14 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// maxInlineImageBytes caps the raw size of a Slack image we download and inline
-// as a base64 data URI on the outbound Message. Base64 inflates bytes by ~33%,
-// so this stays under the gRPC 4 MiB default frame. Larger images are skipped
-// (with a log) rather than risk a dropped message.
+// maxInlineImageBytes caps the raw bytes of all images inlined on one Message.
+// Base64 adds a third, which leaves room for the text under the 4 MiB gRPC frame.
 const maxInlineImageBytes = 2 * 1024 * 1024
 
 // Agent-visible reasons a Slack file did not arrive.
 const (
 	skipImageTooLarge = "image is larger than 2 MiB"
+	skipInlineFull    = "the message's images are larger than 2 MiB in total"
 	skipNoLink        = "Slack gave no download link"
 	skipDownload      = "download failed"
 	skipRefused       = "Slack refused the download"
@@ -55,7 +54,7 @@ func skipFileTooLarge(limit int64) string {
 }
 
 type stagedFiles struct {
-	// The event's own files; imageAttachments inlines the small images.
+	// The event's own files that imageAttachments did not inline.
 	message []slack.File
 	// Earlier files in the thread, images included.
 	thread []slack.File
@@ -80,22 +79,19 @@ func withSkipNotes(content string, skips []fileSkip) string {
 // imageAttachments downloads the image files on a Slack event and returns them
 // as inline IMAGE attachments: the bytes ride the wire as a base64 data URI in
 // Url so the agent can pass them straight to the model with no Slack token of
-// its own. Non-image files and oversized images are left to fileAttachments;
-// download failures are skipped so a single bad file never blocks the message.
+// its own. rest holds the files it did not inline, for fileAttachments to stage.
+// Download failures are skipped so a single bad file never blocks the message.
 // The adapter's Slack client carries the bot token that authenticates the
 // url_private download.
-func (a *SlackAdapter) imageAttachments(ctx context.Context, files []slack.File) ([]*pb.Attachment, []fileSkip) {
+func (a *SlackAdapter) imageAttachments(ctx context.Context, files []slack.File) (out []*pb.Attachment, rest []slack.File, skips []fileSkip) {
 	if len(files) == 0 || a.client == nil {
-		return nil, nil
+		return nil, files, nil
 	}
-	var out []*pb.Attachment
-	var skips []fileSkip
+	remaining := maxInlineImageBytes
 	for i := range files {
 		f := &files[i]
-		if !strings.HasPrefix(f.Mimetype, "image/") {
-			continue
-		}
-		if f.Size > maxInlineImageBytes {
+		if !strings.HasPrefix(f.Mimetype, "image/") || f.Size > remaining {
+			rest = append(rest, *f)
 			continue
 		}
 		url := downloadURL(f)
@@ -121,6 +117,12 @@ func (a *SlackAdapter) imageAttachments(ctx context.Context, files []slack.File)
 			skips = append(skips, fileSkip{f.Name, skipRefused})
 			continue
 		}
+		// Slack's declared size can be short of the download.
+		if buf.Len() > remaining {
+			rest = append(rest, *f)
+			continue
+		}
+		remaining -= buf.Len()
 		// Label the data URI with the sniffed type, not Slack's declared
 		// Mimetype: Slack mislabels some images (a PNG as image/jpeg) and the
 		// model rejects a data URI whose type disagrees with the bytes. Strip
@@ -142,11 +144,11 @@ func (a *SlackAdapter) imageAttachments(ctx context.Context, files []slack.File)
 		slog.Debug("[Slack] Inlined image attachment",
 			"file", f.Name, "declared_mimetype", f.Mimetype, "sent_mimetype", mediaType, "bytes", buf.Len())
 	}
-	return out, skips
+	return out, rest, skips
 }
 
 // Staged files use the web upload contract (storage_key), so the agent reads them by path.
-func (a *SlackAdapter) fileAttachments(ctx context.Context, slackFiles []slack.File, owner string, stageImages bool) ([]*pb.Attachment, []fileSkip) {
+func (a *SlackAdapter) fileAttachments(ctx context.Context, slackFiles []slack.File, owner string) ([]*pb.Attachment, []fileSkip) {
 	if len(slackFiles) == 0 || a.client == nil {
 		return nil, nil
 	}
@@ -154,9 +156,6 @@ func (a *SlackAdapter) fileAttachments(ctx context.Context, slackFiles []slack.F
 	var skips []fileSkip
 	for i := range slackFiles {
 		f := &slackFiles[i]
-		if !stageImages && strings.HasPrefix(f.Mimetype, "image/") && f.Size <= maxInlineImageBytes {
-			continue
-		}
 		if f.IsExternal {
 			skips = append(skips, fileSkip{f.Name, skipExternal})
 			continue
@@ -176,11 +175,16 @@ func (a *SlackAdapter) fileAttachments(ctx context.Context, slackFiles []slack.F
 }
 
 // For the reaction path, which inlines images but stages no files.
-func oversizedImageSkips(files []slack.File) []fileSkip {
+func oversizedImageSkips(rest []slack.File) []fileSkip {
 	var skips []fileSkip
-	for i := range files {
-		if strings.HasPrefix(files[i].Mimetype, "image/") && files[i].Size > maxInlineImageBytes {
-			skips = append(skips, fileSkip{files[i].Name, skipImageTooLarge})
+	for i := range rest {
+		f := &rest[i]
+		switch {
+		case !strings.HasPrefix(f.Mimetype, "image/"):
+		case f.Size > maxInlineImageBytes:
+			skips = append(skips, fileSkip{f.Name, skipImageTooLarge})
+		default:
+			skips = append(skips, fileSkip{f.Name, skipInlineFull})
 		}
 	}
 	return skips

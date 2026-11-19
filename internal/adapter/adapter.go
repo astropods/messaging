@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
@@ -13,9 +14,26 @@ import (
 // rather than surfacing it to end users.
 var ErrNoAgentStream = errors.New("no active agent stream available")
 
+// ErrMessageTooLarge means a message exceeded the agent stream's frame limit; the stream stays open.
+var ErrMessageTooLarge = errors.New("message is too large to send to the agent")
+
 // ErrAgentUnreachable is returned when the agent runtime refused or rejected an
 // invocation.
 var ErrAgentUnreachable = errors.New("agent runtime unreachable")
+
+// StagedImage returns a staged image file's IMAGE twin, which has no url: the agent reads its bytes by storage_key.
+func StagedImage(file *pb.Attachment) *pb.Attachment {
+	if file.GetStorageKey() == "" || !strings.HasPrefix(file.GetMimeType(), "image/") {
+		return nil
+	}
+	return &pb.Attachment{
+		Type:       pb.Attachment_IMAGE,
+		Filename:   file.GetFilename(),
+		MimeType:   file.GetMimeType(),
+		SizeBytes:  file.GetSizeBytes(),
+		StorageKey: file.GetStorageKey(),
+	}
+}
 
 // AgentStreamID is the registration key for the single shared agent stream —
 // one stream that serves every conversation, used by the web/sidecar deployment.

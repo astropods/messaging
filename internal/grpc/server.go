@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -17,8 +18,11 @@ import (
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/astropods/messaging/pkg/types"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+const maxMessageBytes = 4 * 1024 * 1024
 
 // Server implements the AgentMessaging gRPC service
 type Server struct {
@@ -57,6 +61,14 @@ type conversationStream struct {
 	cancel         context.CancelFunc
 }
 
+// gRPC ends the stream on any failed send, so the size check must come first.
+func (cs *conversationStream) send(resp *pb.AgentResponse) error {
+	if n := proto.Size(resp); n > maxMessageBytes {
+		return fmt.Errorf("%w (%d bytes, limit %d)", adapter.ErrMessageTooLarge, n, maxMessageBytes)
+	}
+	return cs.stream.Send(resp)
+}
+
 // NewServer creates a new gRPC server
 func NewServer(listenAddr string, threadStore *store.ThreadHistoryStore, convStore store.ConversationStore, agentConfigStore *store.AgentConfigStore) *Server {
 	return &Server{
@@ -92,8 +104,8 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.grpcServer = grpc.NewServer(
 		grpc.MaxConcurrentStreams(100),
-		grpc.MaxRecvMsgSize(4*1024*1024), // 4MB
-		grpc.MaxSendMsgSize(4*1024*1024), // 4MB
+		grpc.MaxRecvMsgSize(maxMessageBytes),
+		grpc.MaxSendMsgSize(maxMessageBytes),
 	)
 
 	pb.RegisterAgentMessagingServer(s.grpcServer, s)
@@ -399,6 +411,7 @@ func (s *Server) HandleIncomingMessage(ctx context.Context, msg *pb.Message) err
 
 	if stream == nil {
 		metrics.MessagesDropped.WithLabelValues(msg.Platform, "no_agent").Inc()
+		slog.Warn("[gRPC] Dropped platform message: no agent stream", droppedMessageAttrs(msg)...)
 		return adapter.ErrNoAgentStream
 	}
 
@@ -411,7 +424,11 @@ func (s *Server) HandleIncomingMessage(ctx context.Context, msg *pb.Message) err
 		},
 	}
 
-	if err := stream.stream.Send(response); err != nil {
+	if err := stream.send(response); err != nil {
+		if errors.Is(err, adapter.ErrMessageTooLarge) {
+			metrics.MessagesDropped.WithLabelValues(msg.Platform, "too_large").Inc()
+			slog.Warn("[gRPC] Dropped platform message: too large", append(droppedMessageAttrs(msg), "err", err)...)
+		}
 		return fmt.Errorf("failed to send to agent: %w", err)
 	}
 
@@ -461,7 +478,7 @@ func (s *Server) HandleIncomingFeedback(ctx context.Context, fb *pb.PlatformFeed
 		Payload:        &pb.AgentResponse_Feedback{Feedback: fb},
 	}
 
-	if err := stream.stream.Send(response); err != nil {
+	if err := stream.send(response); err != nil {
 		metrics.FeedbackDropped.WithLabelValues("send_error").Inc()
 		return fmt.Errorf("failed to send feedback to agent: %w", err)
 	}
@@ -503,7 +520,7 @@ func (s *Server) SendAudioConfig(conversationID string, config *pb.AudioStreamCo
 		return fmt.Errorf("%w for conversation: %s", adapter.ErrNoAgentStream, conversationID)
 	}
 	slog.Debug("[gRPC] Sending audio config to agent", "conversation", conversationID, "encoding", config.Encoding.String(), "sampleRate", config.SampleRate)
-	return stream.stream.Send(&pb.AgentResponse{
+	return stream.send(&pb.AgentResponse{
 		ConversationId: conversationID,
 		Payload:        &pb.AgentResponse_AudioConfig{AudioConfig: config},
 	})
@@ -527,7 +544,7 @@ func (s *Server) SendAudioChunk(conversationID string, data []byte, sequence int
 	if stream == nil {
 		return fmt.Errorf("%w for conversation: %s", adapter.ErrNoAgentStream, conversationID)
 	}
-	return stream.stream.Send(&pb.AgentResponse{
+	return stream.send(&pb.AgentResponse{
 		ConversationId: conversationID,
 		Payload: &pb.AgentResponse_AudioChunk{
 			AudioChunk: &pb.AudioChunk{
@@ -728,7 +745,7 @@ func (s *Server) SendToAgent(conversationID string, response *pb.AgentResponse) 
 		return fmt.Errorf("no active stream for conversation: %s", conversationID)
 	}
 
-	return stream.stream.Send(response)
+	return stream.send(response)
 }
 
 // hydrateThreadHistory fetches thread history from the appropriate adapter
@@ -759,6 +776,17 @@ func buildConversationID(platform, channelID, threadID string) string {
 		return fmt.Sprintf("%s-%s-%s", platform, channelID, threadID)
 	}
 	return fmt.Sprintf("%s-%s", platform, channelID)
+}
+
+func droppedMessageAttrs(msg *pb.Message) []any {
+	pc := msg.GetPlatformContext()
+	return []any{
+		"platform", msg.GetPlatform(),
+		"conversation_id", msg.GetConversationId(),
+		"channel_id", pc.GetChannelId(),
+		"thread_id", pc.GetThreadId(),
+		"message_id", pc.GetMessageId(),
+	}
 }
 
 // logIncomingMessage is the one place where every adapter-originated message
