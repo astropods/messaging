@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/testpg"
+	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/astropods/messaging/pkg/types"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -343,5 +344,80 @@ func TestRebind(t *testing.T) {
 				t.Fatalf("rebind(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPostgresStoreStripsNULBytesItCannotStore(t *testing.T) {
+	st := openPostgresTestStore(t, newPostgresTestDatabase(t))
+	ctx := t.Context()
+	if _, err := st.EnsureForSend(ctx, "conv", "owner", "t\x00itle"); err != nil {
+		t.Fatalf("ensure with a NUL title: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, "conv", "owner", "user", "a\x00b", ""); err != nil {
+		t.Fatalf("append with a NUL byte: %v", err)
+	}
+	if _, err := st.UpsertAssistantProgress(ctx, "conv", "re\x00ply", ""); err != nil {
+		t.Fatalf("progress with a NUL byte: %v", err)
+	}
+
+	msgs, err := st.ListMessages(ctx, "conv")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(msgs) != 2 || msgs[0].Content != "ab" || msgs[1].Content != "reply" {
+		t.Fatalf("messages = %+v, want the NUL bytes stripped", msgs)
+	}
+	if conv, _ := st.Get(ctx, "conv"); conv == nil || conv.Title != "title" {
+		t.Fatalf("conversation = %+v, want the NUL stripped from the title", conv)
+	}
+}
+
+func TestCleanStripsNULOnlyOnPostgres(t *testing.T) {
+	args := []any{"a\x00b", 1}
+	if got := dialectSQLite.clean(args); got[0] != "a\x00b" {
+		t.Fatalf("SQLite clean changed %q, want it kept", got[0])
+	}
+	got := dialectPostgres.clean(args)
+	if got[0] != "ab" || args[0] != "a\x00b" {
+		t.Fatalf("Postgres clean = %q and left the caller's slice %q, want \"ab\" without touching the caller's slice", got[0], args[0])
+	}
+}
+
+func TestPostgresReapLeavesATurnWaitingOnAnInteraction(t *testing.T) {
+	st := openPostgresTestStore(t, newPostgresTestDatabase(t))
+	st.SetPodID("pod-b")
+	ctx := t.Context()
+	for _, id := range []string{"waiting", "stale"} {
+		if _, err := st.EnsureForSend(ctx, id, "owner", "t"); err != nil {
+			t.Fatalf("ensure %s: %v", id, err)
+		}
+		if _, err := st.AppendMessage(ctx, id, "owner", "user", "hi", ""); err != nil {
+			t.Fatalf("append %s: %v", id, err)
+		}
+	}
+	if _, err := st.AppendInteraction(ctx, "waiting", "owner", &pb.Renderable{Id: "i1"}); err != nil {
+		t.Fatalf("append interaction: %v", err)
+	}
+	if _, err := st.db.ExecContext(ctx, `UPDATE conversations SET updated_at = ?`,
+		time.Now().Add(-sharedReapGrace-time.Minute).UnixMilli()); err != nil {
+		t.Fatalf("age turns: %v", err)
+	}
+	if err := st.SyncTurnOwners(ctx, "pod-a", []string{"waiting"}); err != nil {
+		t.Fatalf("pod-a owns the waiting turn: %v", err)
+	}
+
+	n, err := st.ReapDanglingUserTurns(ctx)
+	if err != nil {
+		t.Fatalf("reap: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("reaped %d turns, want 1: the turn waiting on an interaction stays", n)
+	}
+	msgs, err := st.ListMessages(ctx, "waiting")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("the waiting turn has %d messages, want 1: no empty reply appended", len(msgs))
 	}
 }

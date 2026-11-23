@@ -18,7 +18,7 @@ Two pieces of shared state carry it: a `turn_owners` table and a NOTIFY bus.
 | Interaction answer on the other sidecar | The receiver records the answer in the shared store, then sends `web.answer` to the owner, which advances the turn and delivers to its agent. |
 | Slack Stop button | The receiver relays `slack.session_stopped`. Only the sidecar streaming or holding that thread's session applies it. |
 | Slack retries | Each Events API `event_id` is claimed in `slack_events` as it arrives. A later claim loses and the event is dropped. Claims are kept an hour. |
-| Turns a dead sidecar left | At startup, a sidecar treats rows under its own pod id as its previous run's. Every minute, each sidecar also reaps user-last turns that no live owner holds. The grace for a turn with no owner row is one minute. |
+| Turns a dead sidecar left | At startup, a sidecar treats rows under its own pod id as its previous run's. Every minute, each sidecar also reaps user-last turns that no live owner holds. The grace for a turn with no owner row is one minute. The owner's heartbeat now protects a turn waiting on an interaction, so this replaces the pending-interaction exclusion, which would keep a dead sidecar's waiting turn streaming forever. |
 
 The bus (`internal/cluster`) is one LISTEN connection and one publisher connection per sidecar. A single publisher keeps every sidecar's messages in the order it sent them. The connection manager queues relays under its own lock, so a replay can't be overtaken by a later event. A message over NOTIFY's 8000-byte limit is base64-encoded and split into fragments, which need no JSON escaping, so every fragment fits. A sidecar ignores its own messages, and a relay costs nothing while no other sidecar watches the conversation.
 

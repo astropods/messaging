@@ -12,7 +12,8 @@ One implementation serves both databases. The package moves from `internal/store
 |---|---|---|
 | Writer serialization | One connection | `pg_advisory_xact_lock` per conversation, taken by `beginConversation` at the start of every write transaction |
 | Schema | `CREATE TABLE IF NOT EXISTS` plus `ensureColumn` | Numbered migrations in `postgresMigrations`, tracked in `astro_messaging.schema_version` |
-| Startup reaper | Reaps every user-last turn | Reaps only turns idle for 15 minutes (`sharedReapGrace`), so a restarting sidecar leaves another sidecar's live turn alone |
+| Startup reaper | Reaps every user-last turn | Reaps only turns idle for 15 minutes (`sharedReapGrace`) with no pending interaction, so a restarting sidecar leaves another sidecar's live turn alone. Answering an interaction doesn't touch `updated_at`, so the grace alone can't cover a turn waiting on the user. |
+| NUL bytes | Stored as given | Stripped from string arguments, because Postgres `TEXT` can't store them |
 | Conversation contexts | Memory or Redis | `conversation_contexts` table with the `STORAGE_TTL` expiry |
 
 Every table lives in the `astro_messaging` schema. The connection's `search_path` points there, so the sidecar never reads or writes the agent's own tables in the same database. Migrations run in one transaction under an advisory lock, so two sidecars that start together migrate once. A schema newer than the build refuses to start rather than run against unknown columns.
