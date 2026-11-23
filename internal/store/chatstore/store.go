@@ -826,7 +826,7 @@ func (s *Store) ReapDanglingUserTurns(ctx context.Context) (int, error) {
 				FROM messages m
 				WHERE m.conversation_id = c.conversation_id
 				ORDER BY m.seq DESC LIMIT 1
-			) = 'user'`, time.Now().Add(-s.reapGrace).UnixMilli())
+			) = 'user'`+s.pendingInteractionExclusion(), time.Now().Add(-s.reapGrace).UnixMilli())
 	if err != nil {
 		return 0, fmt.Errorf("chatstore reap query: %w", err)
 	}
@@ -856,6 +856,16 @@ func (s *Store) ReapDanglingUserTurns(ctx context.Context) (int, error) {
 		}
 	}
 	return finalized, nil
+}
+
+// pendingInteractionExclusion keeps a shared store's reap off a turn waiting on the user,
+// because answering an interaction does not touch updated_at.
+func (s *Store) pendingInteractionExclusion() string {
+	if s.db.dialect != dialectPostgres {
+		return ""
+	}
+	return `
+			AND NOT EXISTS (SELECT 1 FROM interactions i WHERE i.conversation_id = c.conversation_id AND i.status = 'pending')`
 }
 
 func touchAgentReplyTx(ctx context.Context, tx *txn, conversationID, replyID string) error {
