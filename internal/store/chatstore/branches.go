@@ -289,7 +289,7 @@ func (s *Store) PageMessages(ctx context.Context, conversationID string, limit, 
 	return msgs, hasMore, oldestSeq, lastRole, nil
 }
 
-// AppendUserTurn always sets History on an edit: the agent may hold the edited turn unanswered.
+// AppendUserTurn always sets History on an edit, where the agent may hold the edited turn unanswered, and on a shared store.
 func (s *Store) AppendUserTurn(ctx context.Context, conversationID, userID string, in TurnInput) (UserTurn, error) {
 	tx, err := s.db.beginConversation(ctx, conversationID)
 	if err != nil {
@@ -338,7 +338,8 @@ func (s *Store) AppendUserTurn(ctx context.Context, conversationID, userID strin
 		return UserTurn{}, err
 	}
 	turn := UserTurn{Message: msg}
-	if in.EditOf != "" || parent != agentAt {
+	// Sidecars sharing the store each pair with their own agent, so agentAt says nothing about this agent's memory.
+	if in.EditOf != "" || parent != agentAt || s.Shared() {
 		turn.History, err = historyTx(ctx, tx, conversationID, t.pathTo(parent))
 		if err != nil {
 			return UserTurn{}, err

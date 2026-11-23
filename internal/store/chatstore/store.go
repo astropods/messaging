@@ -826,7 +826,7 @@ func (s *Store) ReapDanglingUserTurns(ctx context.Context) (int, error) {
 				FROM messages m
 				WHERE m.conversation_id = c.conversation_id
 				ORDER BY m.seq DESC LIMIT 1
-			) = 'user'`, time.Now().Add(-s.reapGrace).UnixMilli())
+			) = 'user'`+s.liveOwnerExclusion(), s.reapArgs()...)
 	if err != nil {
 		return 0, fmt.Errorf("chatstore reap query: %w", err)
 	}

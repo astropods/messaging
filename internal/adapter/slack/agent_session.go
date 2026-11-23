@@ -9,7 +9,6 @@ import (
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // maxTrackedTurns bounds stoppedTurns and openSessions for turns that never finish.
@@ -19,27 +18,14 @@ const maxTrackedTurns = 1000
 func (a *SlackAdapter) handleAgentSessionStopped(ctx context.Context, ev *slackevents.AgentSessionStoppedEvent) {
 	metrics.SlackEvents.WithLabelValues("session_stopped").Inc()
 	conversationID := a.stoppedConversation(ev.Channel, ev.ThreadTimestamp)
-	a.stopTurn(conversationID)
 	slog.Debug("[Slack] Agent session stopped",
 		"conversation_id", conversationID, "user_id", ev.User)
-
-	a.forwardFeedback(ctx, &pb.PlatformFeedback{
-		ConversationId: conversationID,
-		Timestamp:      timestamppb.Now(),
-		User:           &pb.User{Id: ev.User},
-		Feedback: &pb.PlatformFeedback_StreamControl{
-			StreamControl: &pb.StreamControl{
-				Action: pb.StreamControl_STOP,
-				Reason: "user stopped generation",
-			},
-		},
-	})
-
-	// Slack leaves the session processing, with its Stop button, until the app moves it.
-	a.bufferMu.Lock()
-	delete(a.openSessions, fmt.Sprintf("%s-%s", ev.Channel, ev.ThreadTimestamp))
-	a.bufferMu.Unlock()
-	a.setSessionStatus(ctx, ev.Channel, ev.ThreadTimestamp, slack.AgentSessionStatusActive)
+	if a.cluster != nil && !a.runsTurn(conversationID, ev.Channel, ev.ThreadTimestamp) {
+		a.cluster.bus.Publish(busSessionStopped, conversationID, sessionStopMessage{
+			Channel: ev.Channel, ThreadTS: ev.ThreadTimestamp, User: ev.User,
+		})
+	}
+	a.applySessionStop(ctx, conversationID, ev.Channel, ev.ThreadTimestamp, ev.User)
 }
 
 // Slack shows the Stop button only while the session is processing.

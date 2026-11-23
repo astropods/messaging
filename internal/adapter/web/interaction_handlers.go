@@ -146,36 +146,12 @@ func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// The user answered, so re-arm the idle watchdog for every outcome — including
-	// RESPOND: a hung agent is then reaped and any queued prose is still delivered
-	// (failActive carries it), rather than the turn wedging in the awaiting phase.
-	if h.turns != nil {
-		h.turns.resume(conversationID)
-	}
-
-	switch action {
-	case pb.RenderableAction_RENDERABLE_ACTION_RESPOND:
-		// A new turn, not an in-turn answer: queue the prose and cancel the current
-		// turn (the terminal handler injects it). With no live turn to cancel,
-		// forward it now so the reply is never dropped.
-		text := strings.TrimSpace(input.Text)
-		if h.turns != nil && h.turns.setPendingRespond(conversationID, session.UserID, text) {
-			h.emitRenderableResponse(ctx, conversationID, session.UserID, &pb.RenderableResponse{
-				Id:     interactionID,
-				Action: pb.RenderableAction_RENDERABLE_ACTION_CANCEL,
-			})
-		} else {
-			h.injectRespond(ctx, conversationID, &pendingRespond{userID: session.UserID, text: text})
-		}
-	case pb.RenderableAction_RENDERABLE_ACTION_SUBMIT, pb.RenderableAction_RENDERABLE_ACTION_DECLINE:
-		// The continuation is a new message: reset the buffer so it isn't glued to the flushed preamble, then persist the note as the new-bubble boundary.
-		if h.turns != nil {
-			h.turns.startFreshBuffer(conversationID)
-		}
-		h.persistInjected(ctx, conversationID, "", "note", noteContent(action, it.Renderable, resp))
-		h.emitRenderableResponse(ctx, conversationID, session.UserID, resp)
-	default: // CANCEL — the turn aborts, no continuation and no record to keep.
-		h.emitRenderableResponse(ctx, conversationID, session.UserID, resp)
+	if owner := h.remoteOwner(ctx, conversationID); owner != "" {
+		h.cluster.Publish(busAnswer, conversationID, answerMessage{
+			To: owner, UserID: session.UserID, InteractionID: interactionID, Action: action, Text: input.Text, Response: resp,
+		})
+	} else {
+		h.applyAnswer(ctx, conversationID, session.UserID, action, it.Renderable, resp, input.Text)
 	}
 	writeJSON(w, http.StatusOK, interactionResponseAck{
 		Status: string(recorded.Status),
@@ -440,4 +416,39 @@ func validateInstance(sch *jsonschema.Schema, content json.RawMessage) error {
 		return fmt.Errorf("parse content: %w", err)
 	}
 	return sch.Validate(inst)
+}
+
+// applyAnswer advances the turn after a recorded interaction response. The sidecar running the turn calls it.
+func (h *Handlers) applyAnswer(ctx context.Context, conversationID, userID string, action pb.RenderableAction, renderable *pb.Renderable, resp *pb.RenderableResponse, text string) {
+	// The user answered, so re-arm the idle watchdog for every outcome — including
+	// RESPOND: a hung agent is then reaped and any queued prose is still delivered
+	// (failActive carries it), rather than the turn wedging in the awaiting phase.
+	if h.turns != nil {
+		h.turns.resume(conversationID)
+	}
+
+	switch action {
+	case pb.RenderableAction_RENDERABLE_ACTION_RESPOND:
+		// A new turn, not an in-turn answer: queue the prose and cancel the current
+		// turn (the terminal handler injects it). With no live turn to cancel,
+		// forward it now so the reply is never dropped.
+		text := strings.TrimSpace(text)
+		if h.turns != nil && h.turns.setPendingRespond(conversationID, userID, text) {
+			h.emitRenderableResponse(ctx, conversationID, userID, &pb.RenderableResponse{
+				Id:     resp.GetId(),
+				Action: pb.RenderableAction_RENDERABLE_ACTION_CANCEL,
+			})
+		} else {
+			h.injectRespond(ctx, conversationID, &pendingRespond{userID: userID, text: text})
+		}
+	case pb.RenderableAction_RENDERABLE_ACTION_SUBMIT, pb.RenderableAction_RENDERABLE_ACTION_DECLINE:
+		// The continuation is a new message: reset the buffer so it isn't glued to the flushed preamble, then persist the note as the new-bubble boundary.
+		if h.turns != nil {
+			h.turns.startFreshBuffer(conversationID)
+		}
+		h.persistInjected(ctx, conversationID, "", "note", noteContent(action, renderable, resp))
+		h.emitRenderableResponse(ctx, conversationID, userID, resp)
+	default: // CANCEL — the turn aborts, no continuation and no record to keep.
+		h.emitRenderableResponse(ctx, conversationID, userID, resp)
+	}
 }

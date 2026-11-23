@@ -41,6 +41,9 @@ type WebAdapter struct {
 	agentConfigStore *store.AgentConfigStore
 	agentReadiness   adapter.AgentReadiness
 	chatStore        *chatstore.Store
+	cluster          Bus
+	turnsChanged     <-chan struct{}
+	cancelCluster    context.CancelFunc
 	fileStore        files.FileStore
 	fileLimit        int64
 	interactions     store.InteractionStore
@@ -169,6 +172,9 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 
 	// Start connection manager heartbeat
 	a.connManager.Start(ctx)
+	clusterCtx, cancelCluster := context.WithCancel(ctx)
+	a.cancelCluster = cancelCluster
+	go a.runCluster(clusterCtx)
 
 	handler := a.corsMiddleware(a.routes())
 
@@ -232,6 +238,13 @@ func (a *WebAdapter) routes() *http.ServeMux {
 // Stop gracefully shuts down the adapter
 func (a *WebAdapter) Stop(ctx context.Context) error {
 	slog.Info("[Web] Stopping adapter...")
+
+	if a.cancelCluster != nil {
+		a.cancelCluster()
+	}
+	if a.cluster != nil {
+		a.releaseOwners()
+	}
 
 	// Close all SSE connections
 	if a.connManager != nil {

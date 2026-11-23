@@ -98,12 +98,14 @@ func (h *Handlers) HandleListChatConversations(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	remote := h.remoteTurns(r.Context())
 	out := make([]chatConversationSummary, 0, len(convs))
 	for _, c := range convs {
 		// A turn actively streaming in this sidecar overrides the persisted-state
 		// heuristic: the assistant row is written progressively, so the store
 		// alone can't tell an in-flight turn from a finished one.
-		streaming := c.AssistantStreaming || (h.turns != nil && h.turns.isStreaming(c.ConversationID))
+		_, remoteTurn := remote[c.ConversationID]
+		streaming := c.AssistantStreaming || remoteTurn || (h.turns != nil && h.turns.isStreaming(c.ConversationID))
 		out = append(out, chatConversationSummary{
 			ConversationID:     c.ConversationID,
 			Title:              c.Title,
@@ -170,7 +172,7 @@ func (h *Handlers) writeChatConversation(w http.ResponseWriter, r *http.Request,
 	// longer distinguishes an in-flight turn from a finished one. lastRole is the
 	// newest message's role for the whole thread, independent of this page.
 	assistantStreaming := lastRole == "user" ||
-		(h.turns != nil && h.turns.isStreaming(conversationID))
+		h.streaming(r.Context(), conversationID)
 
 	messages := make([]chatMessageResponse, 0, len(window))
 	for _, m := range window {
@@ -304,6 +306,9 @@ func (h *Handlers) HandleSwitchChatBranch(w http.ResponseWriter, r *http.Request
 			return
 		}
 		defer h.turns.release(conversationID)
+		if !h.claimClusterTurn(r.Context(), w, conversationID) {
+			return
+		}
 	}
 
 	switched, err := h.chatStore.SwitchBranch(r.Context(), conversationID, session.UserID, input.MessageID)
