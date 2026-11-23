@@ -103,11 +103,16 @@ func main() {
 	var chatStore *chatstore.Store
 	switch {
 	case cfg.Chat.DatabaseURL != "":
+		if cfg.Chat.PodID == "" {
+			slog.Error("chat store: no pod id, set POD_NAME")
+			os.Exit(1)
+		}
 		cs, err := chatstore.OpenPostgres(ctx, cfg.Chat.DatabaseURL)
 		if err != nil {
 			slog.Error("chat store: open postgres failed", "error", err)
 			os.Exit(1)
 		}
+		cs.SetPodID(cfg.Chat.PodID)
 		chatStore = cs
 		slog.Info("chat store: initialized", "backend", "postgres", "schema", chatstore.PostgresSchema)
 	case cfg.Chat.DBPath != "":
@@ -138,10 +143,6 @@ func main() {
 	// Sidecars sharing the Postgres chat store reach each other over its NOTIFY bus.
 	var bus *cluster.Bus
 	if chatStore != nil && chatStore.Shared() {
-		if cfg.Chat.PodID == "" {
-			slog.Error("cluster: no pod id, set POD_NAME")
-			os.Exit(1)
-		}
 		bus = cluster.New(cfg.Chat.DatabaseURL, cfg.Chat.PodID)
 		busCtx, cancelBus := context.WithCancel(ctx)
 		defer cancelBus()

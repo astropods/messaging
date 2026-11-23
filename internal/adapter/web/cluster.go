@@ -10,6 +10,7 @@ import (
 
 	"github.com/astropods/messaging/internal/cluster"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -18,6 +19,12 @@ const ownerHeartbeat = 10 * time.Second
 
 // replayWait bounds how long a subscribe on a non-owner waits for the owner's buffered events.
 const replayWait = 2 * time.Second
+
+// orphanReapInterval closes turns whose sidecar died, which no startup reap covers on a shared store.
+const orphanReapInterval = time.Minute
+
+// stopAckWait bounds how long a forwarded stop waits before stopping here instead.
+const stopAckWait = 2 * time.Second
 
 // Bus is the part of cluster.Bus the web adapter uses.
 type Bus interface {
@@ -28,7 +35,13 @@ type Bus interface {
 
 type stopMessage struct {
 	To   string   `json:"to"`
+	ID   string   `json:"id"`
 	User *pb.User `json:"user"`
+}
+
+type stoppedMessage struct {
+	To string `json:"to"`
+	ID string `json:"id"`
 }
 
 type answerMessage struct {
@@ -54,13 +67,70 @@ func (m answerMessage) MarshalJSON() ([]byte, error) {
 	return json.Marshal(w)
 }
 
-type watchMessage struct{}
+// watchMessage with Replay asks the owner named by To for the live turn's buffered events.
+// Without Replay it renews an existing watch with whichever sidecar runs the turn.
+type watchMessage struct {
+	To     string `json:"to,omitempty"`
+	Replay bool   `json:"replay,omitempty"`
+}
+
+type turnStartedMessage struct{}
 
 // clusterState is what a non-owner tracks about conversations it watches on another sidecar.
 type clusterState struct {
 	mu       sync.Mutex
 	watching map[string]time.Time
 	replayed map[string][]chan struct{}
+	acks     map[string]chan struct{}
+	owned    map[string]bool
+}
+
+func newClusterState() *clusterState {
+	return &clusterState{
+		watching: map[string]time.Time{},
+		replayed: map[string][]chan struct{}{},
+		acks:     map[string]chan struct{}{},
+		owned:    map[string]bool{},
+	}
+}
+
+func (c *clusterState) awaitAck(id string) <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ch := make(chan struct{})
+	c.acks[id] = ch
+	return ch
+}
+
+func (c *clusterState) signalAck(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ch, ok := c.acks[id]; ok {
+		close(ch)
+		delete(c.acks, id)
+	}
+}
+
+func (c *clusterState) dropAck(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.acks, id)
+}
+
+// startedTurns records the owned set and returns the conversations that were not owned before.
+func (c *clusterState) startedTurns(owned []string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	next := make(map[string]bool, len(owned))
+	var started []string
+	for _, id := range owned {
+		next[id] = true
+		if !c.owned[id] {
+			started = append(started, id)
+		}
+	}
+	c.owned = next
+	return started
 }
 
 func (c *clusterState) markWatching(conversationID string) {
@@ -105,7 +175,7 @@ func (a *WebAdapter) SetCluster(bus Bus) {
 	}
 	a.cluster = bus
 	a.handlers.cluster = bus
-	a.handlers.clusterState = &clusterState{watching: map[string]time.Time{}, replayed: map[string][]chan struct{}{}}
+	a.handlers.clusterState = newClusterState()
 	a.turnsChanged = a.turns.watchChanges()
 	a.connManager.SetRelay(bus.Publish)
 
@@ -127,8 +197,26 @@ func (a *WebAdapter) SetCluster(bus Bus) {
 		}
 	})
 	bus.Handle(busWatch, func(env cluster.Envelope) {
-		if a.turns.isStreaming(env.Conversation) {
-			a.connManager.Watch(env.Conversation, env.From)
+		var m watchMessage
+		if err := json.Unmarshal(env.Data, &m); err != nil {
+			return
+		}
+		switch {
+		case m.Replay && m.To == bus.Pod():
+			a.connManager.Watch(env.Conversation, env.From, true)
+		case !m.Replay && a.turns.isStreaming(env.Conversation):
+			a.connManager.Watch(env.Conversation, env.From, false)
+		}
+	})
+	bus.Handle(busTurnStarted, func(env cluster.Envelope) {
+		if a.connManager.GetConnectionCount(env.Conversation) > 0 {
+			go h.watchRemote(context.Background(), env.Conversation, env.From)
+		}
+	})
+	bus.Handle(busStopped, func(env cluster.Envelope) {
+		var m stoppedMessage
+		if err := json.Unmarshal(env.Data, &m); err == nil && m.To == bus.Pod() {
+			h.clusterState.signalAck(m.ID)
 		}
 	})
 	bus.Handle(busReplay, func(env cluster.Envelope) {
@@ -148,7 +236,10 @@ func (a *WebAdapter) SetCluster(bus Bus) {
 		if err := json.Unmarshal(env.Data, &m); err != nil || m.To != bus.Pod() {
 			return
 		}
-		go h.stopTurn(context.Background(), env.Conversation, m.User)
+		go func() {
+			h.stopTurn(context.Background(), env.Conversation, m.User)
+			bus.Publish(busStopped, env.Conversation, stoppedMessage{To: env.From, ID: m.ID})
+		}()
 	})
 	bus.Handle(busAnswer, func(env cluster.Envelope) {
 		var m answerMessage
@@ -181,6 +272,8 @@ func (a *WebAdapter) runCluster(ctx context.Context) {
 	}
 	owners := time.NewTicker(ownerHeartbeat)
 	defer owners.Stop()
+	reaps := time.NewTicker(orphanReapInterval)
+	defer reaps.Stop()
 	watches := time.NewTicker(watchRenewInterval)
 	defer watches.Stop()
 	a.syncOwners(ctx)
@@ -193,27 +286,48 @@ func (a *WebAdapter) runCluster(ctx context.Context) {
 		case <-owners.C:
 			a.syncOwners(ctx)
 		case <-watches.C:
-			for _, id := range a.connManager.ConnectedConversations() {
-				if a.handlers.clusterState.isWatching(id) {
-					a.cluster.Publish(busWatch, id, watchMessage{})
-					a.handlers.clusterState.markWatching(id)
-				}
+			a.renewWatches(ctx)
+		case <-reaps.C:
+			if n, err := a.chatStore.ReapOrphanedTurns(ctx); err != nil {
+				slog.Warn("web cluster: reap orphaned turns failed", "error", err)
+			} else if n > 0 {
+				slog.Info("web cluster: finalized orphaned turns", "count", n)
 			}
 		}
 	}
 }
 
 func (a *WebAdapter) syncOwners(ctx context.Context) {
-	if err := a.chatStore.SyncTurnOwners(ctx, a.cluster.Pod(), a.turns.ownedConversations()); err != nil {
+	owned := a.turns.ownedConversations()
+	if err := a.chatStore.SyncTurnOwners(ctx, a.cluster.Pod(), owned); err != nil {
 		slog.Warn("web cluster: sync turn owners failed", "error", err)
+	}
+	for _, id := range a.handlers.clusterState.startedTurns(owned) {
+		a.cluster.Publish(busTurnStarted, id, turnStartedMessage{})
 	}
 }
 
-func (a *WebAdapter) releaseOwners() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := a.chatStore.SyncTurnOwners(ctx, a.cluster.Pod(), nil); err != nil {
-		slog.Warn("web cluster: release turn owners failed", "error", err)
+// renewWatches keeps current watches alive and starts one for any connected
+// conversation whose turn another sidecar runs, in case its turn start was missed.
+func (a *WebAdapter) renewWatches(ctx context.Context) {
+	h := a.handlers
+	var unwatched []string
+	for _, id := range a.connManager.ConnectedConversations() {
+		if h.clusterState.isWatching(id) {
+			a.cluster.Publish(busWatch, id, watchMessage{})
+			h.clusterState.markWatching(id)
+		} else {
+			unwatched = append(unwatched, id)
+		}
+	}
+	if len(unwatched) == 0 {
+		return
+	}
+	remote := h.remoteTurns(ctx)
+	for _, id := range unwatched {
+		if owner, ok := remote[id]; ok {
+			go h.watchRemote(context.Background(), id, owner)
+		}
 	}
 }
 
@@ -264,13 +378,13 @@ func (h *Handlers) remoteTurns(ctx context.Context) map[string]string {
 }
 
 // watchRemote asks the owner to relay the conversation here and waits briefly for its buffered events.
-func (h *Handlers) watchRemote(ctx context.Context, conversationID string) {
+func (h *Handlers) watchRemote(ctx context.Context, conversationID, owner string) {
 	if h.clusterState.isWatching(conversationID) {
 		return
 	}
 	done := h.clusterState.awaitReplay(conversationID)
 	h.clusterState.markWatching(conversationID)
-	h.cluster.Publish(busWatch, conversationID, watchMessage{})
+	h.cluster.Publish(busWatch, conversationID, watchMessage{To: owner, Replay: true})
 	t := time.NewTimer(replayWait)
 	defer t.Stop()
 	select {
@@ -297,4 +411,21 @@ func (h *Handlers) claimClusterTurn(ctx context.Context, w http.ResponseWriter, 
 		return false
 	}
 	return true
+}
+
+// forwardStop asks the owner to stop the turn, and stops it here when the owner doesn't confirm in time.
+func (h *Handlers) forwardStop(ctx context.Context, conversationID, owner string, user *pb.User) {
+	id := uuid.NewString()
+	done := h.clusterState.awaitAck(id)
+	defer h.clusterState.dropAck(id)
+	h.cluster.Publish(busStop, conversationID, stopMessage{To: owner, ID: id, User: user})
+	t := time.NewTimer(stopAckWait)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+		slog.Warn("web cluster: turn owner did not confirm stop, stopping here", "conversation_id", conversationID, "owner", owner)
+		h.stopTurn(ctx, conversationID, user)
+	case <-ctx.Done():
+	}
 }

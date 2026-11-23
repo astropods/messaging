@@ -5,11 +5,11 @@ package cluster
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -20,6 +20,9 @@ const Channel = "astro_messaging_bus"
 
 // maxPayload stays under Postgres's 8000-byte NOTIFY limit.
 const maxPayload = 7800
+
+// fragmentChars leaves room for a fragment's JSON fields under maxPayload.
+const fragmentChars = maxPayload - 200
 
 const (
 	outboxSize      = 4096
@@ -111,26 +114,19 @@ func (b *Bus) Publish(kind, conversationID string, data any) {
 	}
 }
 
-// encode returns one payload, or fragments split on rune boundaries when the envelope is too large.
+// encode returns one payload, or base64 fragments when the envelope is too large.
+// Base64 needs no JSON escaping, so a fragment's size is known before it is marshaled.
 func encode(raw []byte) []string {
 	if len(raw)+1 <= maxPayload {
 		return []string{string(prefixEnvelope) + string(raw)}
 	}
-	s := string(raw)
-	var pieces []string
-	const pieceBytes = maxPayload / 2
-	for len(s) > 0 {
-		n := min(pieceBytes, len(s))
-		for n < len(s) && !utf8.RuneStart(s[n]) {
-			n--
-		}
-		pieces = append(pieces, s[:n])
-		s = s[n:]
-	}
+	b64 := base64.StdEncoding.EncodeToString(raw)
+	n := (len(b64) + fragmentChars - 1) / fragmentChars
 	id := uuid.NewString()
-	out := make([]string, 0, len(pieces))
-	for i, p := range pieces {
-		f, _ := json.Marshal(fragment{ID: id, I: i, N: len(pieces), Part: p})
+	out := make([]string, 0, n)
+	for i := range n {
+		end := min((i+1)*fragmentChars, len(b64))
+		f, _ := json.Marshal(fragment{ID: id, I: i, N: n, Part: b64[i*fragmentChars : end]})
 		out = append(out, string(prefixFragment)+string(f))
 	}
 	return out
@@ -291,9 +287,14 @@ func (b *Bus) assemble(f fragment) []byte {
 	for _, s := range p.parts {
 		size += len(s)
 	}
-	out := make([]byte, 0, size)
+	joined := make([]byte, 0, size)
 	for _, s := range p.parts {
-		out = append(out, s...)
+		joined = append(joined, s...)
+	}
+	out, err := base64.StdEncoding.DecodeString(string(joined))
+	if err != nil {
+		slog.Warn("cluster: bad bus fragments dropped", "error", err)
+		return nil
 	}
 	return out
 }

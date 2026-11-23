@@ -6,12 +6,14 @@ import (
 )
 
 const (
-	busSSE    = "web.sse"
-	busClose  = "web.close"
-	busWatch  = "web.watch"
-	busReplay = "web.replay"
-	busStop   = "web.stop"
-	busAnswer = "web.answer"
+	busSSE         = "web.sse"
+	busClose       = "web.close"
+	busWatch       = "web.watch"
+	busReplay      = "web.replay"
+	busStop        = "web.stop"
+	busStopped     = "web.stopped"
+	busAnswer      = "web.answer"
+	busTurnStarted = "web.turn_started"
 )
 
 // watchTTL outlasts two watch renewals, so one lost renewal keeps the relay.
@@ -61,9 +63,9 @@ func (cm *ConnectionManager) relayLocked(conversationID, kind string, data any) 
 	}
 }
 
-// Watch registers pod as watching conversationID. A pod that was not already
-// watching gets the live turn's buffered events, queued ahead of any later relay.
-func (cm *ConnectionManager) Watch(conversationID, pod string) {
+// Watch registers pod as watching conversationID. With replay, pod also gets the
+// live turn's buffered events, queued ahead of any later relay and sent even when empty.
+func (cm *ConnectionManager) Watch(conversationID, pod string, replay bool) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	if cm.relay == nil {
@@ -74,9 +76,8 @@ func (cm *ConnectionManager) Watch(conversationID, pod string) {
 		pods = map[string]time.Time{}
 		cm.watchers[conversationID] = pods
 	}
-	exp, known := pods[pod]
 	pods[pod] = time.Now().Add(watchTTL)
-	if known && time.Now().Before(exp) {
+	if !replay {
 		return
 	}
 	var events []SSEEvent
@@ -115,7 +116,16 @@ func (cm *ConnectionManager) Mirror(conversationID string, events []SSEEvent, re
 			continue
 		}
 		// A hole would let a resume replay around missing events, so restart the segment.
+		// A live connection already rendered around the hole, so release it to reconcile from history.
 		if seq > buf.lastSeq+1 {
+			if !replay && len(cm.connections[conversationID]) > 0 {
+				finish := NewFinishEvent("")
+				finish.ID = strconv.FormatUint(seq-1, 10)
+				cm.fanOutLocked(conversationID, finish)
+				cm.closeLocked(conversationID)
+				buf = &convEventBuffer{}
+				cm.eventBuffers[conversationID] = buf
+			}
 			buf.events = buf.events[:0]
 			buf.bytes = 0
 			buf.endedTurn = false

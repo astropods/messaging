@@ -555,7 +555,7 @@ func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
 
 	user := &pb.User{Id: session.UserID, Username: session.Username}
 	if owner := h.remoteOwner(r.Context(), conversationID); owner != "" {
-		h.cluster.Publish(busStop, conversationID, stopMessage{To: owner, User: user})
+		h.forwardStop(r.Context(), conversationID, owner, user)
 	} else {
 		h.stopTurn(r.Context(), conversationID, user)
 	}
@@ -775,8 +775,8 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 		LastEventAt:    time.Now(),
 	}
 
-	if h.remoteOwner(ctx, conversationID) != "" {
-		h.watchRemote(ctx, conversationID)
+	if owner := h.remoteOwner(ctx, conversationID); owner != "" {
+		h.watchRemote(ctx, conversationID, owner)
 	}
 
 	// With a Last-Event-ID, register + snapshot missed events atomically (see

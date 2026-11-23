@@ -180,15 +180,15 @@ func (t *messageTree) storedParent(parent string) string {
 // head counts only while the newest message is headNewest, since an older image
 // appends without resetting it. agentHead is where the agent's memory ends.
 type heads struct {
-	head, headNewest, agentHead string
+	head, headNewest, agentHead, agentPod string
 }
 
 func conversationHeads(ctx context.Context, q queryer, conversationID string) (heads, error) {
 	var h heads
 	err := q.QueryRowContext(ctx,
-		`SELECT head_id, head_newest_id, agent_head_id FROM conversations WHERE conversation_id = ?`,
+		`SELECT head_id, head_newest_id, agent_head_id, agent_pod FROM conversations WHERE conversation_id = ?`,
 		conversationID,
-	).Scan(&h.head, &h.headNewest, &h.agentHead)
+	).Scan(&h.head, &h.headNewest, &h.agentHead, &h.agentPod)
 	if errors.Is(err, sql.ErrNoRows) {
 		return heads{}, nil
 	}
@@ -289,7 +289,8 @@ func (s *Store) PageMessages(ctx context.Context, conversationID string, limit, 
 	return msgs, hasMore, oldestSeq, lastRole, nil
 }
 
-// AppendUserTurn always sets History on an edit, where the agent may hold the edited turn unanswered, and on a shared store.
+// AppendUserTurn always sets History on an edit, where the agent may hold the edited turn unanswered,
+// and on a shared store when another sidecar's agent wrote the last reply.
 func (s *Store) AppendUserTurn(ctx context.Context, conversationID, userID string, in TurnInput) (UserTurn, error) {
 	tx, err := s.db.beginConversation(ctx, conversationID)
 	if err != nil {
@@ -338,8 +339,9 @@ func (s *Store) AppendUserTurn(ctx context.Context, conversationID, userID strin
 		return UserTurn{}, err
 	}
 	turn := UserTurn{Message: msg}
-	// Sidecars sharing the store each pair with their own agent, so agentAt says nothing about this agent's memory.
-	if in.EditOf != "" || parent != agentAt || s.Shared() {
+	// Each sidecar on a shared store pairs with its own agent, which missed the replies another sidecar's agent wrote.
+	otherAgent := s.Shared() && parent != "" && h.agentPod != s.podID
+	if in.EditOf != "" || parent != agentAt || otherAgent {
 		turn.History, err = historyTx(ctx, tx, conversationID, t.pathTo(parent))
 		if err != nil {
 			return UserTurn{}, err

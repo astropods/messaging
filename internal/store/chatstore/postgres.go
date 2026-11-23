@@ -81,6 +81,8 @@ CREATE TABLE conversation_contexts (
 CREATE INDEX idx_conversation_contexts_updated ON conversation_contexts (updated_at);
 `,
 	`
+ALTER TABLE conversations ADD COLUMN agent_pod TEXT NOT NULL DEFAULT '';
+
 CREATE TABLE turn_owners (
 	conversation_id TEXT PRIMARY KEY,
 	pod_id          TEXT   NOT NULL,

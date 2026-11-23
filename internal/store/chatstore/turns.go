@@ -19,18 +19,25 @@ var errNeedsPostgres = errors.New("chatstore: needs the postgres chat store")
 // Shared reports whether the store is Postgres, which several sidecars can share.
 func (s *Store) Shared() bool { return s.db.dialect == dialectPostgres }
 
-func (s *Store) liveOwnerExclusion() string {
+func (s *Store) liveOwnerExclusion(ownRowsStale bool) string {
 	if !s.Shared() {
 		return ""
 	}
-	return `
-			AND NOT EXISTS (SELECT 1 FROM turn_owners o WHERE o.conversation_id = c.conversation_id AND o.heartbeat_at > ?)`
+	q := `
+			AND NOT EXISTS (SELECT 1 FROM turn_owners o WHERE o.conversation_id = c.conversation_id AND o.heartbeat_at > ?`
+	if ownRowsStale {
+		q += ` AND o.pod_id <> ?`
+	}
+	return q + `)`
 }
 
-func (s *Store) reapArgs() []any {
+func (s *Store) reapArgs(ownRowsStale bool) []any {
 	args := []any{time.Now().Add(-s.reapGrace).UnixMilli()}
 	if s.Shared() {
 		args = append(args, liveOwnerCutoff())
+		if ownRowsStale {
+			args = append(args, s.podID)
+		}
 	}
 	return args
 }
