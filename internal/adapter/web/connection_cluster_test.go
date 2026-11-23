@@ -178,6 +178,25 @@ func TestMirrorReleasesALiveConnectionAtAGap(t *testing.T) {
 	}
 }
 
+func TestReleaseMirroredFinishesAndClosesTheConnection(t *testing.T) {
+	watcher := NewConnectionManager(time.Minute)
+	conn := connect(watcher, "conv")
+	watcher.Mirror("conv", []SSEEvent{{Event: EventChunk, ID: "5", Data: "{}"}}, true)
+	drain(conn)
+
+	watcher.ReleaseMirrored("conv")
+
+	got := drain(conn)
+	if len(got) != 1 || got[0].Event != EventFinish || got[0].ID != "5" {
+		t.Fatalf("connection received %+v, want one finish with the last mirrored id 5", got)
+	}
+	select {
+	case <-conn.Done:
+	default:
+		t.Fatal("ReleaseMirrored left the connection open")
+	}
+}
+
 func TestCloseMirroredDoesNotRelay(t *testing.T) {
 	cm, rec := relayedManager()
 	cm.Watch("conv", "pod-b", false)

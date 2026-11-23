@@ -13,6 +13,7 @@ const (
 	busStop        = "web.stop"
 	busStopped     = "web.stopped"
 	busAnswer      = "web.answer"
+	busAnswered    = "web.answered"
 	busTurnStarted = "web.turn_started"
 )
 
@@ -139,6 +140,21 @@ func (cm *ConnectionManager) Mirror(conversationID string, events []SSEEvent, re
 func (cm *ConnectionManager) CloseMirrored(conversationID string) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
+	cm.closeLocked(conversationID)
+}
+
+// ReleaseMirrored finishes and closes the conversation's connections because its owner is gone.
+func (cm *ConnectionManager) ReleaseMirrored(conversationID string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if len(cm.connections[conversationID]) == 0 {
+		return
+	}
+	finish := NewFinishEvent("")
+	if buf := cm.eventBuffers[conversationID]; buf != nil {
+		finish.ID = strconv.FormatUint(buf.lastSeq, 10)
+	}
+	cm.fanOutLocked(conversationID, finish)
 	cm.closeLocked(conversationID)
 }
 

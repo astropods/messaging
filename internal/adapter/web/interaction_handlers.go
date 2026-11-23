@@ -79,7 +79,14 @@ func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Idempotent replay of an already-answered interaction (e.g. re-POST on reload).
+	// A remote owner dedupes, so re-forwarding covers an earlier forward it never confirmed.
 	if it.Status != store.InteractionPending {
+		if owner := h.remoteOwner(ctx, conversationID); owner != "" && it.Response != nil {
+			h.forwardAnswer(ctx, conversationID, answerMessage{
+				To: owner, UserID: session.UserID, InteractionID: interactionID,
+				Action: it.Response.GetAction(), Text: it.Response.GetText(), Response: it.Response,
+			})
+		}
 		writeJSON(w, http.StatusOK, interactionResponseAck{
 			Status: string(it.Status),
 			Action: renderableActionWireName(it.Response.GetAction()),
@@ -147,9 +154,12 @@ func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Requ
 	}
 
 	if owner := h.remoteOwner(ctx, conversationID); owner != "" {
-		h.cluster.Publish(busAnswer, conversationID, answerMessage{
+		if !h.forwardAnswer(ctx, conversationID, answerMessage{
 			To: owner, UserID: session.UserID, InteractionID: interactionID, Action: action, Text: input.Text, Response: resp,
-		})
+		}) {
+			http.Error(w, "answer not delivered, try again", http.StatusServiceUnavailable)
+			return
+		}
 	} else {
 		h.applyAnswer(ctx, conversationID, session.UserID, action, it.Renderable, resp, input.Text)
 	}

@@ -98,7 +98,7 @@ func (h *Handlers) HandleListChatConversations(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	remote := h.remoteTurns(r.Context())
+	remote, _ := h.remoteTurns(r.Context())
 	out := make([]chatConversationSummary, 0, len(convs))
 	for _, c := range convs {
 		// A turn actively streaming in this sidecar overrides the persisted-state

@@ -141,6 +141,17 @@ func (s *sidecar) agentSays(t *testing.T, conversationID string, kind pb.Content
 	}
 }
 
+func (s *sidecar) answer(t *testing.T, conversationID, interactionID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/conversations/"+conversationID+"/interactions/"+interactionID, strings.NewReader(body))
+	req.Header.Set("X-User-ID", sidecarUser)
+	req.SetPathValue("id", conversationID)
+	req.SetPathValue("interactionId", interactionID)
+	w := httptest.NewRecorder()
+	s.a.handlers.HandleInteractionResponse(w, req)
+	return w
+}
+
 func seedConversation(t *testing.T, s *sidecar, conversationID string) {
 	t.Helper()
 	if _, err := s.st.EnsureForSend(t.Context(), conversationID, sidecarUser, "t"); err != nil {
@@ -378,18 +389,71 @@ func TestInteractionAnswerOnTheOtherSidecarReachesTheOwnersAgent(t *testing.T) {
 		return owner == "pod-a"
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/chat/conversations/conv/interactions/i1", strings.NewReader(`{"action":"decline"}`))
-	req.Header.Set("X-User-ID", sidecarUser)
-	req.SetPathValue("id", "conv")
-	req.SetPathValue("interactionId", "i1")
-	w := httptest.NewRecorder()
-	b.a.handlers.HandleInteractionResponse(w, req)
-	if w.Code != http.StatusOK {
+	if w := b.answer(t, "conv", "i1", `{"action":"decline"}`); w.Code != http.StatusOK {
 		t.Fatalf("answer on pod-b = %d %s", w.Code, w.Body.String())
 	}
 
-	waitUntil(t, "pod-a's agent to get the answer", func() bool { return a.feedbackOfKind(isRenderableResponse) == 1 })
+	if n := a.feedbackOfKind(isRenderableResponse); n != 1 {
+		t.Fatalf("pod-a's agent got %d answers when pod-b's answer returned, want 1: pod-b waits for the owner's confirmation", n)
+	}
 	if n := b.feedbackOfKind(isRenderableResponse); n != 0 {
 		t.Fatalf("pod-b's agent got %d answers, want 0: the turn runs on pod-a", n)
+	}
+
+	if w := b.answer(t, "conv", "i1", `{"action":"decline"}`); w.Code != http.StatusOK {
+		t.Fatalf("retried answer on pod-b = %d %s", w.Code, w.Body.String())
+	}
+	if n := a.feedbackOfKind(isRenderableResponse); n != 1 {
+		t.Fatalf("pod-a's agent got %d answers after a retry, want 1: the owner applies a re-forwarded answer once", n)
+	}
+}
+
+func TestInteractionAnswerIsRefusedWhenTheOwnerNeverConfirms(t *testing.T) {
+	b := newSidecar(t, testpg.URL(t), "pod-b")
+	seedConversation(t, b, "conv")
+	if _, err := b.st.AppendInteraction(t.Context(), "conv", sidecarUser, testRenderable("i1",
+		pb.RenderableAction_RENDERABLE_ACTION_DECLINE, pb.RenderableAction_RENDERABLE_ACTION_CANCEL)); err != nil {
+		t.Fatalf("append interaction: %v", err)
+	}
+	if ok, err := b.st.ClaimTurnOwner(t.Context(), "conv", "pod-gone"); err != nil || !ok {
+		t.Fatalf("claim for pod-gone = %v, %v", ok, err)
+	}
+
+	w := b.answer(t, "conv", "i1", `{"action":"decline"}`)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("answer with a silent owner = %d %s, want 503 so the client retries", w.Code, w.Body.String())
+	}
+	if n := b.feedbackOfKind(isRenderableResponse); n != 0 {
+		t.Fatalf("pod-b's agent got %d answers, want 0: the turn runs on pod-gone", n)
+	}
+}
+
+func TestStreamOnTheOtherSidecarFinishesWhenTheOwnerIsGone(t *testing.T) {
+	b := newSidecar(t, testpg.URL(t), "pod-b")
+	seedConversation(t, b, "conv")
+	if ok, err := b.st.ClaimTurnOwner(t.Context(), "conv", "pod-gone"); err != nil || !ok {
+		t.Fatalf("claim for pod-gone = %v, %v", ok, err)
+	}
+
+	stream := openStream(t, b, "conv", "")
+	stream.waitEvent(t, "event: connected")
+	waitUntil(t, "pod-b to watch pod-gone's turn", func() bool { return b.a.handlers.clusterState.isWatching("conv") })
+
+	b.a.renewWatches(t.Context())
+	if n := b.a.connManager.GetConnectionCount("conv"); n != 1 {
+		t.Fatalf("connections after a renewal with a live owner = %d, want 1", n)
+	}
+
+	if err := b.st.SyncTurnOwners(t.Context(), "pod-gone", nil); err != nil {
+		t.Fatalf("drop pod-gone's owner row: %v", err)
+	}
+	b.a.renewWatches(t.Context())
+
+	stream.waitEvent(t, "event: finish")
+	if b.a.handlers.clusterState.isWatching("conv") {
+		t.Fatal("pod-b still watches a turn with no live owner")
+	}
+	if n := b.a.connManager.GetConnectionCount("conv"); n != 0 {
+		t.Fatalf("connections after the owner is gone = %d, want 0", n)
 	}
 }
