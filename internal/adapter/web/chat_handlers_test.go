@@ -21,20 +21,20 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
-	"github.com/astropods/messaging/internal/store/sqlite"
+	"github.com/astropods/messaging/internal/store/chatstore"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
 // newChatTitleHandlers builds Handlers wired to a fresh temp SQLite chat store
 // and a header-based session manager (X-User-ID selects the caller; absent ->
 // unauthenticated).
-func newChatTitleHandlers(t *testing.T) (*Handlers, *sqlite.Store) {
+func newChatTitleHandlers(t *testing.T) (*Handlers, *chatstore.Store) {
 	t.Helper()
 	cm := NewConnectionManager(30 * time.Second)
 	sm := NewHeaderSessionManager("X-User-ID", "", "")
 	h := NewHandlers(cm, sm, nil, nil)
 
-	st, err := sqlite.Open(filepath.Join(t.TempDir(), "chat.db"))
+	st, err := chatstore.Open(filepath.Join(t.TempDir(), "chat.db"))
 	if err != nil {
 		t.Fatalf("open sqlite store: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestHandleSendMessageAtCapReturns409(t *testing.T) {
 	}
 	// Fill to the reserved cap (user turns hold back the final slot for a reply);
 	// the next user send then has no room and must 409.
-	for i := 0; i < sqlite.MaxMessagesPerConversation-1; i++ {
+	for i := 0; i < chatstore.MaxMessagesPerConversation-1; i++ {
 		if _, err := st.AppendMessage(t.Context(), "conv-1", "user-1", "user", "m", ""); err != nil {
 			t.Fatalf("seed fill %d: %v", i, err)
 		}

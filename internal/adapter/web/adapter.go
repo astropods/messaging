@@ -13,8 +13,8 @@ import (
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/logctx"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/chatstore"
 	"github.com/astropods/messaging/internal/store/files"
-	"github.com/astropods/messaging/internal/store/sqlite"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
@@ -40,7 +40,7 @@ type WebAdapter struct {
 	threadStore      *store.ThreadHistoryStore
 	agentConfigStore *store.AgentConfigStore
 	agentReadiness   adapter.AgentReadiness
-	chatStore        *sqlite.Store
+	chatStore        *chatstore.Store
 	fileStore        files.FileStore
 	fileLimit        int64
 	interactions     store.InteractionStore
@@ -372,7 +372,7 @@ func (a *WebAdapter) failTurn(ctx context.Context, conversationID, message strin
 	slog.Warn("[Web] finalizing in-flight turn with terminal error", "conversation", conversationID, "message", message)
 	if a.chatStore != nil {
 		if _, err := a.chatStore.FinalizeTerminal(ctx, conversationID, partial); err != nil {
-			if errors.Is(err, sqlite.ErrMessageLimitReached) {
+			if errors.Is(err, chatstore.ErrMessageLimitReached) {
 				slog.Debug("[Web] chat at message limit; stalled turn not finalized", "conversation", conversationID)
 			} else {
 				slog.Error("[Web] chat finalize stalled turn failed", "conversation", conversationID, "err", err)
@@ -469,7 +469,7 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 				}
 				_, err := write(ctx, conversationID, content, marshalAttachments(agentAttachments))
 				if err != nil {
-					if errors.Is(err, sqlite.ErrMessageLimitReached) {
+					if errors.Is(err, chatstore.ErrMessageLimitReached) {
 						// Terminal per-conversation state, not a real failure — don't
 						// spam ERROR on every throttled write near the cap.
 						log.Debug("[Web] chat at message limit; assistant reply not persisted", "conversation", conversationID)
@@ -516,7 +516,7 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 				partial = a.turns.content(conversationID)
 			}
 			if _, err := a.chatStore.FinalizeTerminal(ctx, conversationID, partial); err != nil {
-				if errors.Is(err, sqlite.ErrMessageLimitReached) {
+				if errors.Is(err, chatstore.ErrMessageLimitReached) {
 					log.Debug("[Web] chat at message limit; errored turn not finalized", "conversation", conversationID)
 				} else {
 					log.Error("[Web] chat finalize errored turn failed", "conversation", conversationID, "err", err)
@@ -545,7 +545,7 @@ func (a *WebAdapter) HandleAgentResponse(ctx context.Context, response *pb.Agent
 			if a.chatStore != nil {
 				if buffered := a.turns.content(conversationID); buffered != "" {
 					if _, err := a.chatStore.UpsertAssistantProgress(ctx, conversationID, buffered, ""); err != nil {
-						if !errors.Is(err, sqlite.ErrMessageLimitReached) {
+						if !errors.Is(err, chatstore.ErrMessageLimitReached) {
 							log.Error("[Web] flush before interaction failed", "conversation", conversationID, "err", err)
 						}
 					}
@@ -620,7 +620,7 @@ func (a *WebAdapter) SetAgentReadiness(fn adapter.AgentReadiness) {
 
 // SetChatStore wires the sidecar-local SQLite chat store. nil disables chat
 // persistence (e.g. local dev without CHAT_DB_PATH).
-func (a *WebAdapter) SetChatStore(s *sqlite.Store) {
+func (a *WebAdapter) SetChatStore(s *chatstore.Store) {
 	a.chatStore = s
 	if a.handlers != nil {
 		a.handlers.chatStore = s

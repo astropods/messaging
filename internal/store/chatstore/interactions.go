@@ -1,4 +1,4 @@
-package sqlite
+package chatstore
 
 import (
 	"context"
@@ -31,7 +31,7 @@ func (s *Store) AppendInteraction(ctx context.Context, conversationID, userID st
 		return store.Interaction{}, fmt.Errorf("chatstore marshal renderable: %w", err)
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.db.beginConversation(ctx, conversationID)
 	if err != nil {
 		return store.Interaction{}, fmt.Errorf("chatstore append interaction begin: %w", err)
 	}
@@ -87,7 +87,7 @@ func (s *Store) RecordInteractionResponse(ctx context.Context, conversationID, i
 		return store.Interaction{}, false, fmt.Errorf("chatstore marshal response: %w", err)
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.db.beginConversation(ctx, conversationID)
 	if err != nil {
 		return store.Interaction{}, false, fmt.Errorf("chatstore record response begin: %w", err)
 	}
@@ -102,10 +102,7 @@ func (s *Store) RecordInteractionResponse(ctx context.Context, conversationID, i
 	if !found {
 		return store.Interaction{}, false, store.ErrInteractionNotFound
 	}
-	// Already answered: return the stored outcome so the caller replays it rather
-	// than delivering a second response to the agent. The read-then-update runs in
-	// one tx over the single connection, so a concurrent responder can't slip
-	// between the pending check and the update.
+	// Already answered: the caller replays the stored outcome instead of responding twice.
 	if it.Status != store.InteractionPending {
 		return it, false, nil
 	}

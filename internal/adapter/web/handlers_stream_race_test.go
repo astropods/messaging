@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/astropods/messaging/internal/store/sqlite"
+	"github.com/astropods/messaging/internal/store/chatstore"
 )
 
 // These tests cover the "stuck animated avatar" chat report: a turn completes
@@ -39,12 +39,12 @@ func streamHandlers() *Handlers {
 // streamHandlersWithStore wires a fresh temp SQLite chat store and a
 // header-based session manager (X-User-ID selects the caller), so the terminal-
 // state replay path can be exercised against real persisted turn state.
-func streamHandlersWithStore(t *testing.T) (*Handlers, *sqlite.Store) {
+func streamHandlersWithStore(t *testing.T) (*Handlers, *chatstore.Store) {
 	t.Helper()
 	cm := NewConnectionManager(30 * time.Second)
 	sm := NewHeaderSessionManager("X-User-ID", "", "")
 	h := NewHandlers(cm, sm, nil, nil)
-	st, err := sqlite.Open(filepath.Join(t.TempDir(), "chat.db"))
+	st, err := chatstore.Open(filepath.Join(t.TempDir(), "chat.db"))
 	if err != nil {
 		t.Fatalf("open sqlite store: %v", err)
 	}

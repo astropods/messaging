@@ -10,7 +10,7 @@ import (
 	"github.com/astropods/messaging/internal/adapter"
 	messaginggrpc "github.com/astropods/messaging/internal/grpc"
 	"github.com/astropods/messaging/internal/store"
-	"github.com/astropods/messaging/internal/store/sqlite"
+	"github.com/astropods/messaging/internal/store/chatstore"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/astropods/messaging/pkg/types"
 )
@@ -57,7 +57,7 @@ func TestProcessConversation_AgentDisconnectFinalizesTurn(t *testing.T) {
 	ctx := context.Background()
 	const conv, user = "conv-grpc-1", "user-1"
 
-	st, err := sqlite.Open(filepath.Join(t.TempDir(), "chat.db"))
+	st, err := chatstore.Open(filepath.Join(t.TempDir(), "chat.db"))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

@@ -123,6 +123,9 @@ type ChatConfig struct {
 	// points at a file on the agent's default persistent disk (e.g.
 	// /data/chat.db), so chat history survives pod reschedules.
 	DBPath string
+	// DatabaseURL is a Postgres URL shared by every sidecar replica. When set it
+	// wins over DBPath and STORAGE_TYPE: chat and conversation contexts both use it.
+	DatabaseURL string
 }
 
 // AuthzConfig holds the configuration the messaging container uses to call
@@ -345,7 +348,8 @@ func Load() (*Config, error) {
 	// shared persistent disk in deployed sidecars (durable across reschedules);
 	// unset locally, which disables persistence.
 	cfg.Chat = ChatConfig{
-		DBPath: getEnv("CHAT_DB_PATH", ""),
+		DBPath:      getEnv("CHAT_DB_PATH", ""),
+		DatabaseURL: os.Getenv("CHAT_DATABASE_URL"),
 	}
 
 	// Files: astro-server points FILES_DIR at a subtree of the agent's shared

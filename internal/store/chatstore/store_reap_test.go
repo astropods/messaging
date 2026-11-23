@@ -1,11 +1,11 @@
-package sqlite
+package chatstore
 
 // Covers ReapDanglingUserTurns: on startup, conversations whose latest message is
 // still the user's (a turn interrupted before its assistant row was persisted)
 // are finalized with a terminal assistant row so they stop deriving
 // assistant_streaming. Completed, empty, and deleted conversations are untouched.
 //
-//	go test ./internal/store/sqlite -run TestReapDanglingUserTurns -v
+//	go test ./internal/store/chatstore -run TestReapDanglingUserTurns -v
 
 import (
 	"context"

@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/astropods/messaging/internal/store/sqlite"
+	"github.com/astropods/messaging/internal/store/chatstore"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
@@ -84,7 +84,7 @@ func (h *Handlers) HandleListChatConversations(w http.ResponseWriter, r *http.Re
 	}
 
 	var (
-		convs []sqlite.Conversation
+		convs []chatstore.Conversation
 		err   error
 	)
 	if roomID := r.URL.Query().Get("room_id"); roomID != "" {
@@ -151,7 +151,7 @@ func (h *Handlers) HandleGetChatConversation(w http.ResponseWriter, r *http.Requ
 	h.writeChatConversation(w, r, conv, limit, beforeSeq)
 }
 
-func (h *Handlers) writeChatConversation(w http.ResponseWriter, r *http.Request, conv *sqlite.Conversation, limit, beforeSeq int) {
+func (h *Handlers) writeChatConversation(w http.ResponseWriter, r *http.Request, conv *chatstore.Conversation, limit, beforeSeq int) {
 	conversationID := conv.ConversationID
 	if limit == 0 {
 		limit = chatDefaultConversationLimit

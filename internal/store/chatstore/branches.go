@@ -1,4 +1,4 @@
-package sqlite
+package chatstore
 
 import (
 	"context"
@@ -291,7 +291,7 @@ func (s *Store) PageMessages(ctx context.Context, conversationID string, limit, 
 
 // AppendUserTurn always sets History on an edit: the agent may hold the edited turn unanswered.
 func (s *Store) AppendUserTurn(ctx context.Context, conversationID, userID string, in TurnInput) (UserTurn, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.db.beginConversation(ctx, conversationID)
 	if err != nil {
 		return UserTurn{}, fmt.Errorf("chatstore append user turn begin: %w", err)
 	}
@@ -394,7 +394,7 @@ func attachmentsLine(attachmentsJSON string) string {
 
 // SwitchBranch makes the newest message under messageID the head; false means not found.
 func (s *Store) SwitchBranch(ctx context.Context, conversationID, userID, messageID string) (bool, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.db.beginConversation(ctx, conversationID)
 	if err != nil {
 		return false, fmt.Errorf("chatstore switch branch begin: %w", err)
 	}

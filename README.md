@@ -10,7 +10,7 @@ Go messaging service that connects AI agents to messaging platforms via gRPC bid
 - **Web adapter** — HTTP/SSE for browser-based clients
 - **Thread history** — tracks edits and deletions in memory
 - **Storage** — Redis or in-memory conversation store
-- **Chat persistence** — deployment web-chat history in a deployment-local SQLite store, durable on the agent's shared disk (see `CHAT_DB_PATH`)
+- **Chat persistence** — deployment web-chat history in a deployment-local SQLite store, durable on the agent's shared disk (see `CHAT_DB_PATH`), or in Postgres shared by several sidecars (see `CHAT_DATABASE_URL`)
 - **Message edits**: an edited web-chat message starts a new branch of the conversation; agents that set `supports_history` receive the branch as `Message.history`
 - **Model switching**: an agent that declares `AgentConfig.models` gets a model picker in web chat; a send names one of those models and the agent receives it as `Message.model`
 - **Multi-arch Docker image** — `linux/amd64` and `linux/arm64`
@@ -143,6 +143,10 @@ FILES_MAX_MB=
 # disk, so history survives pod reschedules. Unset (default) disables
 # persistence — used for local dev.
 CHAT_DB_PATH=
+# Postgres URL shared by every sidecar replica. Wins over CHAT_DB_PATH and
+# STORAGE_TYPE: chat and conversation contexts both live in the
+# astro_messaging schema, which the sidecar creates and migrates on start.
+CHAT_DATABASE_URL=
 
 # Logging: debug (default), info, warn, error
 LOG_LEVEL=debug

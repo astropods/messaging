@@ -20,8 +20,8 @@ import (
 	"github.com/astropods/messaging/internal/internalfeedback"
 	"github.com/astropods/messaging/internal/roomgrant"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/chatstore"
 	"github.com/astropods/messaging/internal/store/files"
-	"github.com/astropods/messaging/internal/store/sqlite"
 	"github.com/astropods/messaging/internal/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -96,9 +96,55 @@ func main() {
 
 	ctx := context.Background()
 
+	// Initialize the chat store (platform chat UI persistence). CHAT_DATABASE_URL
+	// selects shared Postgres; otherwise CHAT_DB_PATH selects a local SQLite file;
+	// with neither, chat persistence is disabled (local dev).
+	var chatStore *chatstore.Store
+	switch {
+	case cfg.Chat.DatabaseURL != "":
+		cs, err := chatstore.OpenPostgres(ctx, cfg.Chat.DatabaseURL)
+		if err != nil {
+			slog.Error("chat store: open postgres failed", "error", err)
+			os.Exit(1)
+		}
+		chatStore = cs
+		slog.Info("chat store: initialized", "backend", "postgres", "schema", chatstore.PostgresSchema)
+	case cfg.Chat.DBPath != "":
+		cs, err := chatstore.Open(cfg.Chat.DBPath)
+		if err != nil {
+			slog.Error("Failed to initialize chat store", "err", err, "path", cfg.Chat.DBPath)
+			os.Exit(1)
+		}
+		chatStore = cs
+		slog.Info("Chat store initialized", "path", cfg.Chat.DBPath)
+	default:
+		slog.Info("Chat persistence disabled (CHAT_DB_PATH unset)")
+	}
+	if chatStore != nil {
+		defer func() {
+			if err := chatStore.Close(); err != nil {
+				slog.Error("Error closing chat store", "err", err)
+			}
+		}()
+		// A user-last conversation at startup is a turn interrupted before its reply was persisted.
+		if n, err := chatStore.ReapDanglingUserTurns(ctx); err != nil {
+			slog.Error("Failed to reap dangling chat turns", "err", err)
+		} else if n > 0 {
+			slog.Info("Finalized interrupted chat turns on startup", "count", n)
+		}
+	}
+
 	// Initialize conversation store
 	var conversationStore store.ConversationStore
-	if cfg.Storage.Type == "redis" {
+	if cfg.Chat.DatabaseURL != "" {
+		contexts, err := chatStore.Contexts(ctx, time.Duration(cfg.Storage.TTL)*time.Second)
+		if err != nil {
+			slog.Error("conversation store: open postgres failed", "error", err)
+			os.Exit(1)
+		}
+		conversationStore = contexts
+		slog.Info("conversation store: initialized", "backend", "postgres")
+	} else if cfg.Storage.Type == "redis" {
 		slog.Info("Initializing Redis store", "url", cfg.Storage.RedisURL)
 		redisStore, err := store.NewRedisStore(cfg.Storage.RedisURL, cfg.Storage.TTL)
 		if err != nil {
@@ -130,38 +176,6 @@ func main() {
 
 	// Initialize agent config store
 	agentConfigStore := store.NewAgentConfigStore()
-
-	// Initialize the sidecar-local chat store (platform chat UI persistence).
-	// Disabled when CHAT_DB_PATH is unset (local dev). In deployed sidecars the
-	// path points at a shared persistent volume, so chat survives pod reschedules.
-	var chatStore *sqlite.Store
-	if cfg.Chat.DBPath != "" {
-		cs, err := sqlite.Open(cfg.Chat.DBPath)
-		if err != nil {
-			slog.Error("Failed to initialize chat store", "err", err, "path", cfg.Chat.DBPath)
-			os.Exit(1)
-		}
-		chatStore = cs
-		defer func() {
-			if err := chatStore.Close(); err != nil {
-				slog.Error("Error closing chat store", "err", err)
-			}
-		}()
-		slog.Info("Chat store initialized", "path", cfg.Chat.DBPath)
-		// On startup no turn can be in flight and the in-memory turn tracker is
-		// empty, so any conversation whose latest message is still the user's is a
-		// turn that was interrupted before its assistant row was persisted (agent
-		// crash, or reschedule between the user append and the first progressive
-		// write). Finalize them so they don't derive assistant_streaming=true
-		// forever after the restart.
-		if n, err := chatStore.ReapDanglingUserTurns(ctx); err != nil {
-			slog.Error("Failed to reap dangling chat turns", "err", err)
-		} else if n > 0 {
-			slog.Info("Finalized interrupted chat turns on startup", "count", n)
-		}
-	} else {
-		slog.Info("Chat persistence disabled (CHAT_DB_PATH unset)")
-	}
 
 	// Initialize the agent files store (upload/download). Disabled when FILES_DIR
 	// is unset (local dev). In deployed sidecars the dir is a subtree of the
@@ -338,7 +352,7 @@ func main() {
 }
 
 // initializeAdapters creates and initializes adapters based on configuration
-func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer, chatStore *sqlite.Store, fileStore files.FileStore, internalFeedbackHandler adapter.InternalFeedbackHandler) map[string]adapter.Adapter {
+func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer, chatStore *chatstore.Store, fileStore files.FileStore, internalFeedbackHandler adapter.InternalFeedbackHandler) map[string]adapter.Adapter {
 	adapters := make(map[string]adapter.Adapter)
 
 	// Initialize Slack adapter if enabled
@@ -380,7 +394,7 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			webOpts = append(webOpts, web.WithSessionManager(web.NewAstroServerSessionManager()))
 		}
 		// Back interactions with the durable SQLite store when present (otherwise
-		// the adapter defaults to the in-memory store). Guarded so a nil *sqlite.Store
+		// the adapter defaults to the in-memory store). Guarded so a nil *chatstore.Store
 		// isn't wrapped into a non-nil interface.
 		if chatStore != nil {
 			webOpts = append(webOpts, web.WithInteractionStore(chatStore))

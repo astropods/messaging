@@ -7,14 +7,14 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
-	"github.com/astropods/messaging/internal/store/sqlite"
+	"github.com/astropods/messaging/internal/store/chatstore"
 )
 
 // When the agent stream ends mid-turn, HandleAgentDisconnect must finalize the
 // in-flight turn: broadcast a terminal error to SSE clients and flip the
 // conversation out of assistant_streaming so it doesn't hang forever.
 func TestWebAdapter_HandleAgentDisconnect_FinalizesInFlightTurn(t *testing.T) {
-	st, err := sqlite.Open(filepath.Join(t.TempDir(), "chat.db"))
+	st, err := chatstore.Open(filepath.Join(t.TempDir(), "chat.db"))
 	if err != nil {
 		t.Fatalf("open sqlite store: %v", err)
 	}

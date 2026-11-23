@@ -6,16 +6,16 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/store"
-	"github.com/astropods/messaging/internal/store/sqlite"
+	"github.com/astropods/messaging/internal/store/chatstore"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func newSaveTestServer(t *testing.T) (*Server, *sqlite.Store) {
+func newSaveTestServer(t *testing.T) (*Server, *chatstore.Store) {
 	t.Helper()
-	cs, err := sqlite.Open(filepath.Join(t.TempDir(), "chat.db"))
+	cs, err := chatstore.Open(filepath.Join(t.TempDir(), "chat.db"))
 	if err != nil {
 		t.Fatalf("open chat store: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestSaveConversation_WritesCopyAndReportsCreated(t *testing.T) {
 	if resp.Status != pb.SaveConversationResponse_CREATED {
 		t.Fatalf("status = %v, want CREATED", resp.Status)
 	}
-	if want := sqlite.DeriveSavedConversationID("user_1", "slack:C1:111.0001"); resp.ConversationId != want {
+	if want := chatstore.DeriveSavedConversationID("user_1", "slack:C1:111.0001"); resp.ConversationId != want {
 		t.Fatalf("conversation id = %q, want the derived %q", resp.ConversationId, want)
 	}
 

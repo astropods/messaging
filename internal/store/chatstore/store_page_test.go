@@ -1,4 +1,4 @@
-package sqlite
+package chatstore
 
 // Covers PageMessages on a linear thread, where seq is contiguous from 1.
 //

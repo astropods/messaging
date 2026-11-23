@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/astropods/messaging/internal/adapter"
-	"github.com/astropods/messaging/internal/store/sqlite"
+	"github.com/astropods/messaging/internal/store/chatstore"
 )
 
 // A turn that goes idle past the window is finalized through the real adapter
@@ -17,7 +17,7 @@ func TestWebAdapter_IdleTimeout_FinalizesTurn(t *testing.T) {
 	ctx := context.Background()
 	const conv, user = "conv-idle-1", "user-1"
 
-	st, err := sqlite.Open(filepath.Join(t.TempDir(), "chat.db"))
+	st, err := chatstore.Open(filepath.Join(t.TempDir(), "chat.db"))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

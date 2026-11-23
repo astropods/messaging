@@ -14,7 +14,7 @@ import (
 	"github.com/astropods/messaging/internal/metrics"
 	"github.com/astropods/messaging/internal/roomgrant"
 	"github.com/astropods/messaging/internal/store"
-	"github.com/astropods/messaging/internal/store/sqlite"
+	"github.com/astropods/messaging/internal/store/chatstore"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/astropods/messaging/pkg/types"
 	"google.golang.org/grpc"
@@ -43,7 +43,7 @@ type Server struct {
 
 	// Chat store for conversations an agent copies in from an external system.
 	// nil when chat persistence is disabled.
-	chatStore *sqlite.Store
+	chatStore *chatstore.Store
 
 	// Active streams (for bidirectional communication)
 	streams   map[string]*conversationStream
@@ -82,7 +82,7 @@ func NewServer(listenAddr string, threadStore *store.ThreadHistoryStore, convSto
 }
 
 // SetChatStore wires the sidecar-local chat store. nil disables SaveConversation.
-func (s *Server) SetChatStore(cs *sqlite.Store) {
+func (s *Server) SetChatStore(cs *chatstore.Store) {
 	s.chatStore = cs
 }
 

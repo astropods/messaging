@@ -1,15 +1,22 @@
-package sqlite
+package chatstore
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
 )
 
+// newTestStore opens SQLite, or Postgres when CHAT_TEST_DATABASE_URL is set.
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
+	if os.Getenv(testDatabaseURLEnv) != "" {
+		st := openPostgresTestStore(t, newPostgresTestDatabase(t))
+		st.reapGrace = 0
+		return st
+	}
 	st, err := Open(filepath.Join(t.TempDir(), "chat.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)

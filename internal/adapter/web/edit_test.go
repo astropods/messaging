@@ -12,7 +12,7 @@ import (
 
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/store"
-	"github.com/astropods/messaging/internal/store/sqlite"
+	"github.com/astropods/messaging/internal/store/chatstore"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
@@ -24,7 +24,7 @@ func editRequest(user, conversationID, content, editOf string) *http.Request {
 	return req
 }
 
-func editableChat(t *testing.T) (*Handlers, *sqlite.Store, *[]*pb.Message) {
+func editableChat(t *testing.T) (*Handlers, *chatstore.Store, *[]*pb.Message) {
 	t.Helper()
 	h, st := newChatTitleHandlers(t)
 	h.agentConfigStore = historyAgent()
@@ -52,7 +52,7 @@ func historyAgent() *store.AgentConfigStore {
 	return cs
 }
 
-func activeBranch(t *testing.T, st *sqlite.Store) []sqlite.Message {
+func activeBranch(t *testing.T, st *chatstore.Store) []chatstore.Message {
 	t.Helper()
 	msgs, hasMore, _, _, err := st.PageMessages(t.Context(), "conv-1", 100, 0)
 	if err != nil || hasMore {

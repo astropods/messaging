@@ -1,4 +1,4 @@
-package sqlite
+package chatstore
 
 // Adversarial audit of the chat store: these tests deliberately try to break the
 // invariants the feature relies on (ownership, terminal-turn semantics, soft
