@@ -165,7 +165,7 @@ func openStream(t *testing.T, s *sidecar, conversationID, lastEventID string) *s
 	if lastEventID != "" {
 		req.Header.Set("Last-Event-ID", lastEventID)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:bodyclose // the reader goroutine closes it
 	if err != nil {
 		cancel()
 		t.Fatalf("open stream on %s: %v", s.pod, err)

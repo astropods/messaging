@@ -24,6 +24,8 @@ func openPostgresTestStore(t *testing.T, dbURL string) *Store {
 	if err != nil {
 		t.Fatalf("open postgres store: %v", err)
 	}
+	// Tests open many stores at once; one idle connection each stays under the server's client limit.
+	st.db.SetMaxIdleConns(1)
 	t.Cleanup(func() { _ = st.Close() })
 	return st
 }

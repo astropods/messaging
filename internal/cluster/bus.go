@@ -126,7 +126,11 @@ func encode(raw []byte) []string {
 	out := make([]string, 0, n)
 	for i := range n {
 		end := min((i+1)*fragmentChars, len(b64))
-		f, _ := json.Marshal(fragment{ID: id, I: i, N: n, Part: b64[i*fragmentChars : end]})
+		f, err := json.Marshal(fragment{ID: id, I: i, N: n, Part: b64[i*fragmentChars : end]})
+		if err != nil {
+			slog.Error("cluster: marshal bus fragment failed", "error", err)
+			return nil
+		}
 		out = append(out, string(prefixFragment)+string(f))
 	}
 	return out
@@ -176,7 +180,7 @@ func (b *Bus) publishLoop(ctx context.Context) {
 	var conn *pgx.Conn
 	defer func() {
 		if conn != nil {
-			_ = conn.Close(context.Background())
+			_ = conn.Close(context.WithoutCancel(ctx))
 		}
 	}()
 	backoff := time.Second
@@ -207,7 +211,7 @@ func (b *Bus) publishLoop(ctx context.Context) {
 			if err == nil {
 				break
 			}
-			_ = conn.Close(context.Background())
+			_ = conn.Close(context.WithoutCancel(ctx))
 			conn = nil
 			if ctx.Err() != nil {
 				return

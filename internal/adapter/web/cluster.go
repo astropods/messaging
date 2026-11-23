@@ -326,7 +326,7 @@ func (a *WebAdapter) renewWatches(ctx context.Context) {
 	remote := h.remoteTurns(ctx)
 	for _, id := range unwatched {
 		if owner, ok := remote[id]; ok {
-			go h.watchRemote(context.Background(), id, owner)
+			go h.watchRemote(ctx, id, owner)
 		}
 	}
 }

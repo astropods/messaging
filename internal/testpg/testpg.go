@@ -30,15 +30,21 @@ func URL(t testing.TB) string {
 		t.Fatalf("open admin connection: %v", err)
 	}
 	name := "chat_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	if _, err := admin.Exec("CREATE DATABASE " + name); err != nil {
-		_ = admin.Close()
+	_, err = admin.Exec("CREATE DATABASE " + name)
+	_ = admin.Close()
+	if err != nil {
 		t.Fatalf("create database: %v", err)
 	}
 	t.Cleanup(func() {
+		admin, err := sql.Open("pgx", base)
+		if err != nil {
+			t.Errorf("open admin connection: %v", err)
+			return
+		}
+		defer admin.Close() //nolint:errcheck
 		if _, err := admin.Exec("DROP DATABASE " + name + " WITH (FORCE)"); err != nil {
 			t.Errorf("drop database %s: %v", name, err)
 		}
-		_ = admin.Close()
 	})
 	u, err := url.Parse(base)
 	if err != nil {
