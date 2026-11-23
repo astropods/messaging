@@ -13,8 +13,8 @@ import (
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/authz"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/chatstore"
 	"github.com/astropods/messaging/internal/store/files"
-	"github.com/astropods/messaging/internal/store/sqlite"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -33,7 +33,7 @@ type Handlers struct {
 	agentReadiness   adapter.AgentReadiness
 	// chatStore persists the platform chat UI thread (sidebar + bodies) in
 	// the sidecar-local SQLite database on a shared persistent volume.
-	chatStore *sqlite.Store
+	chatStore *chatstore.Store
 	// fileStore backs the agent files API (upload/download) on the shared
 	// persistent volume. nil disables the feature (no FILES_DIR configured).
 	fileStore files.FileStore
@@ -358,9 +358,9 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	// inverting turn order or dropping the reply. EnsureForSend also enforces
 	// ownership, rejecting a foreign conversation before the agent runs. (See the
 	// changelog for the full ordering/ownership rationale.)
-	var turn sqlite.UserTurn
+	var turn chatstore.UserTurn
 	if h.chatStore != nil {
-		title := sqlite.TruncateRunes(req.Content, chatTitleMaxRunes)
+		title := chatstore.TruncateRunes(req.Content, chatTitleMaxRunes)
 		owned, err := h.chatStore.EnsureForSend(ctx, conversationID, session.UserID, title)
 		if err != nil {
 			// Couldn't verify ownership (transient store error) — fail closed with
@@ -383,18 +383,18 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		// A failed user-turn write must not run the agent (would persist an
 		// assistant-first / user-less turn).
-		turn, err = h.chatStore.AppendUserTurn(ctx, conversationID, session.UserID, sqlite.TurnInput{
+		turn, err = h.chatStore.AppendUserTurn(ctx, conversationID, session.UserID, chatstore.TurnInput{
 			Content:         req.Content,
 			AttachmentsJSON: marshalAttachments(attachments),
 			EditOf:          req.EditOf,
 			Anchor:          req.ParentID,
 		})
 		if err != nil {
-			if errors.Is(err, sqlite.ErrInvalidEdit) {
+			if errors.Is(err, chatstore.ErrInvalidEdit) {
 				writeInvalidEdit(w)
 				return
 			}
-			if errors.Is(err, sqlite.ErrStaleBranch) {
+			if errors.Is(err, chatstore.ErrStaleBranch) {
 				writeJSON(w, http.StatusConflict, map[string]string{
 					"error":             "stale_branch",
 					"error_description": "the conversation changed since it was loaded; reload it and send again",
@@ -403,7 +403,7 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 			}
 			// The message cap is terminal, not transient — return 409 with a
 			// machine-readable code so the client keys on it (not the bare status).
-			if errors.Is(err, sqlite.ErrMessageLimitReached) {
+			if errors.Is(err, chatstore.ErrMessageLimitReached) {
 				slog.Warn("[Web] chat conversation at message limit", "conversation", conversationID)
 				writeJSON(w, http.StatusConflict, map[string]string{
 					"error":             "message_limit_reached",

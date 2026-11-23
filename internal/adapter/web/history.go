@@ -4,11 +4,11 @@ import (
 	"net/http"
 
 	"github.com/astropods/messaging/internal/store"
-	"github.com/astropods/messaging/internal/store/sqlite"
+	"github.com/astropods/messaging/internal/store/chatstore"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 )
 
-func protoHistory(h *sqlite.History) *pb.ConversationHistory {
+func protoHistory(h *chatstore.History) *pb.ConversationHistory {
 	out := &pb.ConversationHistory{
 		IsComplete: h.Complete,
 		Messages:   make([]*pb.HistoryMessage, 0, len(h.Messages)),
@@ -19,7 +19,7 @@ func protoHistory(h *sqlite.History) *pb.ConversationHistory {
 	return out
 }
 
-func replaceThreadHistory(threadStore *store.ThreadHistoryStore, conversationID string, session *Session, h *sqlite.History) {
+func replaceThreadHistory(threadStore *store.ThreadHistoryStore, conversationID string, session *Session, h *chatstore.History) {
 	threadStore.Clear(conversationID)
 	for _, m := range h.Messages {
 		user := &pb.User{Id: "agent", Username: "Agent"}

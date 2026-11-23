@@ -14,7 +14,7 @@ import (
 
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/store"
-	"github.com/astropods/messaging/internal/store/sqlite"
+	"github.com/astropods/messaging/internal/store/chatstore"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/google/uuid"
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -235,7 +235,7 @@ func (h *Handlers) persistInjected(ctx context.Context, conversationID, userID, 
 		msg, err := h.chatStore.AppendMessage(ctx, conversationID, userID, role, content, "")
 		if err != nil {
 			// Don't broadcast a row that didn't persist: a reload wouldn't show it and the continuation would clobber the preamble row. The cap is expected — log at Debug, not ERROR.
-			if errors.Is(err, sqlite.ErrMessageLimitReached) {
+			if errors.Is(err, chatstore.ErrMessageLimitReached) {
 				slog.Debug("[Web] chat at message limit; injected row not persisted", "conversation", conversationID)
 			} else {
 				slog.Error("[Web] persist injected row failed", "conversation", conversationID, "err", err)

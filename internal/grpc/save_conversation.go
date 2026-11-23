@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/astropods/messaging/internal/metrics"
-	"github.com/astropods/messaging/internal/store/sqlite"
+	"github.com/astropods/messaging/internal/store/chatstore"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -17,20 +17,20 @@ import (
 // would write a conversation no session can ever open.
 const workosUserPrefix = "user_"
 
-var onConflictFromProto = map[pb.SaveConversationRequest_OnConflict]sqlite.OnConflict{
-	pb.SaveConversationRequest_ON_CONFLICT_UNSPECIFIED: sqlite.OnConflictSkip,
-	pb.SaveConversationRequest_SKIP:                    sqlite.OnConflictSkip,
-	pb.SaveConversationRequest_REPLACE:                 sqlite.OnConflictReplace,
-	pb.SaveConversationRequest_APPEND:                  sqlite.OnConflictAppend,
+var onConflictFromProto = map[pb.SaveConversationRequest_OnConflict]chatstore.OnConflict{
+	pb.SaveConversationRequest_ON_CONFLICT_UNSPECIFIED: chatstore.OnConflictSkip,
+	pb.SaveConversationRequest_SKIP:                    chatstore.OnConflictSkip,
+	pb.SaveConversationRequest_REPLACE:                 chatstore.OnConflictReplace,
+	pb.SaveConversationRequest_APPEND:                  chatstore.OnConflictAppend,
 }
 
-var statusToProto = map[sqlite.SaveStatus]pb.SaveConversationResponse_Status{
-	sqlite.SaveCreated:         pb.SaveConversationResponse_CREATED,
-	sqlite.SaveReplaced:        pb.SaveConversationResponse_REPLACED,
-	sqlite.SaveAppended:        pb.SaveConversationResponse_APPENDED,
-	sqlite.SaveSkippedDeleted:  pb.SaveConversationResponse_SKIPPED_DELETED,
-	sqlite.SaveSkippedDiverged: pb.SaveConversationResponse_SKIPPED_DIVERGED,
-	sqlite.SaveSkippedConflict: pb.SaveConversationResponse_SKIPPED_CONFLICT,
+var statusToProto = map[chatstore.SaveStatus]pb.SaveConversationResponse_Status{
+	chatstore.SaveCreated:         pb.SaveConversationResponse_CREATED,
+	chatstore.SaveReplaced:        pb.SaveConversationResponse_REPLACED,
+	chatstore.SaveAppended:        pb.SaveConversationResponse_APPENDED,
+	chatstore.SaveSkippedDeleted:  pb.SaveConversationResponse_SKIPPED_DELETED,
+	chatstore.SaveSkippedDiverged: pb.SaveConversationResponse_SKIPPED_DIVERGED,
+	chatstore.SaveSkippedConflict: pb.SaveConversationResponse_SKIPPED_CONFLICT,
 }
 
 // SaveConversation copies a conversation from another system into the owning
@@ -52,13 +52,13 @@ func (s *Server) SaveConversation(
 		return nil, status.Error(codes.FailedPrecondition, "chat persistence is disabled")
 	}
 
-	msgs := make([]sqlite.SavedMessage, 0, len(req.Messages))
+	msgs := make([]chatstore.SavedMessage, 0, len(req.Messages))
 	for _, m := range req.Messages {
 		if m.Role != "user" && m.Role != "assistant" {
 			return nil, status.Errorf(codes.InvalidArgument,
 				"message role must be user or assistant (got %q)", m.Role)
 		}
-		saved := sqlite.SavedMessage{Role: m.Role, Author: m.Author, Content: m.Content}
+		saved := chatstore.SavedMessage{Role: m.Role, Author: m.Author, Content: m.Content}
 		// AsTime() on a nil timestamp is the unix epoch, not the zero value, so
 		// the store would stamp created_at at 1970 instead of falling back to now.
 		if m.Timestamp != nil {
@@ -67,7 +67,7 @@ func (s *Server) SaveConversation(
 		msgs = append(msgs, saved)
 	}
 
-	convID, saveStatus, err := s.chatStore.SaveConversation(ctx, sqlite.SaveRequest{
+	convID, saveStatus, err := s.chatStore.SaveConversation(ctx, chatstore.SaveRequest{
 		UserID:         req.UserId,
 		IdempotencyKey: req.IdempotencyKey,
 		Title:          req.Title,

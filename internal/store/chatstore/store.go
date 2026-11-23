@@ -7,7 +7,7 @@
 // sidecar), so it survives pod reschedules and is itself the durable source of
 // truth for chat history — there is no Langfuse restore. No chat content is
 // written to astro-server or its RDS.
-package sqlite
+package chatstore
 
 import (
 	"context"

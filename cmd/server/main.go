@@ -20,8 +20,8 @@ import (
 	"github.com/astropods/messaging/internal/internalfeedback"
 	"github.com/astropods/messaging/internal/roomgrant"
 	"github.com/astropods/messaging/internal/store"
+	"github.com/astropods/messaging/internal/store/chatstore"
 	"github.com/astropods/messaging/internal/store/files"
-	"github.com/astropods/messaging/internal/store/sqlite"
 	"github.com/astropods/messaging/internal/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -134,9 +134,9 @@ func main() {
 	// Initialize the sidecar-local chat store (platform chat UI persistence).
 	// Disabled when CHAT_DB_PATH is unset (local dev). In deployed sidecars the
 	// path points at a shared persistent volume, so chat survives pod reschedules.
-	var chatStore *sqlite.Store
+	var chatStore *chatstore.Store
 	if cfg.Chat.DBPath != "" {
-		cs, err := sqlite.Open(cfg.Chat.DBPath)
+		cs, err := chatstore.Open(cfg.Chat.DBPath)
 		if err != nil {
 			slog.Error("Failed to initialize chat store", "err", err, "path", cfg.Chat.DBPath)
 			os.Exit(1)
@@ -338,7 +338,7 @@ func main() {
 }
 
 // initializeAdapters creates and initializes adapters based on configuration
-func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer, chatStore *sqlite.Store, fileStore files.FileStore, internalFeedbackHandler adapter.InternalFeedbackHandler) map[string]adapter.Adapter {
+func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer, chatStore *chatstore.Store, fileStore files.FileStore, internalFeedbackHandler adapter.InternalFeedbackHandler) map[string]adapter.Adapter {
 	adapters := make(map[string]adapter.Adapter)
 
 	// Initialize Slack adapter if enabled
@@ -380,7 +380,7 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			webOpts = append(webOpts, web.WithSessionManager(web.NewAstroServerSessionManager()))
 		}
 		// Back interactions with the durable SQLite store when present (otherwise
-		// the adapter defaults to the in-memory store). Guarded so a nil *sqlite.Store
+		// the adapter defaults to the in-memory store). Guarded so a nil *chatstore.Store
 		// isn't wrapped into a non-nil interface.
 		if chatStore != nil {
 			webOpts = append(webOpts, web.WithInteractionStore(chatStore))

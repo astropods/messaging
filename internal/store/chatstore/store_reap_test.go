@@ -1,4 +1,4 @@
-package sqlite
+package chatstore
 
 // Covers ReapDanglingUserTurns: on startup, conversations whose latest message is
 // still the user's (a turn interrupted before its assistant row was persisted)
