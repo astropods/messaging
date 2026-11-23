@@ -65,11 +65,10 @@ type Message struct {
 	Branches []string
 }
 
-// Store wraps the SQLite database. A single connection serializes writes, which
-// is sufficient for the tiny per-pod chat workload and avoids "database is
-// locked" under concurrent send/stream persistence.
+// Store is the chat database: a local SQLite file, or Postgres shared by every sidecar replica.
 type Store struct {
-	db *sql.DB
+	db        *conn
+	reapGrace time.Duration
 }
 
 // Open opens (creating if needed) the SQLite database at path and applies the
@@ -91,7 +90,7 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &Store{db: &conn{DB: db, dialect: dialectSQLite}}, nil
 }
 
 // Close closes the underlying database.
@@ -402,7 +401,7 @@ func (s *Store) list(ctx context.Context, userID, roomID string) ([]Conversation
 // traces are intentionally NOT erased — see the conundrum note in
 // HandleDeleteChatConversation.
 func (s *Store) SoftDelete(ctx context.Context, conversationID, userID string) (cancelled []string, deleted bool, err error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.db.beginConversation(ctx, conversationID)
 	if err != nil {
 		return nil, false, fmt.Errorf("chatstore soft delete begin: %w", err)
 	}
@@ -492,14 +491,7 @@ func (s *Store) ListMessages(ctx context.Context, conversationID string) ([]Mess
 // AppendMessage appends one message to a conversation, assigning the next
 // sequence number. Content is truncated to MaxMessageContentRunes.
 func (s *Store) AppendMessage(ctx context.Context, conversationID, userID, role, content, attachmentsJSON string) (Message, error) {
-	// Assign seq and insert atomically in one transaction. A bare
-	// SELECT MAX(seq)+1 followed by a separate INSERT is not atomic even with
-	// MaxOpenConns(1) — another writer can grab the connection between the two
-	// statements, read the same nextSeq, and one INSERT then loses to the
-	// UNIQUE(conversation_id, seq) constraint (a dropped message). The tx holds
-	// the single connection across both statements, serialising concurrent
-	// appends to the same conversation.
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.db.beginConversation(ctx, conversationID)
 	if err != nil {
 		return Message{}, fmt.Errorf("chatstore append begin: %w", err)
 	}
@@ -515,18 +507,16 @@ func (s *Store) AppendMessage(ctx context.Context, conversationID, userID, role,
 	return msg, nil
 }
 
-// nextSeqTx returns the next sequence number for a conversation, allocated across
-// BOTH messages and interactions so the two share one monotonic ordering space
-// and interleave by seq. The caller holds the tx (and, with MaxOpenConns(1), the
-// only connection), so the read is atomic against concurrent writers.
-func nextSeqTx(ctx context.Context, tx *sql.Tx, conversationID string) (int, error) {
+// nextSeqTx allocates across messages and interactions, which share one seq space.
+// The caller's transaction must hold the conversation lock.
+func nextSeqTx(ctx context.Context, tx *txn, conversationID string) (int, error) {
 	var nextSeq int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COALESCE(MAX(seq), 0) + 1 FROM (
 			SELECT seq FROM messages WHERE conversation_id = ?
 			UNION ALL
 			SELECT seq FROM interactions WHERE conversation_id = ?
-		)`,
+		) AS seqs`,
 		conversationID, conversationID,
 	).Scan(&nextSeq); err != nil {
 		return 0, fmt.Errorf("chatstore next seq: %w", err)
@@ -534,17 +524,13 @@ func nextSeqTx(ctx context.Context, tx *sql.Tx, conversationID string) (int, err
 	return nextSeq, nil
 }
 
-// appendMessageTx assigns the next seq and inserts a message within an existing
-// transaction. The caller holds the tx (and, with MaxOpenConns(1), the only
-// connection), so the read-then-insert is atomic against concurrent writers —
-// this is what lets UpsertAssistantProgress and FinalizeStopped fold their
-// role-check and append into one tx and not race each other into two rows.
-func appendMessageTx(ctx context.Context, tx *sql.Tx, conversationID, userID, role, content, attachmentsJSON string) (Message, error) {
+// appendMessageTx needs a transaction that holds the conversation lock.
+func appendMessageTx(ctx context.Context, tx *txn, conversationID, userID, role, content, attachmentsJSON string) (Message, error) {
 	return insertMessageTx(ctx, tx, conversationID, userID, role, content, attachmentsJSON, "")
 }
 
 // insertMessageTx takes parentID already encoded by storedParent.
-func insertMessageTx(ctx context.Context, tx *sql.Tx, conversationID, userID, role, content, attachmentsJSON, parentID string) (Message, error) {
+func insertMessageTx(ctx context.Context, tx *txn, conversationID, userID, role, content, attachmentsJSON, parentID string) (Message, error) {
 	content = TruncateRunes(content, MaxMessageContentRunes)
 
 	nextSeq, err := nextSeqTx(ctx, tx, conversationID)
@@ -592,12 +578,6 @@ func insertMessageTx(ctx context.Context, tx *sql.Tx, conversationID, userID, ro
 // for the current turn: it updates the trailing assistant message in place, or
 // appends a new assistant message when the latest row is the user's. Returns the
 // assistant message id.
-//
-// The conversation-exists check, the last-message read, and the update/append
-// all run in one transaction. With MaxOpenConns(1) the tx holds the only
-// connection, so this can't interleave with FinalizeStopped's own tx — that is
-// what prevents a concurrent stop and streamed chunk from both reading
-// lastRole=="user" and each appending a duplicate assistant row.
 func (s *Store) UpsertAssistantProgress(ctx context.Context, conversationID, content, attachmentsJSON string) (string, error) {
 	return s.upsertAssistant(ctx, conversationID, content, attachmentsJSON, false)
 }
@@ -610,7 +590,7 @@ func (s *Store) FinishAssistantReply(ctx context.Context, conversationID, conten
 func (s *Store) upsertAssistant(ctx context.Context, conversationID, content, attachmentsJSON string, final bool) (string, error) {
 	content = TruncateRunes(content, MaxMessageContentRunes)
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.db.beginConversation(ctx, conversationID)
 	if err != nil {
 		return "", fmt.Errorf("chatstore assistant progress begin: %w", err)
 	}
@@ -695,7 +675,7 @@ func (s *Store) upsertAssistant(ctx context.Context, conversationID, content, at
 func (s *Store) FinalizeStopped(ctx context.Context, conversationID, userID, partial string) (bool, error) {
 	partial = TruncateRunes(partial, MaxMessageContentRunes)
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.db.beginConversation(ctx, conversationID)
 	if err != nil {
 		return false, fmt.Errorf("chatstore finalize begin: %w", err)
 	}
@@ -756,7 +736,7 @@ func (s *Store) FinalizeStopped(ctx context.Context, conversationID, userID, par
 // Unlike FinalizeStopped it is not ownership-scoped: it runs on the internal
 // stream handler, not a user request. No-op for a missing/deleted conversation.
 func (s *Store) FinalizeTerminal(ctx context.Context, conversationID, partial string) (bool, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.db.beginConversation(ctx, conversationID)
 	if err != nil {
 		return false, fmt.Errorf("chatstore finalize terminal begin: %w", err)
 	}
@@ -802,19 +782,17 @@ func (s *Store) FinalizeTerminal(ctx context.Context, conversationID, partial st
 // progressive write). Appending a terminal (empty) assistant row flips it out of
 // the derived assistant_streaming state. Returns the number finalized.
 func (s *Store) ReapDanglingUserTurns(ctx context.Context) (int, error) {
-	// Collect candidate ids first, then finalize. The rows cursor must be drained
-	// and closed before FinalizeTerminal's BeginTx: with MaxOpenConns(1) an open
-	// cursor holds the only connection and the transaction would otherwise block.
+	// Drain the cursor before finalizing: SQLite has one connection.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.conversation_id
 		FROM conversations c
-		WHERE c.deleted_at IS NULL
+		WHERE c.deleted_at IS NULL AND c.updated_at <= ?
 			AND (
 				SELECT CASE WHEN m.origin = 'save' THEN '' ELSE m.role END
 				FROM messages m
 				WHERE m.conversation_id = c.conversation_id
 				ORDER BY m.seq DESC LIMIT 1
-			) = 'user'`)
+			) = 'user'`, time.Now().Add(-s.reapGrace).UnixMilli())
 	if err != nil {
 		return 0, fmt.Errorf("chatstore reap query: %w", err)
 	}
@@ -846,7 +824,7 @@ func (s *Store) ReapDanglingUserTurns(ctx context.Context) (int, error) {
 	return finalized, nil
 }
 
-func touchAgentReplyTx(ctx context.Context, tx *sql.Tx, conversationID, replyID string) error {
+func touchAgentReplyTx(ctx context.Context, tx *txn, conversationID, replyID string) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET updated_at = ?, agent_head_id = ? WHERE conversation_id = ?`,
 		time.Now().UnixMilli(), replyID, conversationID); err != nil {
 		return fmt.Errorf("chatstore touch conversation: %w", err)
@@ -854,7 +832,7 @@ func touchAgentReplyTx(ctx context.Context, tx *sql.Tx, conversationID, replyID 
 	return nil
 }
 
-func touchConversationTx(ctx context.Context, tx *sql.Tx, conversationID string) error {
+func touchConversationTx(ctx context.Context, tx *txn, conversationID string) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET updated_at = ? WHERE conversation_id = ?`,
 		time.Now().UnixMilli(), conversationID); err != nil {
 		return fmt.Errorf("chatstore touch conversation: %w", err)

@@ -80,7 +80,7 @@ func (s *Store) SaveConversation(ctx context.Context, req SaveRequest) (string, 
 	}
 	conversationID := DeriveSavedConversationID(req.UserID, req.IdempotencyKey)
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.db.beginConversation(ctx, conversationID)
 	if err != nil {
 		return "", "", fmt.Errorf("chatstore save begin: %w", err)
 	}
@@ -140,7 +140,7 @@ func (s *Store) SaveConversation(ctx context.Context, req SaveRequest) (string, 
 // reports the status the caller should return. It clears the rows the chosen
 // policy discards; the caller inserts the new ones.
 func (s *Store) resolveExisting(
-	ctx context.Context, tx *sql.Tx, conversationID string, req SaveRequest, now int64,
+	ctx context.Context, tx *txn, conversationID string, req SaveRequest, now int64,
 ) (SaveStatus, error) {
 	if req.OnConflict == OnConflictAppend {
 		return SaveAppended, s.touchSaved(ctx, tx, conversationID, req, now)
@@ -178,7 +178,7 @@ func (s *Store) resolveExisting(
 // must not undo the user's own edit any more than it may delete their turns.
 // The agent never received saved turns, so the next send replays the copy.
 func (s *Store) touchSaved(
-	ctx context.Context, tx *sql.Tx, conversationID string, req SaveRequest, now int64,
+	ctx context.Context, tx *txn, conversationID string, req SaveRequest, now int64,
 ) error {
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE conversations
@@ -201,7 +201,7 @@ func (s *Store) touchSaved(
 
 // hasUserAuthoredRows reports whether the copy holds anything this API did not
 // write: a reply the user typed into it, or an interaction they answered.
-func hasUserAuthoredRows(ctx context.Context, tx *sql.Tx, conversationID string) (bool, error) {
+func hasUserAuthoredRows(ctx context.Context, tx *txn, conversationID string) (bool, error) {
 	var n int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT
@@ -217,7 +217,7 @@ func hasUserAuthoredRows(ctx context.Context, tx *sql.Tx, conversationID string)
 // insertSaved writes the request's messages after whatever survived the conflict
 // policy, keeping the newest when the thread would exceed the per-conversation cap.
 func (s *Store) insertSaved(
-	ctx context.Context, tx *sql.Tx, conversationID string, req SaveRequest, now int64,
+	ctx context.Context, tx *txn, conversationID string, req SaveRequest, now int64,
 ) error {
 	seq, err := nextSeqTx(ctx, tx, conversationID)
 	if err != nil {
