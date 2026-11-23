@@ -383,7 +383,7 @@ func TestAnAppendByAnOlderImageMakesASwitchedHeadStale(t *testing.T) {
 	if ok, err := c.st.SwitchBranch(context.Background(), c.conv, "owner", q2.ID); err != nil || !ok {
 		t.Fatalf("switch: ok=%v err=%v", ok, err)
 	}
-	if _, err := c.st.db.Exec(`
+	if _, err := c.st.db.ExecContext(context.Background(), `
 		INSERT INTO messages (id, conversation_id, user_id, role, content, seq, created_at)
 		VALUES ('old-image', ?, 'owner', 'user', 'q3', 99, 0)`, c.conv); err != nil {
 		t.Fatalf("simulate an older image's append: %v", err)

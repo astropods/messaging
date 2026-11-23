@@ -124,3 +124,35 @@ jobs:
 
       - name: Build
         run: go build -v ./...
+
+  test-go-postgres:
+    runs-on: ubuntu-latest
+    name: Test Go chat store (Postgres)
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: go.sum
+
+      - name: Run chat store tests against Postgres
+        env:
+          CHAT_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+        run: go test -v -race -count=1 ./internal/store/chatstore/...

@@ -5,7 +5,7 @@ package chatstore
 // are finalized with a terminal assistant row so they stop deriving
 // assistant_streaming. Completed, empty, and deleted conversations are untouched.
 //
-//	go test ./internal/store/sqlite -run TestReapDanglingUserTurns -v
+//	go test ./internal/store/chatstore -run TestReapDanglingUserTurns -v
 
 import (
 	"context"
