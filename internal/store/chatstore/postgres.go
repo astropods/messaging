@@ -41,7 +41,7 @@ CREATE TABLE conversations (
 	head_newest_id  TEXT NOT NULL DEFAULT '',
 	agent_head_id   TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX idx_conversations_user ON conversations (user_id, updated_at DESC);
+CREATE INDEX idx_conversations_sidebar ON conversations (user_id, room_id, updated_at DESC) WHERE deleted_at IS NULL;
 
 CREATE TABLE messages (
 	id              TEXT PRIMARY KEY,

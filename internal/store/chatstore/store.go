@@ -263,29 +263,24 @@ func (s *Store) SetTitle(ctx context.Context, conversationID, userID, title stri
 // keeping deletes terminal.
 func (s *Store) EnsureForSend(ctx context.Context, conversationID, userID, title string) (bool, error) {
 	now := time.Now().UnixMilli()
-	if _, err := s.db.ExecContext(ctx, `
+	// RETURNING yields no row when the conflict update's WHERE fails: foreign or deleted.
+	var owner string
+	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO conversations (conversation_id, user_id, title, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(conversation_id) DO UPDATE SET
 			title      = CASE WHEN conversations.title = '' THEN excluded.title ELSE conversations.title END,
 			updated_at = ?
-		WHERE conversations.user_id = ? AND conversations.deleted_at IS NULL`,
+		WHERE conversations.user_id = ? AND conversations.deleted_at IS NULL
+		RETURNING user_id`,
 		conversationID, userID, title, now, now,
 		now, userID,
-	); err != nil {
-		return false, fmt.Errorf("chatstore ensure: %w", err)
-	}
-
-	var owner string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT user_id FROM conversations WHERE conversation_id = ? AND deleted_at IS NULL`,
-		conversationID,
 	).Scan(&owner)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("chatstore ensure owner check: %w", err)
+		return false, fmt.Errorf("chatstore ensure: %w", err)
 	}
 	return owner == userID, nil
 }
@@ -423,36 +418,28 @@ func (s *Store) SoftDelete(ctx context.Context, conversationID, userID string) (
 		return nil, false, nil
 	}
 
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id FROM interactions WHERE conversation_id = ? AND status = 'pending'`,
-		conversationID,
+	rows, err := tx.QueryContext(ctx, `
+		UPDATE interactions SET status = 'cancelled', responded_at = ?
+		WHERE conversation_id = ? AND status = 'pending'
+		RETURNING id`,
+		time.Now().UnixMilli(), conversationID,
 	)
 	if err != nil {
-		return nil, false, fmt.Errorf("chatstore soft delete pending: %w", err)
+		return nil, false, fmt.Errorf("chatstore soft delete cancel interactions: %w", err)
 	}
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			_ = rows.Close()
-			return nil, false, fmt.Errorf("chatstore soft delete pending scan: %w", err)
+			return nil, false, fmt.Errorf("chatstore soft delete cancel scan: %w", err)
 		}
 		cancelled = append(cancelled, id)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return nil, false, fmt.Errorf("chatstore soft delete pending rows: %w", err)
+		return nil, false, fmt.Errorf("chatstore soft delete cancel rows: %w", err)
 	}
 	_ = rows.Close()
-
-	if len(cancelled) > 0 {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE interactions SET status = 'cancelled', responded_at = ?
-			WHERE conversation_id = ? AND status = 'pending'`,
-			time.Now().UnixMilli(), conversationID,
-		); err != nil {
-			return nil, false, fmt.Errorf("chatstore soft delete cancel interactions: %w", err)
-		}
-	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, false, fmt.Errorf("chatstore soft delete commit: %w", err)
@@ -511,12 +498,7 @@ func (s *Store) AppendMessage(ctx context.Context, conversationID, userID, role,
 // The caller's transaction must hold the conversation lock.
 func nextSeqTx(ctx context.Context, tx *txn, conversationID string) (int, error) {
 	var nextSeq int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(MAX(seq), 0) + 1 FROM (
-			SELECT seq FROM messages WHERE conversation_id = ?
-			UNION ALL
-			SELECT seq FROM interactions WHERE conversation_id = ?
-		) AS seqs`,
+	if err := tx.QueryRowContext(ctx, `SELECT `+tx.dialect.nextSeqExpr(),
 		conversationID, conversationID,
 	).Scan(&nextSeq); err != nil {
 		return 0, fmt.Errorf("chatstore next seq: %w", err)
@@ -533,9 +515,12 @@ func appendMessageTx(ctx context.Context, tx *txn, conversationID, userID, role,
 func insertMessageTx(ctx context.Context, tx *txn, conversationID, userID, role, content, attachmentsJSON, parentID string) (Message, error) {
 	content = TruncateRunes(content, MaxMessageContentRunes)
 
-	nextSeq, err := nextSeqTx(ctx, tx, conversationID)
-	if err != nil {
-		return Message{}, err
+	var nextSeq, msgCount int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT `+tx.dialect.nextSeqExpr()+`, (SELECT COUNT(*) FROM messages WHERE conversation_id = ?)`,
+		conversationID, conversationID, conversationID,
+	).Scan(&nextSeq, &msgCount); err != nil {
+		return Message{}, fmt.Errorf("chatstore next seq: %w", err)
 	}
 	// Cap on the message count, not the shared seq: interactions share the seq
 	// space for ordering but must not consume the message budget. A user turn is
@@ -544,12 +529,6 @@ func insertMessageTx(ctx context.Context, tx *txn, conversationID, userID, role,
 	// slot, its reply would exceed the cap and go unpersisted, and the thread would
 	// derive assistant_streaming=true forever. Assistant/finalize appends may use
 	// the full cap.
-	var msgCount int
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM messages WHERE conversation_id = ?`, conversationID,
-	).Scan(&msgCount); err != nil {
-		return Message{}, fmt.Errorf("chatstore message count: %w", err)
-	}
 	limit := MaxMessagesPerConversation
 	if role == "user" {
 		limit = MaxMessagesPerConversation - 1
@@ -559,11 +538,20 @@ func insertMessageTx(ctx context.Context, tx *txn, conversationID, userID, role,
 	}
 
 	msg := Message{ID: uuid.NewString(), Role: role, Content: content, Seq: nextSeq, Attachments: attachmentsJSON}
-	if _, err := tx.ExecContext(ctx, `
+	const insert = `
 		INSERT INTO messages (id, conversation_id, user_id, role, content, seq, created_at, attachments, parent_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		msg.ID, conversationID, userID, role, content, nextSeq, time.Now().UnixMilli(), attachmentsJSON, parentID,
-	); err != nil {
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	args := []any{msg.ID, conversationID, userID, role, content, nextSeq, time.Now().UnixMilli(), attachmentsJSON, parentID}
+	if tx.dialect == dialectPostgres {
+		if _, err := tx.ExecContext(ctx, `WITH ins AS (`+insert+` RETURNING conversation_id)
+			UPDATE conversations SET head_id = '' WHERE conversation_id = (SELECT conversation_id FROM ins) AND head_id <> ''`,
+			args...,
+		); err != nil {
+			return Message{}, fmt.Errorf("chatstore append message: %w", err)
+		}
+		return msg, nil
+	}
+	if _, err := tx.ExecContext(ctx, insert, args...); err != nil {
 		return Message{}, fmt.Errorf("chatstore append message: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -595,6 +583,19 @@ func (s *Store) upsertAssistant(ctx context.Context, conversationID, content, at
 		return "", fmt.Errorf("chatstore assistant progress begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful commit
+
+	if tx.dialect == dialectPostgres {
+		id, err := updateTrailingAssistant(ctx, tx, conversationID, content, attachmentsJSON, final)
+		if err != nil {
+			return "", err
+		}
+		if id != "" {
+			if err := tx.Commit(); err != nil {
+				return "", fmt.Errorf("chatstore assistant progress commit: %w", err)
+			}
+			return id, nil
+		}
+	}
 
 	// Never create message rows for a conversation that doesn't exist in the
 	// store. Real user conversations are created on send (EnsureForSend) before
@@ -655,6 +656,39 @@ func (s *Store) upsertAssistant(ctx context.Context, conversationID, content, at
 	}
 	if err := tx.Commit(); err != nil {
 		return "", fmt.Errorf("chatstore assistant progress commit: %w", err)
+	}
+	return id, nil
+}
+
+// updateTrailingAssistant grows the latest message in one statement when it is an
+// assistant reply, and returns "" when the caller must take the general path.
+func updateTrailingAssistant(ctx context.Context, tx *txn, conversationID, content, attachmentsJSON string, final bool) (string, error) {
+	var id string
+	err := tx.QueryRowContext(ctx, `
+		WITH last AS (
+			SELECT m.id, m.role FROM messages m
+			WHERE m.conversation_id = ?
+				AND EXISTS (SELECT 1 FROM conversations c WHERE c.conversation_id = m.conversation_id AND c.deleted_at IS NULL)
+			ORDER BY m.seq DESC LIMIT 1
+		), upd AS (
+			UPDATE messages SET content = ?, attachments = CASE WHEN ? = '' THEN attachments ELSE ? END
+			WHERE id = (SELECT id FROM last WHERE role = 'assistant')
+			RETURNING id
+		), touched AS (
+			UPDATE conversations
+			SET updated_at = ?, agent_head_id = CASE WHEN ? THEN (SELECT id FROM upd) ELSE agent_head_id END
+			WHERE conversation_id = ? AND EXISTS (SELECT 1 FROM upd)
+			RETURNING 1
+		)
+		SELECT id FROM upd`,
+		conversationID, content, attachmentsJSON, attachmentsJSON,
+		time.Now().UnixMilli(), final, conversationID,
+	).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("chatstore assistant progress update: %w", err)
 	}
 	return id, nil
 }

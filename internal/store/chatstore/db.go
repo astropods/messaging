@@ -39,6 +39,18 @@ func (d dialect) rebind(query string) string {
 	return b.String()
 }
 
+// nextSeqExpr takes two conversation id arguments. Each MAX reads one end of a (conversation_id, seq) index.
+func (d dialect) nextSeqExpr() string {
+	greatest := "MAX"
+	if d == dialectPostgres {
+		greatest = "GREATEST"
+	}
+	return greatest + `(
+		(SELECT COALESCE(MAX(seq), 0) FROM messages WHERE conversation_id = ?),
+		(SELECT COALESCE(MAX(seq), 0) FROM interactions WHERE conversation_id = ?)
+	) + 1`
+}
+
 type conn struct {
 	*sql.DB
 	dialect dialect

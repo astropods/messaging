@@ -19,6 +19,17 @@ Every table lives in the `astro_messaging` schema. The connection's `search_path
 
 The per-conversation lock is what keeps two writers safe. The seq allocator, the message cap, `UpsertAssistantProgress`, `FinalizeStopped`, branch edits, interactions and saves all read and then write inside one transaction. Holding the conversation's lock for that transaction gives Postgres the same guarantee the single SQLite connection gave: two sidecars streaming into one conversation cannot both append an assistant row or take the same seq.
 
+On Postgres every statement is a network round trip, so the write paths are kept short:
+
+| Path | Statements after the lock |
+|---|---|
+| Streaming progress, every 250 ms per reply | 1: a CTE grows the trailing assistant row and touches the conversation. Only the first chunk of a turn takes the general path. |
+| Append a message | 2: next seq and message count in one query, then a CTE that inserts and resets the branch head |
+| First send (`EnsureForSend`) | 1, no transaction: the upsert's `RETURNING` reports ownership |
+| Delete | 2: `UPDATE ... RETURNING` cancels pending interactions |
+
+The next seq is the greater of two `MAX(seq)` lookups, one on messages and one on interactions, so each reads one end of its `(conversation_id, seq)` index instead of scanning the conversation. The sidebar query is served by a partial index on `(user_id, room_id, updated_at DESC) WHERE deleted_at IS NULL`. The seq, `RETURNING` and delete changes also apply to SQLite. The progress and append CTEs are Postgres-only, because SQLite has no data-modifying CTEs.
+
 `Store.Contexts(ctx, ttl)` returns a `store.ConversationStore` on the same pool. `Create` refuses a live context and replaces an expired one. `Update` upserts, as `RedisStore` does. Expired contexts are deleted when the store opens.
 
 Files are unchanged: they stay on disk, which a shared volume can provide.
