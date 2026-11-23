@@ -86,7 +86,7 @@ type turnStartedMessage struct{}
 // clusterState is what a non-owner tracks about conversations it watches on another sidecar.
 type clusterState struct {
 	mu       sync.Mutex
-	watching map[string]time.Time
+	watching map[string]watch
 	replayed map[string][]chan struct{}
 	acks     map[string]chan struct{}
 	owned    map[string]bool
@@ -95,7 +95,7 @@ type clusterState struct {
 
 func newClusterState() *clusterState {
 	return &clusterState{
-		watching: map[string]time.Time{},
+		watching: map[string]watch{},
 		replayed: map[string][]chan struct{}{},
 		acks:     map[string]chan struct{}{},
 		owned:    map[string]bool{},
@@ -159,10 +159,15 @@ func (c *clusterState) startedTurns(owned []string) []string {
 	return started
 }
 
-func (c *clusterState) markWatching(conversationID string) {
+type watch struct {
+	owner   string
+	expires time.Time
+}
+
+func (c *clusterState) markWatching(conversationID, owner string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.watching[conversationID] = time.Now().Add(watchTTL)
+	c.watching[conversationID] = watch{owner: owner, expires: time.Now().Add(watchTTL)}
 }
 
 func (c *clusterState) stopWatching(conversationID string) {
@@ -172,14 +177,19 @@ func (c *clusterState) stopWatching(conversationID string) {
 }
 
 func (c *clusterState) isWatching(conversationID string) bool {
+	return c.watchedOwner(conversationID) != ""
+}
+
+// watchedOwner names the sidecar this one watches the conversation on, or "" when it watches none.
+func (c *clusterState) watchedOwner(conversationID string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	exp, ok := c.watching[conversationID]
-	if ok && time.Now().After(exp) {
+	w, ok := c.watching[conversationID]
+	if ok && time.Now().After(w.expires) {
 		delete(c.watching, conversationID)
-		return false
+		return ""
 	}
-	return ok
+	return w.owner
 }
 
 func (c *clusterState) awaitReplay(conversationID string) <-chan struct{} {
@@ -213,7 +223,7 @@ func (a *WebAdapter) SetCluster(bus Bus) {
 
 	h := a.handlers
 	bus.Handle(busSSE, func(env cluster.Envelope) {
-		if !h.clusterState.isWatching(env.Conversation) {
+		if h.clusterState.watchedOwner(env.Conversation) != env.From {
 			return
 		}
 		var m sseMessage
@@ -224,7 +234,8 @@ func (a *WebAdapter) SetCluster(bus Bus) {
 		a.connManager.Mirror(env.Conversation, m.Events, false)
 	})
 	bus.Handle(busClose, func(env cluster.Envelope) {
-		if h.clusterState.isWatching(env.Conversation) {
+		if h.clusterState.watchedOwner(env.Conversation) == env.From {
+			h.clusterState.stopWatching(env.Conversation)
 			a.connManager.CloseMirrored(env.Conversation)
 		}
 	})
@@ -242,6 +253,7 @@ func (a *WebAdapter) SetCluster(bus Bus) {
 	})
 	bus.Handle(busTurnStarted, func(env cluster.Envelope) {
 		if a.connManager.GetConnectionCount(env.Conversation) > 0 {
+			h.clusterState.stopWatching(env.Conversation)
 			go h.watchRemote(context.Background(), env.Conversation, env.From)
 		}
 	})
@@ -378,28 +390,27 @@ func (a *WebAdapter) renewWatches(ctx context.Context) {
 	remote, err := h.remoteTurns(ctx)
 	if err != nil {
 		for _, id := range connected {
-			if h.clusterState.isWatching(id) {
+			if owner := h.clusterState.watchedOwner(id); owner != "" {
 				a.cluster.Publish(busWatch, id, watchMessage{})
-				h.clusterState.markWatching(id)
+				h.clusterState.markWatching(id, owner)
 			}
 		}
 		return
 	}
 	for _, id := range connected {
 		owner, live := remote[id]
-		watching := h.clusterState.isWatching(id)
+		watched := h.clusterState.watchedOwner(id)
 		switch {
-		case watching && live:
+		case live && watched == owner:
 			a.cluster.Publish(busWatch, id, watchMessage{})
-			h.clusterState.markWatching(id)
-		case watching:
-			h.clusterState.stopWatching(id)
-			if !a.turns.isStreaming(id) {
-				slog.Info("web cluster: turn owner gone, releasing streams", "conversation_id", id)
-				a.connManager.ReleaseMirrored(id)
-			}
+			h.clusterState.markWatching(id, owner)
 		case live:
 			go h.watchRemote(ctx, id, owner)
+		case watched != "":
+			h.clusterState.stopWatching(id)
+			if !a.turns.isStreaming(id) && a.connManager.ReleaseMirrored(id) {
+				slog.Info("web cluster: turn owner gone, released streams", "conversation_id", id)
+			}
 		}
 	}
 }
@@ -452,11 +463,11 @@ func (h *Handlers) remoteTurns(ctx context.Context) (map[string]string, error) {
 
 // watchRemote asks the owner to relay the conversation here and waits briefly for its buffered events.
 func (h *Handlers) watchRemote(ctx context.Context, conversationID, owner string) {
-	if h.clusterState.isWatching(conversationID) {
+	if h.clusterState.watchedOwner(conversationID) == owner {
 		return
 	}
 	done := h.clusterState.awaitReplay(conversationID)
-	h.clusterState.markWatching(conversationID)
+	h.clusterState.markWatching(conversationID, owner)
 	h.cluster.Publish(busWatch, conversationID, watchMessage{To: owner, Replay: true})
 	t := time.NewTimer(replayWait)
 	defer t.Stop()

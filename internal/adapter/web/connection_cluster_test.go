@@ -184,7 +184,9 @@ func TestReleaseMirroredFinishesAndClosesTheConnection(t *testing.T) {
 	watcher.Mirror("conv", []SSEEvent{{Event: EventChunk, ID: "5", Data: "{}"}}, true)
 	drain(conn)
 
-	watcher.ReleaseMirrored("conv")
+	if !watcher.ReleaseMirrored("conv") {
+		t.Fatal("ReleaseMirrored reported nothing released for a turn still streaming")
+	}
 
 	got := drain(conn)
 	if len(got) != 1 || got[0].Event != EventFinish || got[0].ID != "5" {
@@ -194,6 +196,25 @@ func TestReleaseMirroredFinishesAndClosesTheConnection(t *testing.T) {
 	case <-conn.Done:
 	default:
 		t.Fatal("ReleaseMirrored left the connection open")
+	}
+}
+
+func TestReleaseMirroredKeepsTheConnectionWhenTheTurnEnded(t *testing.T) {
+	watcher := NewConnectionManager(time.Minute)
+	conn := connect(watcher, "conv")
+	watcher.Mirror("conv", []SSEEvent{{Event: EventChunk, ID: "5", Data: "{}"}, {Event: EventFinish, ID: "6", Data: "{}"}}, true)
+	drain(conn)
+
+	if watcher.ReleaseMirrored("conv") {
+		t.Fatal("ReleaseMirrored released a turn that already finished")
+	}
+	if got := drain(conn); len(got) != 0 {
+		t.Fatalf("connection received %+v after a finished turn, want nothing", got)
+	}
+	select {
+	case <-conn.Done:
+		t.Fatal("ReleaseMirrored closed the stream of a finished turn")
+	default:
 	}
 }
 

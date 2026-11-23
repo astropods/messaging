@@ -143,19 +143,24 @@ func (cm *ConnectionManager) CloseMirrored(conversationID string) {
 	cm.closeLocked(conversationID)
 }
 
-// ReleaseMirrored finishes and closes the conversation's connections because its owner is gone.
-func (cm *ConnectionManager) ReleaseMirrored(conversationID string) {
+// ReleaseMirrored finishes and closes the conversation's connections because its owner
+// is gone mid-turn. It reports false and leaves them open when the mirrored turn already ended.
+func (cm *ConnectionManager) ReleaseMirrored(conversationID string) bool {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	if len(cm.connections[conversationID]) == 0 {
-		return
+		return false
 	}
 	finish := NewFinishEvent("")
 	if buf := cm.eventBuffers[conversationID]; buf != nil {
+		if buf.endedTurn {
+			return false
+		}
 		finish.ID = strconv.FormatUint(buf.lastSeq, 10)
 	}
 	cm.fanOutLocked(conversationID, finish)
 	cm.closeLocked(conversationID)
+	return true
 }
 
 // ConnectedConversations lists conversations with at least one local SSE connection.

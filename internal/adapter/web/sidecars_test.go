@@ -101,26 +101,45 @@ func newSidecar(t *testing.T, url, pod string) *sidecar {
 // newSidecarPair starts two sidecars and waits until each hears the other on the bus.
 func newSidecarPair(t *testing.T) (*sidecar, *sidecar) {
 	t.Helper()
+	s := newSidecars(t, "pod-a", "pod-b")
+	return s[0], s[1]
+}
+
+// newSidecars starts one sidecar per pod and waits until each hears every other on the bus.
+func newSidecars(t *testing.T, pods ...string) []*sidecar {
+	t.Helper()
 	url := testpg.URL(t)
-	a, b := newSidecar(t, url, "pod-a"), newSidecar(t, url, "pod-b")
-	for _, pair := range [][2]*sidecar{{a, b}, {b, a}} {
-		from, to := pair[0], pair[1]
-		var heard sync.Once
-		got := make(chan struct{})
-		to.a.cluster.Handle("test.ping", func(cluster.Envelope) { heard.Do(func() { close(got) }) })
-		deadline := time.After(10 * time.Second)
-		for done := false; !done; {
-			from.a.cluster.Publish("test.ping", "", nil)
-			select {
-			case <-got:
-				done = true
-			case <-time.After(50 * time.Millisecond):
-			case <-deadline:
-				t.Fatalf("%s never heard %s on the bus", to.pod, from.pod)
+	all := make([]*sidecar, 0, len(pods))
+	for _, pod := range pods {
+		all = append(all, newSidecar(t, url, pod))
+	}
+	for _, from := range all {
+		for _, to := range all {
+			if from != to {
+				waitHeard(t, from, to)
 			}
 		}
 	}
-	return a, b
+	return all
+}
+
+func waitHeard(t *testing.T, from, to *sidecar) {
+	t.Helper()
+	kind := "test.ping." + from.pod
+	var heard sync.Once
+	got := make(chan struct{})
+	to.a.cluster.Handle(kind, func(cluster.Envelope) { heard.Do(func() { close(got) }) })
+	deadline := time.After(10 * time.Second)
+	for {
+		from.a.cluster.Publish(kind, "", nil)
+		select {
+		case <-got:
+			return
+		case <-time.After(50 * time.Millisecond):
+		case <-deadline:
+			t.Fatalf("%s never heard %s on the bus", to.pod, from.pod)
+		}
+	}
 }
 
 func (s *sidecar) send(t *testing.T, conversationID, content string) *httptest.ResponseRecorder {
@@ -455,5 +474,66 @@ func TestStreamOnTheOtherSidecarFinishesWhenTheOwnerIsGone(t *testing.T) {
 	}
 	if n := b.a.connManager.GetConnectionCount("conv"); n != 0 {
 		t.Fatalf("connections after the owner is gone = %d, want 0", n)
+	}
+}
+
+func TestStreamFollowsTheNextTurnWhenAnotherSidecarRunsIt(t *testing.T) {
+	s := newSidecars(t, "pod-a", "pod-b", "pod-c")
+	a, b, c := s[0], s[1], s[2]
+	seedConversation(t, a, "conv")
+
+	stream := openStream(t, c, "conv", "")
+	stream.waitEvent(t, "event: connected")
+	waitUntil(t, "pod-c to register the stream", func() bool { return c.a.connManager.GetConnectionCount("conv") > 0 })
+
+	if w := a.send(t, "conv", "first"); w.Code != http.StatusOK {
+		t.Fatalf("send on pod-a = %d %s", w.Code, w.Body.String())
+	}
+	a.agentSays(t, "conv", pb.ContentChunk_START, "")
+	a.agentSays(t, "conv", pb.ContentChunk_DELTA, "turn one from pod-a")
+	stream.waitEvent(t, "turn one from pod-a")
+	a.agentSays(t, "conv", pb.ContentChunk_END, "")
+	stream.waitEvent(t, "event: "+EventFinish)
+	waitUntil(t, "pod-a to release its turn", func() bool {
+		owner, _ := b.st.TurnOwner(t.Context(), "conv")
+		return owner == ""
+	})
+
+	if w := b.send(t, "conv", "second"); w.Code != http.StatusOK {
+		t.Fatalf("send on pod-b = %d %s", w.Code, w.Body.String())
+	}
+	waitUntil(t, "pod-c to watch pod-b's turn", func() bool { return c.a.handlers.clusterState.watchedOwner("conv") == "pod-b" })
+	b.agentSays(t, "conv", pb.ContentChunk_START, "")
+	b.agentSays(t, "conv", pb.ContentChunk_DELTA, "turn two from pod-b")
+	stream.waitEvent(t, "turn two from pod-b")
+}
+
+func TestStreamOnTheOtherSidecarStaysOpenAfterTheOwnersTurnEnds(t *testing.T) {
+	a, b := newSidecarPair(t)
+	seedConversation(t, a, "conv")
+
+	stream := openStream(t, b, "conv", "")
+	stream.waitEvent(t, "event: connected")
+	waitUntil(t, "pod-b to register the stream", func() bool { return b.a.connManager.GetConnectionCount("conv") > 0 })
+
+	if w := a.send(t, "conv", "hi"); w.Code != http.StatusOK {
+		t.Fatalf("send on pod-a = %d %s", w.Code, w.Body.String())
+	}
+	a.agentSays(t, "conv", pb.ContentChunk_START, "")
+	a.agentSays(t, "conv", pb.ContentChunk_DELTA, "hello")
+	a.agentSays(t, "conv", pb.ContentChunk_END, "")
+	stream.waitEvent(t, "event: "+EventFinish)
+	waitUntil(t, "pod-a to release its turn", func() bool {
+		owner, _ := b.st.TurnOwner(t.Context(), "conv")
+		return owner == ""
+	})
+
+	b.a.renewWatches(t.Context())
+
+	if b.a.handlers.clusterState.isWatching("conv") {
+		t.Fatal("pod-b still watches pod-a after its turn ended")
+	}
+	if n := b.a.connManager.GetConnectionCount("conv"); n != 1 {
+		t.Fatalf("connections after the turn ended = %d, want 1: a finished turn keeps the stream for the next one", n)
 	}
 }
