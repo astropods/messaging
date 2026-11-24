@@ -66,6 +66,10 @@ type ConnectionManager struct {
 	mu        sync.RWMutex
 	heartbeat time.Duration
 	stopChan  chan struct{}
+
+	// relay publishes to other sidecars; nil when this sidecar runs alone.
+	relay    relayFunc
+	watchers map[string]map[string]time.Time // conversationID -> watching pod -> expiry
 }
 
 // NewConnectionManager creates a new connection manager
@@ -164,7 +168,11 @@ func (cm *ConnectionManager) Broadcast(conversationID string, event SSEEvent) {
 	defer cm.mu.Unlock()
 
 	event = cm.bufferEventLocked(conversationID, event)
+	cm.relayLocked(conversationID, busSSE, sseMessage{Events: []SSEEvent{event}})
+	cm.fanOutLocked(conversationID, event)
+}
 
+func (cm *ConnectionManager) fanOutLocked(conversationID string, event SSEEvent) {
 	conns, ok := cm.connections[conversationID]
 	if !ok {
 		return
@@ -328,7 +336,11 @@ func (cm *ConnectionManager) sendHeartbeats() {
 func (cm *ConnectionManager) CloseConversation(conversationID string) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
+	cm.relayLocked(conversationID, busClose, nil)
+	cm.closeLocked(conversationID)
+}
 
+func (cm *ConnectionManager) closeLocked(conversationID string) {
 	// Stop is terminal — drop the resume buffer (a late reconnect falls back to the
 	// store-derived finish). Unconditional: a stop can arrive with no live connection.
 	cm.dropBufferLocked(conversationID)

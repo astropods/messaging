@@ -34,6 +34,9 @@ type Handlers struct {
 	// chatStore persists the platform chat UI thread (sidebar + bodies) in
 	// the sidecar-local SQLite database on a shared persistent volume.
 	chatStore *chatstore.Store
+
+	cluster      Bus
+	clusterState *clusterState
 	// fileStore backs the agent files API (upload/download) on the shared
 	// persistent volume. nil disables the feature (no FILES_DIR configured).
 	fileStore files.FileStore
@@ -272,6 +275,9 @@ func (h *Handlers) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer h.turns.release(conversationID)
+		if !h.claimClusterTurn(r.Context(), w, conversationID) {
+			return
+		}
 	}
 
 	roomID := r.Header.Get(HeaderRoomID)
@@ -547,6 +553,20 @@ func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	user := &pb.User{Id: session.UserID, Username: session.Username}
+	if owner := h.remoteOwner(r.Context(), conversationID); owner != "" {
+		h.forwardStop(r.Context(), conversationID, owner, user)
+	} else {
+		h.stopTurn(r.Context(), conversationID, user)
+	}
+
+	slog.Debug(fmt.Sprintf("[Web] Conversation stopped: id=%q, user=%q", conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// stopTurn stops the conversation's turn in this sidecar, which must own it or have no live owner.
+func (h *Handlers) stopTurn(ctx context.Context, conversationID string, user *pb.User) {
 	// Mark the turn stopped and capture the partial the client has seen so far.
 	partial := ""
 	if h.turns != nil {
@@ -557,7 +577,7 @@ func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
 	// stops showing it as streaming. Never shrinks an already-finished reply;
 	// when the partial was progressively persisted this is a no-op.
 	if h.chatStore != nil {
-		if _, err := h.chatStore.FinalizeStopped(r.Context(), conversationID, session.UserID, partial); err != nil {
+		if _, err := h.chatStore.FinalizeStopped(ctx, conversationID, user.GetId(), partial); err != nil {
 			slog.Error("[Web] chat finalize stopped failed", "conversation", conversationID, "err", err)
 		}
 	}
@@ -579,19 +599,13 @@ func (h *Handlers) HandleCancel(w http.ResponseWriter, r *http.Request) {
 					Reason: "user stopped generation",
 				},
 			},
-			User: &pb.User{
-				Id:       session.UserID,
-				Username: session.Username,
-			},
+			User: user,
 		}
-		if err := h.feedbackHandler(r.Context(), fb); err != nil {
+		if err := h.feedbackHandler(ctx, fb); err != nil {
 			slog.Debug("[Web] stop signal not delivered to agent", "conversation", conversationID, "err", err)
 		}
 	}
 
-	slog.Debug(fmt.Sprintf("[Web] Conversation stopped: id=%q, user=%q", conversationID, session.UserID)) //nolint:gosec // G706 false positive: %q escapes control characters
-
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // streamTurnTerminal reports whether the latest turn has finished — the assistant
@@ -605,7 +619,7 @@ func (h *Handlers) streamTurnTerminal(ctx context.Context, conversationID string
 	}
 	// An actively streaming turn delivers its finish over the live broadcast;
 	// replaying one here would end the turn early.
-	if h.turns != nil && h.turns.isStreaming(conversationID) {
+	if h.streaming(ctx, conversationID) {
 		return false
 	}
 	//nolint:dogsled // PageMessages returns (msgs, hasMore, oldestSeq, lastRole, err); only the last role and error matter here.
@@ -761,6 +775,10 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 		LastEventAt:    time.Now(),
 	}
 
+	if owner := h.remoteOwner(ctx, conversationID); owner != "" {
+		h.watchRemote(ctx, conversationID, owner)
+	}
+
 	// With a Last-Event-ID, register + snapshot missed events atomically (see
 	// AddWithResume); otherwise register a fresh subscribe.
 	lastEventID, resuming := parseLastEventID(r)
@@ -772,6 +790,12 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 		h.connManager.Add(conn)
 	}
 	defer h.connManager.Remove(conversationID, connID)
+	// A turn whose start was announced before this connection registered has an owner row by now.
+	if h.cluster != nil && !h.clusterState.isWatching(conversationID) {
+		if owner := h.remoteOwner(ctx, conversationID); owner != "" {
+			go h.watchRemote(ctx, conversationID, owner)
+		}
+	}
 
 	// Send connected event
 	connectedEvent := NewConnectedEvent(conversationID, connID)

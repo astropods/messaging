@@ -70,6 +70,9 @@ type SlackAdapter struct {
 	// observe channels.
 	msgDedup *slackMsgDedup
 
+	// cluster is nil when this sidecar runs alone.
+	cluster *clusterLink
+
 	// directory resolves user and channel ids to display names.
 	directory *slackDirectory
 
@@ -379,6 +382,9 @@ func (a *SlackAdapter) handleSocketEvent(ctx context.Context, evt socketmode.Eve
 		var payload json.RawMessage
 		if evt.Request != nil {
 			payload = evt.Request.Payload
+		}
+		if !a.firstDelivery(ctx, payload) {
+			return
 		}
 		a.queueInnerEvent(ctx, eventsAPIEvent, payload)
 

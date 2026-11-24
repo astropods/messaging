@@ -16,6 +16,7 @@ import (
 	"github.com/astropods/messaging/internal/adapter/slack"
 	"github.com/astropods/messaging/internal/adapter/web"
 	"github.com/astropods/messaging/internal/authz"
+	"github.com/astropods/messaging/internal/cluster"
 	"github.com/astropods/messaging/internal/grpc"
 	"github.com/astropods/messaging/internal/internalfeedback"
 	"github.com/astropods/messaging/internal/roomgrant"
@@ -102,11 +103,16 @@ func main() {
 	var chatStore *chatstore.Store
 	switch {
 	case cfg.Chat.DatabaseURL != "":
+		if cfg.Chat.PodID == "" {
+			slog.Error("chat store: no pod id, set POD_NAME")
+			os.Exit(1)
+		}
 		cs, err := chatstore.OpenPostgres(ctx, cfg.Chat.DatabaseURL)
 		if err != nil {
 			slog.Error("chat store: open postgres failed", "error", err)
 			os.Exit(1)
 		}
+		cs.SetPodID(cfg.Chat.PodID)
 		chatStore = cs
 		slog.Info("chat store: initialized", "backend", "postgres", "schema", chatstore.PostgresSchema)
 	case cfg.Chat.DBPath != "":
@@ -132,6 +138,15 @@ func main() {
 		} else if n > 0 {
 			slog.Info("Finalized interrupted chat turns on startup", "count", n)
 		}
+	}
+
+	// Sidecars sharing the Postgres chat store reach each other over its NOTIFY bus.
+	var bus *cluster.Bus
+	if chatStore != nil && chatStore.Shared() {
+		bus = cluster.New(cfg.Chat.DatabaseURL, cfg.Chat.PodID)
+		busCtx, cancelBus := context.WithCancel(ctx)
+		defer cancelBus()
+		go bus.Run(busCtx)
 	}
 
 	// Initialize conversation store
@@ -216,7 +231,7 @@ func main() {
 	internalFeedbackHandler := buildInternalFeedbackHandler(cfg.Authz)
 
 	// Initialize adapters
-	adapters := initializeAdapters(ctx, cfg, threadStore, agentConfigStore, authorizer, chatStore, fileStore, internalFeedbackHandler)
+	adapters := initializeAdapters(ctx, cfg, threadStore, agentConfigStore, authorizer, chatStore, fileStore, internalFeedbackHandler, bus)
 	if len(adapters) == 0 && !cfg.GRPC.Enabled {
 		slog.Error("No adapters enabled or configured and gRPC is disabled")
 		os.Exit(1)
@@ -352,7 +367,7 @@ func main() {
 }
 
 // initializeAdapters creates and initializes adapters based on configuration
-func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer, chatStore *chatstore.Store, fileStore files.FileStore, internalFeedbackHandler adapter.InternalFeedbackHandler) map[string]adapter.Adapter {
+func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *store.ThreadHistoryStore, agentConfigStore *store.AgentConfigStore, authorizer authz.Authorizer, chatStore *chatstore.Store, fileStore files.FileStore, internalFeedbackHandler adapter.InternalFeedbackHandler, bus *cluster.Bus) map[string]adapter.Adapter {
 	adapters := make(map[string]adapter.Adapter)
 
 	// Initialize Slack adapter if enabled
@@ -366,6 +381,9 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			slackAdapter.SetInternalFeedbackHandler(internalFeedbackHandler)
 			slackAdapter.SetFileStore(fileStore)
 			slackAdapter.SetFileLimit(cfg.Files.MaxBytes)
+			if bus != nil {
+				slackAdapter.SetCluster(bus, chatStore)
+			}
 			adapters["slack"] = slackAdapter
 			slog.Info("Slack adapter initialized")
 		}
@@ -416,6 +434,9 @@ func initializeAdapters(ctx context.Context, cfg *config.Config, threadStore *st
 			webAdapter.SetChatStore(chatStore)
 			webAdapter.SetFileStore(fileStore)
 			webAdapter.SetFileLimit(cfg.Files.MaxBytes)
+			if bus != nil {
+				webAdapter.SetCluster(bus)
+			}
 			adapters["web"] = webAdapter
 			slog.Info("Web adapter initialized")
 		}

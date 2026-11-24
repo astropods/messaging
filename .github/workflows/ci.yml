@@ -127,7 +127,7 @@ jobs:
 
   test-go-postgres:
     runs-on: ubuntu-latest
-    name: Test Go chat store (Postgres)
+    name: Test Go against Postgres
 
     services:
       postgres:
@@ -152,7 +152,7 @@ jobs:
           go-version: "1.26"
           cache-dependency-path: go.sum
 
-      - name: Run chat store tests against Postgres
+      - name: Run chat store, bus and sidecar tests against Postgres
         env:
           CHAT_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
-        run: go test -v -race -count=1 -p 1 ./internal/store/chatstore/...
+        run: go test -v -race -count=1 -p 1 ./internal/store/chatstore/... ./internal/cluster/... ./internal/adapter/web/...

@@ -41,6 +41,8 @@ type WebAdapter struct {
 	agentConfigStore *store.AgentConfigStore
 	agentReadiness   adapter.AgentReadiness
 	chatStore        *chatstore.Store
+	cluster          Bus
+	turnsChanged     <-chan struct{}
 	fileStore        files.FileStore
 	fileLimit        int64
 	interactions     store.InteractionStore
@@ -169,6 +171,7 @@ func (a *WebAdapter) Start(ctx context.Context) error {
 
 	// Start connection manager heartbeat
 	a.connManager.Start(ctx)
+	go a.runCluster(ctx)
 
 	handler := a.corsMiddleware(a.routes())
 

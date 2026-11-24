@@ -69,7 +69,11 @@ type Message struct {
 type Store struct {
 	db        *conn
 	reapGrace time.Duration
+	podID     string
 }
+
+// SetPodID names this sidecar among those sharing the store. Call before use.
+func (s *Store) SetPodID(id string) { s.podID = id }
 
 // Open opens (creating if needed) the SQLite database at path and applies the
 // schema. The pragmas enable WAL and a busy timeout for resilience.
@@ -164,6 +168,7 @@ CREATE INDEX IF NOT EXISTS idx_interactions_pending
 		{"conversations", "head_id"},
 		{"conversations", "head_newest_id"},
 		{"conversations", "agent_head_id"},
+		{"conversations", "agent_pod"},
 	} {
 		if err := ensureColumn(db, c.table, c.column, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err
@@ -585,7 +590,7 @@ func (s *Store) upsertAssistant(ctx context.Context, conversationID, content, at
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful commit
 
 	if tx.dialect == dialectPostgres {
-		id, err := updateTrailingAssistant(ctx, tx, conversationID, content, attachmentsJSON, final)
+		id, err := updateTrailingAssistant(ctx, tx, conversationID, content, attachmentsJSON, s.podID, final)
 		if err != nil {
 			return "", err
 		}
@@ -647,7 +652,7 @@ func (s *Store) upsertAssistant(ctx context.Context, conversationID, content, at
 		id = msg.ID
 	}
 	if final {
-		err = touchAgentReplyTx(ctx, tx, conversationID, id)
+		err = touchAgentReplyTx(ctx, tx, conversationID, id, s.podID)
 	} else {
 		err = touchConversationTx(ctx, tx, conversationID)
 	}
@@ -662,7 +667,7 @@ func (s *Store) upsertAssistant(ctx context.Context, conversationID, content, at
 
 // updateTrailingAssistant grows the latest message in one statement when it is an
 // assistant reply, and returns "" when the caller must take the general path.
-func updateTrailingAssistant(ctx context.Context, tx *txn, conversationID, content, attachmentsJSON string, final bool) (string, error) {
+func updateTrailingAssistant(ctx context.Context, tx *txn, conversationID, content, attachmentsJSON, podID string, final bool) (string, error) {
 	var id string
 	err := tx.QueryRowContext(ctx, `
 		WITH last AS (
@@ -676,13 +681,15 @@ func updateTrailingAssistant(ctx context.Context, tx *txn, conversationID, conte
 			RETURNING id
 		), touched AS (
 			UPDATE conversations
-			SET updated_at = ?, agent_head_id = CASE WHEN ? THEN (SELECT id FROM upd) ELSE agent_head_id END
+			SET updated_at = ?,
+				agent_head_id = CASE WHEN ? THEN (SELECT id FROM upd) ELSE agent_head_id END,
+				agent_pod = CASE WHEN ? THEN ? ELSE agent_pod END
 			WHERE conversation_id = ? AND EXISTS (SELECT 1 FROM upd)
 			RETURNING 1
 		)
 		SELECT id FROM upd`,
 		conversationID, content, attachmentsJSON, attachmentsJSON,
-		time.Now().UnixMilli(), final, conversationID,
+		time.Now().UnixMilli(), final, final, podID, conversationID,
 	).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
@@ -815,7 +822,17 @@ func (s *Store) FinalizeTerminal(ctx context.Context, conversationID, partial st
 // persisted (agent crash, or a reschedule between the user append and the first
 // progressive write). Appending a terminal (empty) assistant row flips it out of
 // the derived assistant_streaming state. Returns the number finalized.
+// On a shared store, rows this pod id holds are a previous run's, so they don't protect a turn.
 func (s *Store) ReapDanglingUserTurns(ctx context.Context) (int, error) {
+	return s.reap(ctx, true)
+}
+
+// ReapOrphanedTurns finalizes user-last turns that no live owner holds. Shared stores run it periodically.
+func (s *Store) ReapOrphanedTurns(ctx context.Context) (int, error) {
+	return s.reap(ctx, false)
+}
+
+func (s *Store) reap(ctx context.Context, ownRowsStale bool) (int, error) {
 	// Drain the cursor before finalizing: SQLite has one connection.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.conversation_id
@@ -826,7 +843,7 @@ func (s *Store) ReapDanglingUserTurns(ctx context.Context) (int, error) {
 				FROM messages m
 				WHERE m.conversation_id = c.conversation_id
 				ORDER BY m.seq DESC LIMIT 1
-			) = 'user'`+s.pendingInteractionExclusion(), time.Now().Add(-s.reapGrace).UnixMilli())
+			) = 'user'`+s.liveOwnerExclusion(ownRowsStale), s.reapArgs(ownRowsStale)...)
 	if err != nil {
 		return 0, fmt.Errorf("chatstore reap query: %w", err)
 	}
@@ -858,19 +875,9 @@ func (s *Store) ReapDanglingUserTurns(ctx context.Context) (int, error) {
 	return finalized, nil
 }
 
-// pendingInteractionExclusion keeps a shared store's reap off a turn waiting on the user,
-// because answering an interaction does not touch updated_at.
-func (s *Store) pendingInteractionExclusion() string {
-	if s.db.dialect != dialectPostgres {
-		return ""
-	}
-	return `
-			AND NOT EXISTS (SELECT 1 FROM interactions i WHERE i.conversation_id = c.conversation_id AND i.status = 'pending')`
-}
-
-func touchAgentReplyTx(ctx context.Context, tx *txn, conversationID, replyID string) error {
-	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET updated_at = ?, agent_head_id = ? WHERE conversation_id = ?`,
-		time.Now().UnixMilli(), replyID, conversationID); err != nil {
+func touchAgentReplyTx(ctx context.Context, tx *txn, conversationID, replyID, podID string) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET updated_at = ?, agent_head_id = ?, agent_pod = ? WHERE conversation_id = ?`,
+		time.Now().UnixMilli(), replyID, podID, conversationID); err != nil {
 		return fmt.Errorf("chatstore touch conversation: %w", err)
 	}
 	return nil

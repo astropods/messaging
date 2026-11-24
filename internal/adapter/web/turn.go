@@ -60,6 +60,8 @@ type turnTracker struct {
 	claimed     map[string]bool
 	idleTimeout time.Duration
 	onIdle      func(conversationID string)
+	// changed receives a signal whenever the set of owned turns may have changed.
+	changed chan struct{}
 }
 
 func newTurnTracker() *turnTracker {
@@ -73,6 +75,7 @@ func newTurnTracker() *turnTracker {
 func (t *turnTracker) claim(conversationID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.notify()
 	if st := t.turns[conversationID]; (st != nil && !st.userStopped) || t.claimed[conversationID] {
 		return false
 	}
@@ -83,6 +86,7 @@ func (t *turnTracker) claim(conversationID string) bool {
 func (t *turnTracker) release(conversationID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.notify()
 	delete(t.claimed, conversationID)
 }
 
@@ -148,6 +152,7 @@ func stopIdleLocked(st *turnState) {
 func (t *turnTracker) startTurn(conversationID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.notify()
 	st := t.turns[conversationID]
 	if st == nil {
 		if len(t.turns) >= maxTrackedStops {
@@ -182,6 +187,7 @@ func (t *turnTracker) touch(conversationID string) {
 func (t *turnTracker) failActive(conversationID string) (pending *pendingRespond, partial string, ok bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.notify()
 	st := t.turns[conversationID]
 	if st == nil || st.userStopped {
 		return nil, "", false
@@ -297,6 +303,7 @@ func (t *turnTracker) isStreaming(conversationID string) bool {
 func (t *turnTracker) stop(conversationID string) string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.notify()
 	// Safety valve: if the map has grown past the cap (a leak of stopped-then-
 	// abandoned conversations that never terminated or resumed), evict an
 	// arbitrary entry before adding. Normal usage stays far below the cap
@@ -348,6 +355,7 @@ func (t *turnTracker) isStopped(conversationID string) bool {
 func (t *turnTracker) clear(conversationID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.notify()
 	if st := t.turns[conversationID]; st != nil {
 		stopIdleLocked(st)
 	}
@@ -364,6 +372,7 @@ func (t *turnTracker) clear(conversationID string) {
 func (t *turnTracker) clearStoppedTurn(conversationID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.notify()
 	if st := t.turns[conversationID]; st != nil && !st.userStopped {
 		return
 	}
@@ -420,6 +429,7 @@ func (t *turnTracker) startFreshBuffer(conversationID string) {
 func (t *turnTracker) endTurn(conversationID string) *pendingRespond {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.notify()
 	var pending *pendingRespond
 	if st := t.turns[conversationID]; st != nil {
 		pending = st.pending
@@ -428,4 +438,38 @@ func (t *turnTracker) endTurn(conversationID string) *pendingRespond {
 	delete(t.turns, conversationID)
 	delete(t.stopped, conversationID)
 	return pending
+}
+
+func (t *turnTracker) notify() {
+	if t.changed == nil {
+		return
+	}
+	select {
+	case t.changed <- struct{}{}:
+	default:
+	}
+}
+
+// watchChanges must be called before the tracker is shared.
+func (t *turnTracker) watchChanges() <-chan struct{} {
+	t.changed = make(chan struct{}, 1)
+	return t.changed
+}
+
+// ownedConversations lists the turns this sidecar runs, including sends that have claimed a turn but not started it.
+func (t *turnTracker) ownedConversations() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	ids := make([]string, 0, len(t.turns)+len(t.claimed))
+	for id, st := range t.turns {
+		if !st.userStopped {
+			ids = append(ids, id)
+		}
+	}
+	for id := range t.claimed {
+		if st := t.turns[id]; st == nil || st.userStopped {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }

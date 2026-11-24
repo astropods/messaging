@@ -22,5 +22,11 @@ func (s *FSStore) Usage(_ context.Context) (Usage, error) {
 	// Count root-reserved blocks (Blocks-Bfree) as used, matching `df`, so the
 	// warning fires slightly early rather than after writes already start failing.
 	used := (st.Blocks - st.Bfree) * bsize
+	if total >= unboundedVolumeBytes {
+		return Usage{}, ErrUnsupported
+	}
 	return Usage{TotalBytes: total, UsedBytes: used, AvailableBytes: avail}, nil
 }
+
+// unboundedVolumeBytes marks an elastic volume such as EFS, whose statfs reports about 8 EiB.
+const unboundedVolumeBytes = 1 << 50

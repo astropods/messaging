@@ -2,17 +2,18 @@ package chatstore
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
+
+	"github.com/astropods/messaging/internal/testpg"
 )
 
 // newTestStore opens SQLite, or Postgres when CHAT_TEST_DATABASE_URL is set.
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	if os.Getenv(testDatabaseURLEnv) != "" {
+	if testpg.Enabled() {
 		st := openPostgresTestStore(t, newPostgresTestDatabase(t))
 		st.reapGrace = 0
 		return st

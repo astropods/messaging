@@ -126,6 +126,8 @@ type ChatConfig struct {
 	// DatabaseURL is a Postgres URL shared by every sidecar replica. When set it
 	// wins over DBPath and STORAGE_TYPE: chat and conversation contexts both use it.
 	DatabaseURL string
+	// PodID names this sidecar to the others sharing DatabaseURL: POD_NAME, else the hostname.
+	PodID string
 }
 
 // AuthzConfig holds the configuration the messaging container uses to call
@@ -350,6 +352,7 @@ func Load() (*Config, error) {
 	cfg.Chat = ChatConfig{
 		DBPath:      getEnv("CHAT_DB_PATH", ""),
 		DatabaseURL: os.Getenv("CHAT_DATABASE_URL"),
+		PodID:       getEnv("POD_NAME", hostname()),
 	}
 
 	// Files: astro-server points FILES_DIR at a subtree of the agent's shared
@@ -468,4 +471,12 @@ func filesMaxBytes(raw string) int64 {
 		return files.NoFileLimit
 	}
 	return mb << 20
+}
+
+func hostname() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	return h
 }

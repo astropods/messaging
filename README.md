@@ -147,6 +147,9 @@ CHAT_DB_PATH=
 # STORAGE_TYPE: chat and conversation contexts both live in the
 # astro_messaging schema, which the sidecar creates and migrates on start.
 CHAT_DATABASE_URL=
+# This sidecar's id among those sharing CHAT_DATABASE_URL. Defaults to the
+# hostname, which is the pod name in Kubernetes.
+POD_NAME=
 
 # Logging: debug (default), info, warn, error
 LOG_LEVEL=debug

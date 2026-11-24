@@ -20,8 +20,8 @@ const (
 
 const postgresMaxConns = 5
 
-// sharedReapGrace keeps a sidecar from reaping a turn another sidecar is running.
-const sharedReapGrace = 15 * time.Minute
+// sharedReapGrace covers the gap between a user turn's append and its owner's first heartbeat.
+const sharedReapGrace = time.Minute
 
 // postgresMigrations run in order, each once; their index plus one is the schema version.
 var postgresMigrations = []string{
@@ -79,6 +79,21 @@ CREATE TABLE conversation_contexts (
 	updated_at      BIGINT NOT NULL
 );
 CREATE INDEX idx_conversation_contexts_updated ON conversation_contexts (updated_at);
+`,
+	`
+ALTER TABLE conversations ADD COLUMN agent_pod TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE turn_owners (
+	conversation_id TEXT PRIMARY KEY,
+	pod_id          TEXT   NOT NULL,
+	heartbeat_at    BIGINT NOT NULL
+);
+
+CREATE TABLE slack_events (
+	event_id TEXT PRIMARY KEY,
+	seen_at  BIGINT NOT NULL
+);
+CREATE INDEX idx_slack_events_seen ON slack_events (seen_at);
 `,
 }
 
