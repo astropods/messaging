@@ -3,12 +3,14 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/astropods/messaging/internal/cluster"
+	"github.com/astropods/messaging/internal/store"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -26,11 +28,8 @@ const orphanReapInterval = time.Minute
 // stopAckWait bounds how long a forwarded stop waits before stopping here instead.
 const stopAckWait = 2 * time.Second
 
-// answerAckWait bounds how long a forwarded answer waits for the owner to confirm it.
+// answerAckWait bounds how long a forwarded answer waits for the owner's result.
 const answerAckWait = 2 * time.Second
-
-// appliedAnswerTTL is how long an owner remembers an applied answer, so a re-forward is not applied twice.
-const appliedAnswerTTL = time.Hour
 
 // Bus is the part of cluster.Bus the web adapter uses.
 type Bus interface {
@@ -49,6 +48,22 @@ type stoppedMessage struct {
 	To string `json:"to"`
 	ID string `json:"id"`
 }
+
+// answeredMessage is the owner's result for a forwarded answer. Failure is set when the owner recorded nothing.
+type answeredMessage struct {
+	To      string              `json:"to"`
+	ID      string              `json:"id"`
+	Status  string              `json:"status,omitempty"`
+	Action  pb.RenderableAction `json:"action,omitempty"`
+	Failure answerFailure       `json:"failure,omitempty"`
+}
+
+type answerFailure string
+
+const (
+	answerNotFound answerFailure = "not_found"
+	answerFailed   answerFailure = "failed"
+)
 
 type answerMessage struct {
 	To            string                 `json:"to"`
@@ -89,8 +104,8 @@ type clusterState struct {
 	watching map[string]watch
 	replayed map[string][]chan struct{}
 	acks     map[string]chan struct{}
+	answers  map[string]chan answeredMessage
 	owned    map[string]bool
-	applied  map[string]time.Time
 }
 
 func newClusterState() *clusterState {
@@ -98,26 +113,32 @@ func newClusterState() *clusterState {
 		watching: map[string]watch{},
 		replayed: map[string][]chan struct{}{},
 		acks:     map[string]chan struct{}{},
+		answers:  map[string]chan answeredMessage{},
 		owned:    map[string]bool{},
-		applied:  map[string]time.Time{},
 	}
 }
 
-// firstApply reports whether this is the first forwarded answer for the interaction.
-func (c *clusterState) firstApply(interactionID string) bool {
+func (c *clusterState) awaitAnswered(id string) <-chan answeredMessage {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	now := time.Now()
-	for id, at := range c.applied {
-		if now.Sub(at) > appliedAnswerTTL {
-			delete(c.applied, id)
-		}
+	ch := make(chan answeredMessage, 1)
+	c.answers[id] = ch
+	return ch
+}
+
+func (c *clusterState) signalAnswered(m answeredMessage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ch, ok := c.answers[m.ID]; ok {
+		ch <- m
+		delete(c.answers, m.ID)
 	}
-	if _, ok := c.applied[interactionID]; ok {
-		return false
-	}
-	c.applied[interactionID] = now
-	return true
+}
+
+func (c *clusterState) dropAnswered(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.answers, id)
 }
 
 func (c *clusterState) awaitAck(id string) <-chan struct{} {
@@ -298,42 +319,63 @@ func (a *WebAdapter) SetCluster(bus Bus) {
 		go h.forwardedAnswer(env.Conversation, env.From, m, resp)
 	})
 	bus.Handle(busAnswered, func(env cluster.Envelope) {
-		var m stoppedMessage
+		var m answeredMessage
 		if err := json.Unmarshal(env.Data, &m); err == nil && m.To == bus.Pod() {
-			h.clusterState.signalAck(m.ID)
+			h.clusterState.signalAnswered(m)
 		}
 	})
 }
 
+// forwardedAnswer records and applies an answer another sidecar received. The record
+// admits one answer per interaction, so a repeated forward is never delivered twice.
 func (h *Handlers) forwardedAnswer(conversationID, from string, m answerMessage, resp *pb.RenderableResponse) {
 	ctx := context.Background()
+	reply := answeredMessage{To: from, ID: m.ID}
+	defer func() { h.cluster.Publish(busAnswered, conversationID, reply) }()
 	it, found, err := h.interactions.GetInteraction(ctx, conversationID, m.InteractionID)
-	if err != nil || !found {
-		slog.Warn("web cluster: answered interaction not found", "conversation_id", conversationID, "interaction_id", m.InteractionID, "error", err)
+	if err != nil {
+		slog.Error("web cluster: load forwarded interaction failed", "conversation_id", conversationID, "interaction_id", m.InteractionID, "error", err)
+		reply.Failure = answerFailed
 		return
 	}
-	if h.clusterState.firstApply(m.InteractionID) {
+	if !found {
+		reply.Failure = answerNotFound
+		return
+	}
+	recorded, wasRecorded, err := h.interactions.RecordInteractionResponse(ctx, conversationID, m.InteractionID, resp)
+	switch {
+	case errors.Is(err, store.ErrInteractionNotFound):
+		reply.Failure = answerNotFound
+		return
+	case err != nil:
+		slog.Error("web cluster: record forwarded answer failed", "conversation_id", conversationID, "interaction_id", m.InteractionID, "error", err)
+		reply.Failure = answerFailed
+		return
+	}
+	reply.Status = string(recorded.Status)
+	reply.Action = recorded.Response.GetAction()
+	if wasRecorded {
 		h.applyAnswer(ctx, conversationID, m.UserID, m.Action, it.Renderable, resp, m.Text)
 	}
-	h.cluster.Publish(busAnswered, conversationID, stoppedMessage{To: from, ID: m.ID})
 }
 
-// forwardAnswer hands an answer to the turn's owner and reports whether the owner confirmed it.
-func (h *Handlers) forwardAnswer(ctx context.Context, conversationID string, m answerMessage) bool {
+// forwardAnswer hands an answer to the turn's owner, which records and applies it.
+// It reports false when the owner sends no result in time.
+func (h *Handlers) forwardAnswer(ctx context.Context, conversationID string, m answerMessage) (answeredMessage, bool) {
 	m.ID = uuid.NewString()
-	done := h.clusterState.awaitAck(m.ID)
-	defer h.clusterState.dropAck(m.ID)
+	done := h.clusterState.awaitAnswered(m.ID)
+	defer h.clusterState.dropAnswered(m.ID)
 	h.cluster.Publish(busAnswer, conversationID, m)
 	t := time.NewTimer(answerAckWait)
 	defer t.Stop()
 	select {
-	case <-done:
-		return true
+	case reply := <-done:
+		return reply, true
 	case <-t.C:
-		slog.Warn("web cluster: turn owner did not confirm answer", "conversation_id", conversationID, "interaction_id", m.InteractionID)
-		return false
+		slog.Warn("web cluster: no result from turn owner for answer", "conversation_id", conversationID, "interaction_id", m.InteractionID)
+		return answeredMessage{}, false
 	case <-ctx.Done():
-		return false
+		return answeredMessage{}, false
 	}
 }
 

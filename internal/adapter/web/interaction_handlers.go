@@ -79,14 +79,7 @@ func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Idempotent replay of an already-answered interaction (e.g. re-POST on reload).
-	// A remote owner dedupes, so re-forwarding covers an earlier forward it never confirmed.
 	if it.Status != store.InteractionPending {
-		if owner := h.remoteOwner(ctx, conversationID); owner != "" && it.Response != nil {
-			h.forwardAnswer(ctx, conversationID, answerMessage{
-				To: owner, UserID: session.UserID, InteractionID: interactionID,
-				Action: it.Response.GetAction(), Text: it.Response.GetText(), Response: it.Response,
-			})
-		}
 		writeJSON(w, http.StatusOK, interactionResponseAck{
 			Status: string(it.Status),
 			Action: renderableActionWireName(it.Response.GetAction()),
@@ -134,6 +127,26 @@ func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Requ
 		resp.Text = input.Text
 	}
 
+	if owner := h.remoteOwner(ctx, conversationID); owner != "" {
+		reply, ok := h.forwardAnswer(ctx, conversationID, answerMessage{
+			To: owner, UserID: session.UserID, InteractionID: interactionID, Action: action, Text: input.Text, Response: resp,
+		})
+		switch {
+		case !ok:
+			http.Error(w, "answer not delivered, try again", http.StatusServiceUnavailable)
+		case reply.Failure == answerNotFound:
+			http.Error(w, "interaction not found", http.StatusNotFound)
+		case reply.Failure != "":
+			http.Error(w, "failed to record response", http.StatusInternalServerError)
+		default:
+			writeJSON(w, http.StatusOK, interactionResponseAck{
+				Status: reply.Status,
+				Action: renderableActionWireName(reply.Action),
+			})
+		}
+		return
+	}
+
 	recorded, wasRecorded, err := h.interactions.RecordInteractionResponse(ctx, conversationID, interactionID, resp)
 	if err != nil {
 		if errors.Is(err, store.ErrInteractionNotFound) {
@@ -153,16 +166,7 @@ func (h *Handlers) HandleInteractionResponse(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if owner := h.remoteOwner(ctx, conversationID); owner != "" {
-		if !h.forwardAnswer(ctx, conversationID, answerMessage{
-			To: owner, UserID: session.UserID, InteractionID: interactionID, Action: action, Text: input.Text, Response: resp,
-		}) {
-			http.Error(w, "answer not delivered, try again", http.StatusServiceUnavailable)
-			return
-		}
-	} else {
-		h.applyAnswer(ctx, conversationID, session.UserID, action, it.Renderable, resp, input.Text)
-	}
+	h.applyAnswer(ctx, conversationID, session.UserID, action, it.Renderable, resp, input.Text)
 	writeJSON(w, http.StatusOK, interactionResponseAck{
 		Status: string(recorded.Status),
 		Action: renderableActionWireName(action),

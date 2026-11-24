@@ -790,6 +790,12 @@ func (h *Handlers) HandleStream(w http.ResponseWriter, r *http.Request) {
 		h.connManager.Add(conn)
 	}
 	defer h.connManager.Remove(conversationID, connID)
+	// A turn whose start was announced before this connection registered has an owner row by now.
+	if h.cluster != nil && !h.clusterState.isWatching(conversationID) {
+		if owner := h.remoteOwner(ctx, conversationID); owner != "" {
+			go h.watchRemote(ctx, conversationID, owner)
+		}
+	}
 
 	// Send connected event
 	connectedEvent := NewConnectedEvent(conversationID, connID)

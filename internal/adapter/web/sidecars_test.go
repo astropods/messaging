@@ -13,6 +13,7 @@ import (
 
 	"github.com/astropods/messaging/internal/adapter"
 	"github.com/astropods/messaging/internal/cluster"
+	"github.com/astropods/messaging/internal/store"
 	"github.com/astropods/messaging/internal/store/chatstore"
 	"github.com/astropods/messaging/internal/testpg"
 	pb "github.com/astropods/messaging/pkg/gen/astro/messaging/v1"
@@ -413,7 +414,7 @@ func TestInteractionAnswerOnTheOtherSidecarReachesTheOwnersAgent(t *testing.T) {
 	}
 
 	if n := a.feedbackOfKind(isRenderableResponse); n != 1 {
-		t.Fatalf("pod-a's agent got %d answers when pod-b's answer returned, want 1: pod-b waits for the owner's confirmation", n)
+		t.Fatalf("pod-a's agent got %d answers when pod-b's answer returned, want 1: pod-b waits for the owner's result", n)
 	}
 	if n := b.feedbackOfKind(isRenderableResponse); n != 0 {
 		t.Fatalf("pod-b's agent got %d answers, want 0: the turn runs on pod-a", n)
@@ -423,7 +424,39 @@ func TestInteractionAnswerOnTheOtherSidecarReachesTheOwnersAgent(t *testing.T) {
 		t.Fatalf("retried answer on pod-b = %d %s", w.Code, w.Body.String())
 	}
 	if n := a.feedbackOfKind(isRenderableResponse); n != 1 {
-		t.Fatalf("pod-a's agent got %d answers after a retry, want 1: the owner applies a re-forwarded answer once", n)
+		t.Fatalf("pod-a's agent got %d answers after a retry, want 1: an answered interaction is never forwarded again", n)
+	}
+}
+
+func TestInteractionAnsweredOnTheOwnerIsNotRedeliveredByARetryOnTheOtherSidecar(t *testing.T) {
+	a, b := newSidecarPair(t)
+	seedConversation(t, a, "conv")
+	if w := a.send(t, "conv", "hi"); w.Code != http.StatusOK {
+		t.Fatalf("send on pod-a = %d %s", w.Code, w.Body.String())
+	}
+	a.agentSays(t, "conv", pb.ContentChunk_START, "")
+	if err := a.a.HandleAgentResponse(context.Background(), &pb.AgentResponse{
+		ConversationId: "conv",
+		Payload: &pb.AgentResponse_Renderable{Renderable: testRenderable("i1",
+			pb.RenderableAction_RENDERABLE_ACTION_DECLINE, pb.RenderableAction_RENDERABLE_ACTION_CANCEL)},
+	}); err != nil {
+		t.Fatalf("renderable: %v", err)
+	}
+	waitUntil(t, "pod-a's owner row", func() bool {
+		owner, _ := b.st.TurnOwner(t.Context(), "conv")
+		return owner == "pod-a"
+	})
+
+	if w := a.answer(t, "conv", "i1", `{"action":"decline"}`); w.Code != http.StatusOK {
+		t.Fatalf("answer on pod-a = %d %s", w.Code, w.Body.String())
+	}
+	if w := b.answer(t, "conv", "i1", `{"action":"decline"}`); w.Code != http.StatusOK {
+		t.Fatalf("re-POST on pod-b = %d %s", w.Code, w.Body.String())
+	}
+
+	time.Sleep(answerAckWait)
+	if n := a.feedbackOfKind(isRenderableResponse); n != 1 {
+		t.Fatalf("pod-a's agent got %d answers, want 1: a re-POST on pod-b must not deliver the answer again", n)
 	}
 }
 
@@ -438,9 +471,18 @@ func TestInteractionAnswerIsRefusedWhenTheOwnerNeverConfirms(t *testing.T) {
 		t.Fatalf("claim for pod-gone = %v, %v", ok, err)
 	}
 
-	w := b.answer(t, "conv", "i1", `{"action":"decline"}`)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("answer with a silent owner = %d %s, want 503 so the client retries", w.Code, w.Body.String())
+	for attempt := 1; attempt <= 2; attempt++ {
+		w := b.answer(t, "conv", "i1", `{"action":"decline"}`)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("attempt %d with a silent owner = %d %s, want 503 so the client retries", attempt, w.Code, w.Body.String())
+		}
+	}
+	it, _, err := b.st.GetInteraction(t.Context(), "conv", "i1")
+	if err != nil {
+		t.Fatalf("get interaction: %v", err)
+	}
+	if it.Status != store.InteractionPending {
+		t.Fatalf("interaction status = %s, want pending: only the owner records a forwarded answer", it.Status)
 	}
 	if n := b.feedbackOfKind(isRenderableResponse); n != 0 {
 		t.Fatalf("pod-b's agent got %d answers, want 0: the turn runs on pod-gone", n)
